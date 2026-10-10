@@ -6,3 +6,15 @@ license.workspace = true
 
 [dependencies]
 aht-core.workspace = true
+aht-providers.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+futures = "0.3.34"
+tokio-util = "0.7.20"
+
+[dev-dependencies]
+wiremock = "0.6.5"
