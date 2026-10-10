@@ -187,11 +187,13 @@ mod tests {
     fn file_ids_are_stable_and_opaque() {
         let sk = SecretKey::generate().unwrap();
         let k = key("pw", &sk);
-        let a = k.file_id("connection", "abc");
-        assert_eq!(a, key("pw", &sk).file_id("connection", "abc"));
+        // An id with non-hex letters: a random hex file id cannot contain it by chance.
+        let a = k.file_id("connection", "prod-xyz");
+        assert_eq!(a, key("pw", &sk).file_id("connection", "prod-xyz"));
         assert_eq!(a.len(), 32);
-        assert_ne!(a, k.file_id("group", "abc"));
-        assert!(!a.contains("abc"));
+        assert!(a.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(a, k.file_id("group", "prod-xyz"));
+        assert!(!a.contains("xyz"));
     }
 
     #[test]
