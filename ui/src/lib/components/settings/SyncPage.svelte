@@ -222,7 +222,7 @@
   <h3>{t("sync.folder")}</h3>
   <p class="hint sub">{t("sync.folderHint")}</p>
   <form class="row" onsubmit={useCustomFolder}>
-    <input class="input mono" bind:value={folder} placeholder="/Users/me/Sync/AIHubTerm" aria-label={t("sync.folderPath")} />
+    <input class="input mono" bind:value={folder} placeholder="/Users/me/Sync/Handrail" aria-label={t("sync.folderPath")} />
     <button class="btn" disabled={busy || !folder.trim()}>{t("sync.folderUse")}</button>
   </form>
 {/if}

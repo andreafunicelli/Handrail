@@ -1,4 +1,4 @@
-//! Shared types for AIHubTerm. Every other crate depends on this one; keep it free of I/O.
+//! Shared types for Handrail. Every other crate depends on this one; keep it free of I/O.
 
 pub mod agent;
 pub mod error;

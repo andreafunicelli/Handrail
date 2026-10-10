@@ -82,7 +82,7 @@ pub(crate) fn error_text(tool: &str, err: &Error) -> String {
         Error::Busy(_) => {
             "The session is busy. Wait for the running command (read_output) or ask the user."
         }
-        Error::VaultLocked => "The user's vault is locked. Ask the user to unlock AIHubTerm.",
+        Error::VaultLocked => "The user's vault is locked. Ask the user to unlock Handrail.",
         Error::Auth(_) | Error::HostKeyMismatch(_) => {
             "Connecting needs the user's attention. Stop and ask the user."
         }

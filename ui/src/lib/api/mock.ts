@@ -477,11 +477,11 @@ export function createMockApi(): Api {
         const url = URL.createObjectURL(new Blob([contents], { type: "text/plain" }));
         const a = document.createElement("a");
         a.href = url;
-        a.download = "AIHubTerm Emergency Kit.txt";
+        a.download = "Handrail Emergency Kit.txt";
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
-      return "~/Downloads/AIHubTerm Emergency Kit.txt";
+      return "~/Downloads/Handrail Emergency Kit.txt";
     },
 
     async listConnections() {
@@ -673,9 +673,9 @@ export function createMockApi(): Api {
       sh.native =
         `\x1b[38;2;217;140;100m╭──────────────────────────────────────────╮\r\n` +
         `│ ✻ Welcome to Claude Code                  │\r\n` +
-        `│   /help for help · cwd: ~/aihubterm/prof  │\r\n` +
+        `│   /help for help · cwd: ~/handrail/prof  │\r\n` +
         `╰──────────────────────────────────────────╯${C.reset}\r\n\r\n` +
-        `${C.dim}  MCP: aihubterm connected (7 tools)${C.reset}\r\n\r\n> `;
+        `${C.dim}  MCP: handrail connected (7 tools)${C.reset}\r\n\r\n> `;
       void boot(sh, null);
       return sh.info;
     },
@@ -746,8 +746,8 @@ export function createMockApi(): Api {
     async syncGithubPoll() {
       githubPolls++;
       if (githubPolls >= 3) {
-        sync = { ...sync, config: { kind: "github", owner: "andrea", repo: "aihubterm-vault", branch: "main" }, last_sync_ms: Date.now() };
-        return { done: true, status: "ok", repo: "andrea/aihubterm-vault" };
+        sync = { ...sync, config: { kind: "github", owner: "andrea", repo: "handrail-vault", branch: "main" }, last_sync_ms: Date.now() };
+        return { done: true, status: "ok", repo: "andrea/handrail-vault" };
       }
       return { done: false, status: "pending" };
     },
@@ -786,8 +786,8 @@ export function createMockApi(): Api {
     async syncFolderPresets() {
       const home = "/Users/dev";
       return [
-        { drive: "icloud", label: "iCloud Drive", path: `${home}/Library/Mobile Documents/com~apple~CloudDocs/AIHubTerm`, has_vault: false },
-        { drive: "dropbox", label: "Dropbox", path: `${home}/Library/CloudStorage/Dropbox/AIHubTerm`, has_vault: true },
+        { drive: "icloud", label: "iCloud Drive", path: `${home}/Library/Mobile Documents/com~apple~CloudDocs/Handrail`, has_vault: false },
+        { drive: "dropbox", label: "Dropbox", path: `${home}/Library/CloudStorage/Dropbox/Handrail`, has_vault: true },
       ];
     },
 

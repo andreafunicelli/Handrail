@@ -27,7 +27,7 @@ use std::fmt;
 use std::sync::Mutex;
 
 pub const DEFAULT_API_BASE: &str = "https://api.github.com";
-const USER_AGENT: &str = "AIHubTerm";
+const USER_AGENT: &str = "Handrail";
 
 pub struct GitHubBackend {
     client: reqwest::Client,
@@ -186,6 +186,16 @@ impl GitHubBackend {
 
     /// Create `{owner}/{repo}` as a private repo if it does not exist. Returns whether it was
     /// created. (Assumes the owner is the authenticated user.)
+    /// Whether the repository exists and the token can see it.
+    pub async fn repo_exists(&self) -> Result<bool> {
+        let (status, body) = self.call(Method::GET, "", None).await?;
+        match status {
+            s if s.is_success() => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            s => Err(http_err(s, &body)),
+        }
+    }
+
     pub async fn ensure_repo(&self) -> Result<bool> {
         let (status, body) = self.call(Method::GET, "", None).await?;
         if status.is_success() {
@@ -333,7 +343,7 @@ impl GitHubBackend {
                 Method::POST,
                 "/git/commits",
                 Some(json!({
-                    "message": format!("AIHubTerm sync ({} file(s))", ops.len()),
+                    "message": format!("Handrail sync ({} file(s))", ops.len()),
                     "tree": new_tree,
                     "parents": [head.commit],
                 })),
@@ -388,7 +398,7 @@ impl GitHubBackend {
                 Method::PUT,
                 &format!("/contents/{path}"),
                 Some(json!({
-                    "message": "AIHubTerm sync (initial)",
+                    "message": "Handrail sync (initial)",
                     "content": B64.encode(&bytes),
                     "branch": self.branch,
                 })),

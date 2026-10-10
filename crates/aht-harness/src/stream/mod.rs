@@ -29,11 +29,11 @@ pub fn parser_for(kind: HarnessKind) -> Box<dyn StreamParser> {
     }
 }
 
-/// Strip MCP namespacing so the UI sees the bare tool name (`mcp__aihubterm__ssh_exec` and
-/// OpenCode's `aihubterm_ssh_exec` both become `ssh_exec`).
+/// Strip MCP namespacing so the UI sees the bare tool name (`mcp__handrail__ssh_exec` and
+/// OpenCode's `handrail_ssh_exec` both become `ssh_exec`).
 pub fn normalize_tool_name(name: &str) -> String {
-    let n = name.strip_prefix("mcp__aihubterm__").unwrap_or(name);
-    let n = n.strip_prefix("aihubterm_").unwrap_or(n);
+    let n = name.strip_prefix("mcp__handrail__").unwrap_or(name);
+    let n = n.strip_prefix("handrail_").unwrap_or(n);
     n.to_string()
 }
 
@@ -86,8 +86,8 @@ mod tests {
 
     #[test]
     fn tool_names() {
-        assert_eq!(normalize_tool_name("mcp__aihubterm__ssh_exec"), "ssh_exec");
-        assert_eq!(normalize_tool_name("aihubterm_ssh_exec"), "ssh_exec");
+        assert_eq!(normalize_tool_name("mcp__handrail__ssh_exec"), "ssh_exec");
+        assert_eq!(normalize_tool_name("handrail_ssh_exec"), "ssh_exec");
         assert_eq!(normalize_tool_name("Bash"), "Bash");
         assert_eq!(normalize_tool_name("mcp__other__x"), "mcp__other__x");
     }

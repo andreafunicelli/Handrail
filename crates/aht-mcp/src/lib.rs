@@ -12,7 +12,7 @@ mod format;
 mod handler;
 
 pub use auth::McpToken;
-/// The server name advertised to clients; tools appear as `mcp__aihubterm__<tool>`.
+/// The server name advertised to clients; tools appear as `mcp__handrail__<tool>`.
 pub const SERVER_NAME: &str = handler::SERVER_NAME;
 
 use aht_core::terminal::{Actor, TerminalTools};

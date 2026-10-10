@@ -1,1 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#0b0c0e"/><path d="M140 176l96 80-96 80" fill="none" stroke="#7c9cff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/><path d="M272 336h104" stroke="#e6e7ea" stroke-width="40" stroke-linecap="round"/><circle cx="388" cy="160" r="28" fill="#7c9cff"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Handrail: a rail on two posts, guarding a terminal prompt. -->
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="#101217"/>
+  <rect x="33.5" y="33.5" width="957" height="957" rx="214.5" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+  <g fill="#e9ecf2">
+    <rect x="206" y="262" width="612" height="72" rx="36"/>
+    <rect x="270" y="298" width="64" height="464" rx="32"/>
+    <rect x="690" y="298" width="64" height="464" rx="32"/>
+  </g>
+  <g fill="none" stroke="#7c9cff" stroke-width="56" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="420,474 506,546 420,618"/>
+    <line x1="552" y1="618" x2="616" y2="618"/>
+  </g>
+</svg>

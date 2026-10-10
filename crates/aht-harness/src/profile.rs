@@ -1,5 +1,5 @@
 //! Per-profile working directory: `<base>/profiles/<id>/` with the selected skills linked in and
-//! a context file describing the aihubterm MCP tools.
+//! a context file describing the handrail MCP tools.
 //!
 //! Skills are linked (symlink on Unix, directory junction on Windows, recursive copy as a
 //! fallback) into `.claude/skills/<name>` (Claude Code, and OpenCode which also reads that path)
@@ -30,8 +30,8 @@ pub fn context_markdown(profile: &HarnessProfile, session_summary: Option<&str>)
         HarnessKind::Codex => format!("{MCP_SERVER_NAME}."),
     };
     let mut s = format!(
-        "# AIHubTerm operator context\n\n\
-         You are operating remote servers for the user through AIHubTerm, an SSH terminal manager. \
+        "# Handrail operator context\n\n\
+         You are operating remote servers for the user through Handrail, an SSH terminal manager. \
          The live terminals are exposed by the `{MCP_SERVER_NAME}` MCP server; its tools are named \
          `{tool_prefix}<tool>`. Use those tools to run commands in, read output from, and inspect \
          the user's terminal sessions.\n\n\
@@ -196,7 +196,7 @@ mod tests {
         assert!(!dir.join(".claude/skills/b").exists());
         assert!(!dir.join(".claude/skills/missing").exists());
         let claude = fs::read_to_string(dir.join("CLAUDE.md")).unwrap();
-        assert!(claude.contains("mcp__aihubterm__"));
+        assert!(claude.contains("mcp__handrail__"));
         assert!(claude.contains("local shell and file-editing tools are disabled"));
         assert_eq!(claude, fs::read_to_string(dir.join("AGENTS.md")).unwrap());
     }
@@ -236,7 +236,7 @@ mod tests {
         let s = context_markdown(&prof, Some("tab 1: prod-db (ubuntu)"));
         assert!(s.contains("## Current session"));
         assert!(s.contains("prod-db"));
-        assert!(s.contains("aihubterm_<tool>"));
+        assert!(s.contains("handrail_<tool>"));
         assert!(!context_markdown(&prof, Some("  ")).contains("Current session"));
     }
 }

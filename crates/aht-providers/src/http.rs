@@ -30,7 +30,7 @@ impl Http {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
             .read_timeout(Duration::from_secs(120))
-            .user_agent(concat!("AIHubTerm/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("Handrail/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("reqwest client");
         Self {

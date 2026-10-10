@@ -14,7 +14,7 @@ fn backend(s: &MockServer) -> GitHubBackend {
 async fn mount_head(s: &MockServer, entries: serde_json::Value) {
     Mock::given(method("GET"))
         .and(path(REF))
-        .and(header("user-agent", "AIHubTerm"))
+        .and(header("user-agent", "Handrail"))
         .and(header("authorization", "Bearer tok"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"object": {"sha": "c0"}})))
         .mount(s)
@@ -324,4 +324,17 @@ async fn up_to_date_sync_makes_no_writes() {
 
 fn path_regex_blobs() -> wiremock::matchers::PathRegexMatcher {
     wiremock::matchers::path_regex(r"^/repos/me/vault/git/blobs/.*")
+}
+
+#[tokio::test]
+async fn repo_exists_is_true_false_or_an_error() {
+    for (status, want) in [(200, Some(true)), (404, Some(false)), (401, None)] {
+        let s = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/me/vault"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({})))
+            .mount(&s)
+            .await;
+        assert_eq!(backend(&s).repo_exists().await.ok(), want, "{status}");
+    }
 }

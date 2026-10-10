@@ -341,7 +341,7 @@ pub async fn sync_configure_github_start(state: State<'_, AppState>) -> Result<D
     if !github_device_flow::is_configured(&client_id) {
         return Err(Error::Invalid(
             "GitHub sync is not set up in this build: no OAuth client ID \
-             (set AIHUBTERM_GITHUB_CLIENT_ID)"
+             (set HANDRAIL_GITHUB_CLIENT_ID)"
                 .into(),
         ));
     }
@@ -351,6 +351,11 @@ pub async fn sync_configure_github_start(state: State<'_, AppState>) -> Result<D
     *state.github_device.lock().await = Some(code.clone());
     Ok(code)
 }
+
+/// Private repository created for the synced vault.
+const VAULT_REPO: &str = "handrail-vault";
+/// The same, for accounts set up while the app was called AIHubTerm.
+const LEGACY_VAULT_REPO: &str = "aihubterm-vault";
 
 #[derive(Serialize)]
 pub struct PollOutcome {
@@ -387,7 +392,14 @@ pub async fn sync_configure_github_poll(state: State<'_, AppState>) -> Result<Po
     };
     *state.github_device.lock().await = None;
     let owner = github_login(&token).await?;
-    let repo = "aihubterm-vault".to_string();
+    // Accounts set up before the rename keep their existing vault repository.
+    let legacy = GitHubBackend::new(&owner, LEGACY_VAULT_REPO, "main", &token);
+    let repo = if legacy.repo_exists().await.map_err(Error::from)? {
+        LEGACY_VAULT_REPO
+    } else {
+        VAULT_REPO
+    }
+    .to_string();
     let backend = GitHubBackend::new(&owner, &repo, "main", &token);
     backend.ensure_repo().await.map_err(Error::from)?;
     store_token(&state, token).await?;
@@ -415,7 +427,7 @@ async fn github_login(token: &str) -> Result<String> {
     let user: User = reqwest::Client::new()
         .get("https://api.github.com/user")
         .bearer_auth(token)
-        .header("User-Agent", "AIHubTerm")
+        .header("User-Agent", "Handrail")
         .header("Accept", "application/vnd.github+json")
         .send()
         .await

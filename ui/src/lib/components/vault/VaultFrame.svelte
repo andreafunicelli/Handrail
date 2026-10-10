@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Logo from "../brand/Logo.svelte";
   import type { Snippet } from "svelte";
   import { api } from "../../api";
   import { t } from "../../i18n";
@@ -8,7 +9,7 @@
 <div class="frame">
   <div class="col">
     <div class="brand" aria-hidden="true">
-      <span class="mark">✦</span>
+      <span class="mark" aria-hidden="true"><Logo size={16} /></span>
       <span class="name">{t("app.name")}</span>
     </div>
     {@render children()}
@@ -46,7 +47,7 @@
     height: 26px;
     border-radius: 7px;
     border: 1px solid var(--border-strong);
-    color: var(--accent);
+    color: var(--text);
     font-size: 12px;
   }
   .demo {

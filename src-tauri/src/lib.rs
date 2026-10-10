@@ -20,16 +20,40 @@ fn restart_app(app: tauri::AppHandle) {
     app.restart()
 }
 
+/// App data directory of builds released as "AIHubTerm" (bundle identifier `dev.aihubterm.app`).
+const LEGACY_DATA_DIR_NAME: &str = "dev.aihubterm.app";
+
+/// Moves the vault of an AIHubTerm install to Handrail's data directory, once: only when the
+/// new directory does not exist yet. Both live in the same per-user parent directory.
+fn migrate_legacy_data_dir(dir: &std::path::Path) {
+    let Some(legacy) = dir.parent().map(|p| p.join(LEGACY_DATA_DIR_NAME)) else {
+        return;
+    };
+    if dir.exists() || !legacy.is_dir() {
+        return;
+    }
+    match std::fs::rename(&legacy, dir) {
+        Ok(()) => {
+            tracing::info!(from = %legacy.display(), to = %dir.display(), "moved data directory")
+        }
+        Err(e) => tracing::warn!(error = %e, "could not move the AIHubTerm data directory"),
+    }
+}
+
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
         .setup(|app| {
-            // AIHUBTERM_DATA_DIR isolates test runs from the user's real vault.
-            let dir = match std::env::var_os("AIHUBTERM_DATA_DIR") {
+            // HANDRAIL_DATA_DIR isolates test runs from the user's real vault.
+            let dir = match std::env::var_os("HANDRAIL_DATA_DIR") {
                 Some(d) => std::path::PathBuf::from(d),
-                None => app.path().app_data_dir()?,
+                None => {
+                    let dir = app.path().app_data_dir()?;
+                    migrate_legacy_data_dir(&dir);
+                    dir
+                }
             };
             let state = state::AppState::new(dir).map_err(|e| e.to_string())?;
             state.terminal.attach(app.handle().clone());
@@ -99,5 +123,5 @@ pub fn run() {
             terminal::harness_login,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running AIHubTerm");
+        .expect("error while running Handrail");
 }

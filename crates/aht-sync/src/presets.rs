@@ -1,13 +1,16 @@
 //! Cloud-drive folders a user can pick for folder sync with one click.
 //!
 //! Only folders that exist are offered: the desktop client of that service must already be
-//! installed and signed in. The vault goes into an `AIHubTerm` subfolder.
+//! installed and signed in. The vault goes into a `Handrail` subfolder (or the `AIHubTerm` one
+//! that builds released under the old name created, if it holds a vault).
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 /// Subfolder created inside the cloud drive.
-pub const FOLDER_NAME: &str = "AIHubTerm";
+pub const FOLDER_NAME: &str = "Handrail";
+/// Subfolder used by builds released as "AIHubTerm"; reused when it already holds a vault.
+pub const LEGACY_FOLDER_NAME: &str = "AIHubTerm";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum CloudDrive {
@@ -26,7 +29,7 @@ pub struct FolderPreset {
     pub drive: CloudDrive,
     /// e.g. "iCloud Drive", "OneDrive - Contoso", "Google Drive (me@example.com)".
     pub label: String,
-    /// Where the vault goes: `<drive root>/AIHubTerm`.
+    /// Where the vault goes: `<drive root>/Handrail`.
     pub path: PathBuf,
     /// The folder already holds a synced vault (another device set it up): join it.
     pub has_vault: bool,
@@ -127,11 +130,18 @@ pub fn folder_presets(home: &Path, os: Os) -> Vec<FolderPreset> {
     found
         .into_iter()
         .map(|(drive, label, root)| {
-            let path = root.join(FOLDER_NAME);
+            let has_vault = |p: &Path| p.join("manifest.json").is_file();
+            let current = root.join(FOLDER_NAME);
+            let legacy = root.join(LEGACY_FOLDER_NAME);
+            let path = if !has_vault(&current) && has_vault(&legacy) {
+                legacy
+            } else {
+                current
+            };
             FolderPreset {
                 drive,
                 label,
-                has_vault: path.join("manifest.json").is_file(),
+                has_vault: has_vault(&path),
                 path,
             }
         })
@@ -234,6 +244,29 @@ mod tests {
         assert_eq!(p.len(), 2);
         assert_eq!(p[0].path, h.join("Dropbox").join(FOLDER_NAME));
         assert_eq!(p[1].label, "OneDrive");
+    }
+
+    #[test]
+    fn a_vault_in_the_legacy_folder_is_reused() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        let dropbox = mkdir(h.join("Dropbox"));
+        mkdir(dropbox.join(LEGACY_FOLDER_NAME));
+        std::fs::write(
+            dropbox.join(LEGACY_FOLDER_NAME).join("manifest.json"),
+            b"{}",
+        )
+        .unwrap();
+        let p = folder_presets(h, Os::Other);
+        assert_eq!(p[0].path, dropbox.join(LEGACY_FOLDER_NAME));
+        assert!(p[0].has_vault);
+        // Once the new folder holds a vault, it wins.
+        mkdir(dropbox.join(FOLDER_NAME));
+        std::fs::write(dropbox.join(FOLDER_NAME).join("manifest.json"), b"{}").unwrap();
+        assert_eq!(
+            folder_presets(h, Os::Other)[0].path,
+            dropbox.join(FOLDER_NAME)
+        );
     }
 
     #[test]

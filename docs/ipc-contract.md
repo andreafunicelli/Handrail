@@ -7,7 +7,7 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 ## Vault
 - `vault_status() -> { initialized: bool, locked: bool }`
 - `vault_create({ password }) -> { secret_key: string }` — Secret Key shown once (Emergency Kit)
-- `save_emergency_kit({ contents }) -> string` — writes `AIHubTerm Emergency Kit.txt` to Downloads
+- `save_emergency_kit({ contents }) -> string` — writes `Handrail Emergency Kit.txt` to Downloads
   (never overwrites; owner-only on Unix) and returns the path. The webview cannot save `blob:` downloads.
 - `vault_unlock({ password, secret_key? }) -> void` (secret_key needed only on a new device)
 - `vault_lock() -> void`
@@ -56,10 +56,10 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
   and every 5 min; failures back off from 30 s to 15 min.
 - `sync_set_auto({ enabled })`, `sync_disconnect()` (this device only; vault and remote untouched)
 - `sync_folder_presets() -> { drive: "icloud"|"dropbox"|"onedrive"|"google_drive", label, path, has_vault }[]`
-  (cloud-drive folders found on this device; `path` is `<drive>/AIHubTerm`)
+  (cloud-drive folders found on this device; `path` is `<drive>/Handrail`)
 - `sync_configure_github_start() -> { device_code, user_code, verification_uri, interval, expires_in }`
 - `sync_configure_github_poll() -> { done, status: "pending"|"slow_down"|"expired"|"denied"|"ok", repo? }`
-  (poll every `interval` s; creates private repo `aihubterm-vault`)
+  (poll every `interval` s; creates private repo `handrail-vault`)
 - `sync_configure_folder({ path })`, `sync_join()` (new device: pull manifest, then unlock with Secret Key;
   rejects `{ kind: "not_found" }` when the target holds no vault yet),
   `sync_now() -> { pulled, pushed, conflicts, warnings }`
@@ -78,7 +78,7 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 - `app_version() -> string` (workspace `Cargo.toml` version; release builds stamp `<major>.<minor>.<build>`)
 - `restart_app()` (after an installed update on macOS/Linux)
 - Updates use `@tauri-apps/plugin-updater` (`updater:default` capability) against
-  `https://github.com/andreafunicelli/aihubterm-releases/releases/latest/download/latest.json`.
+  `https://github.com/andreafunicelli/handrail-releases/releases/latest/download/latest.json`.
 
 ## Misc
 - `get_setting({ key }) -> any|null`, `set_setting({ key, value })`, `list_secrets() -> { id, kind, label }[]`

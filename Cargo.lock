@@ -229,7 +229,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "aihubterm"
+name = "handrail"
 version = "0.1.0"
 dependencies = [
  "aht-agent",

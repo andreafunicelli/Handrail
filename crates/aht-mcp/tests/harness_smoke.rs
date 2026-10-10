@@ -31,7 +31,7 @@ fn run(mut cmd: Command) -> String {
     s
 }
 
-/// Codex: `-c mcp_servers.aihubterm.*` overrides are accepted and parsed as an HTTP server.
+/// Codex: `-c mcp_servers.handrail.*` overrides are accepted and parsed as an HTTP server.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the codex CLI installed"]
 async fn codex_accepts_cli_mcp_config() {
@@ -40,16 +40,16 @@ async fn codex_accepts_cli_mcp_config() {
     let mut cmd = Command::new(program);
     cmd.env(TOKEN_ENV, token).args([
         "-c",
-        &format!("mcp_servers.aihubterm.url=\"{}\"", server.url()),
+        &format!("mcp_servers.handrail.url=\"{}\"", server.url()),
         "-c",
-        &format!("mcp_servers.aihubterm.bearer_token_env_var=\"{TOKEN_ENV}\""),
+        &format!("mcp_servers.handrail.bearer_token_env_var=\"{TOKEN_ENV}\""),
         "-c",
-        "mcp_servers.aihubterm.tool_timeout_sec=900",
+        "mcp_servers.handrail.tool_timeout_sec=900",
         "-c",
-        "mcp_servers.aihubterm.startup_timeout_sec=30",
+        "mcp_servers.handrail.startup_timeout_sec=30",
         "mcp",
         "get",
-        "aihubterm",
+        "handrail",
         "--json",
     ]);
     let out = tokio::task::spawn_blocking(move || run(cmd)).await.unwrap();
@@ -65,7 +65,7 @@ async fn opencode_connects_with_env_config() {
     let (server, token) = server().await;
     let config = serde_json::json!({
         "$schema": "https://opencode.ai/config.json",
-        "mcp": { "aihubterm": {
+        "mcp": { "handrail": {
             "type": "remote",
             "url": server.url(),
             "enabled": true,
@@ -81,28 +81,28 @@ async fn opencode_connects_with_env_config() {
     let out = tokio::task::spawn_blocking(move || run(cmd)).await.unwrap();
     let line = out
         .lines()
-        .find(|l| l.contains("aihubterm"))
-        .unwrap_or_else(|| panic!("aihubterm not listed: {out}"));
+        .find(|l| l.contains("handrail"))
+        .unwrap_or_else(|| panic!("handrail not listed: {out}"));
     assert!(line.contains("connected"), "{line}");
     server.shutdown().await;
 }
 
 /// Claude Code (not installed on the dev box when this was written). Starts the server, writes
 /// the `--mcp-config` file and keeps serving for `AHT_MCP_MANUAL_SECS` (default 120) seconds so you
-/// can run the printed command and check `/mcp` shows `aihubterm` connected with 7 tools.
+/// can run the printed command and check `/mcp` shows `handrail` connected with 7 tools.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "manual: needs the claude CLI and a human"]
 async fn claude_code_manual_check() {
     let (server, token) = server().await;
-    let config = serde_json::json!({ "mcpServers": { "aihubterm": {
+    let config = serde_json::json!({ "mcpServers": { "handrail": {
         "type": "http",
         "url": server.url(),
         "headers": { "Authorization": format!("Bearer ${{{TOKEN_ENV}}}") }
     }}});
-    let path = std::env::temp_dir().join("aihubterm-mcp-smoke.json");
+    let path = std::env::temp_dir().join("handrail-mcp-smoke.json");
     std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
     println!(
-        "{TOKEN_ENV}={token} claude --mcp-config {} --strict-mcp-config --allowedTools \"mcp__aihubterm__*\"",
+        "{TOKEN_ENV}={token} claude --mcp-config {} --strict-mcp-config --allowedTools \"mcp__handrail__*\"",
         path.display()
     );
     let secs = std::env::var("AHT_MCP_MANUAL_SECS")
