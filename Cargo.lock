@@ -188,6 +188,7 @@ dependencies = [
  "portable-pty",
  "regex",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "uuid",

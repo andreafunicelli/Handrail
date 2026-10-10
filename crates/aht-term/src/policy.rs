@@ -119,7 +119,10 @@ pub fn classify(command: &str) -> RiskClass {
         return RiskClass::Destructive;
     }
     let segments = split_segments(command);
-    if segments.iter().all(|s| s.words.is_empty() && s.redirects.is_empty()) {
+    if segments
+        .iter()
+        .all(|s| s.words.is_empty() && s.redirects.is_empty())
+    {
         return RiskClass::Read;
     }
     for seg in &segments {
@@ -352,20 +355,148 @@ fn classify_segment(seg: &Segment) -> RiskClass {
 }
 
 const READ_ONLY: &[&str] = &[
-    "ls", "ll", "la", "dir", "cat", "tac", "less", "more", "head", "tail", "grep", "egrep",
-    "fgrep", "rg", "ag", "zgrep", "zcat", "df", "du", "free", "uptime", "ps", "pgrep", "top",
-    "htop", "atop", "whoami", "id", "groups", "hostname", "uname", "pwd", "echo", "printf",
-    "date", "cal", "which", "whereis", "type", "printenv", "stat", "file", "wc", "uniq", "cut",
-    "tr", "column", "nl", "diff", "cmp", "comm", "jq", "yq", "lsblk", "blkid", "lscpu", "lsmem",
-    "lspci", "lsusb", "lsmod", "lsof", "ss", "netstat", "ping", "ping6", "traceroute",
-    "tracepath", "mtr", "dig", "nslookup", "host", "whois", "tree", "basename", "dirname",
-    "realpath", "readlink", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum", "test", "[",
-    "[[", "true", "false", "sleep", "man", "help", "history", "last", "lastlog", "w", "who",
-    "getent", "nproc", "arch", "vmstat", "iostat", "mpstat", "sar", "pidstat", "nvidia-smi",
-    "cd", "pushd", "popd", "hexdump", "xxd", "od", "strings", "seq", "yes", "locate", "dmidecode",
-    "ldd", "timedatectl", "hostnamectl", "localectl", "loginctl", "uptime", "env", "export",
-    "alias", "set", "watch", "column", "fold", "fmt", "expand", "base64", "openssl", "nc",
-    "telnet", "dpkg-query", "systemd-analyze", "zless", "bat", "exa", "eza", "fd", "ncdu",
+    "ls",
+    "ll",
+    "la",
+    "dir",
+    "cat",
+    "tac",
+    "less",
+    "more",
+    "head",
+    "tail",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "ag",
+    "zgrep",
+    "zcat",
+    "df",
+    "du",
+    "free",
+    "uptime",
+    "ps",
+    "pgrep",
+    "top",
+    "htop",
+    "atop",
+    "whoami",
+    "id",
+    "groups",
+    "hostname",
+    "uname",
+    "pwd",
+    "echo",
+    "printf",
+    "date",
+    "cal",
+    "which",
+    "whereis",
+    "type",
+    "printenv",
+    "stat",
+    "file",
+    "wc",
+    "uniq",
+    "cut",
+    "tr",
+    "column",
+    "nl",
+    "diff",
+    "cmp",
+    "comm",
+    "jq",
+    "yq",
+    "lsblk",
+    "blkid",
+    "lscpu",
+    "lsmem",
+    "lspci",
+    "lsusb",
+    "lsmod",
+    "lsof",
+    "ss",
+    "netstat",
+    "ping",
+    "ping6",
+    "traceroute",
+    "tracepath",
+    "mtr",
+    "dig",
+    "nslookup",
+    "host",
+    "whois",
+    "tree",
+    "basename",
+    "dirname",
+    "realpath",
+    "readlink",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "sha512sum",
+    "cksum",
+    "test",
+    "[",
+    "[[",
+    "true",
+    "false",
+    "sleep",
+    "man",
+    "help",
+    "history",
+    "last",
+    "lastlog",
+    "w",
+    "who",
+    "getent",
+    "nproc",
+    "arch",
+    "vmstat",
+    "iostat",
+    "mpstat",
+    "sar",
+    "pidstat",
+    "nvidia-smi",
+    "cd",
+    "pushd",
+    "popd",
+    "hexdump",
+    "xxd",
+    "od",
+    "strings",
+    "seq",
+    "yes",
+    "locate",
+    "dmidecode",
+    "ldd",
+    "timedatectl",
+    "hostnamectl",
+    "localectl",
+    "loginctl",
+    "uptime",
+    "env",
+    "export",
+    "alias",
+    "set",
+    "watch",
+    "column",
+    "fold",
+    "fmt",
+    "expand",
+    "base64",
+    "openssl",
+    "nc",
+    "telnet",
+    "dpkg-query",
+    "systemd-analyze",
+    "zless",
+    "bat",
+    "exa",
+    "eza",
+    "fd",
+    "ncdu",
 ];
 
 fn basename(w: &str) -> &str {
@@ -598,7 +729,10 @@ fn classify_words(words: &[String]) -> RiskClass {
             };
         }
         "awk" | "gawk" | "mawk" => {
-            return if args.iter().any(|a| a.contains("system(") || a.contains("print >")) {
+            return if args
+                .iter()
+                .any(|a| a.contains("system(") || a.contains("print >"))
+            {
                 RiskClass::Write
             } else {
                 RiskClass::Read
@@ -615,8 +749,17 @@ fn classify_words(words: &[String]) -> RiskClass {
             let writes = args.iter().any(|a| {
                 matches!(
                     a.as_str(),
-                    "-d" | "--data" | "--data-raw" | "--data-binary" | "-F" | "--form" | "-T"
-                        | "--upload-file" | "-o" | "--output" | "-O" | "--remote-name"
+                    "-d" | "--data"
+                        | "--data-raw"
+                        | "--data-binary"
+                        | "-F"
+                        | "--form"
+                        | "-T"
+                        | "--upload-file"
+                        | "-o"
+                        | "--output"
+                        | "-O"
+                        | "--remote-name"
                 ) || a.starts_with("--data")
             }) || args.windows(2).any(|w| {
                 (w[0] == "-X" || w[0] == "--request") && !w[1].eq_ignore_ascii_case("GET")
@@ -691,8 +834,8 @@ fn classify_words(words: &[String]) -> RiskClass {
         }
         "pip" | "pip3" | "npm" | "pnpm" | "yarn" | "cargo" | "gem" => {
             return match sub {
-                "list" | "ls" | "show" | "freeze" | "view" | "outdated" | "search" | "--version"
-                | "version" => RiskClass::Read,
+                "list" | "ls" | "show" | "freeze" | "view" | "outdated" | "search"
+                | "--version" | "version" => RiskClass::Read,
                 _ => RiskClass::Write,
             };
         }
@@ -706,10 +849,9 @@ fn classify_words(words: &[String]) -> RiskClass {
         "mysql" | "psql" | "sqlite3" | "redis-cli" | "mongo" | "mongosh" => {
             // SQL destructive statements are caught by the global regex; anything else may write.
             return if cmd == "redis-cli"
-                && args
-                    .iter()
-                    .any(|a| a.eq_ignore_ascii_case("flushall") || a.eq_ignore_ascii_case("flushdb"))
-            {
+                && args.iter().any(|a| {
+                    a.eq_ignore_ascii_case("flushall") || a.eq_ignore_ascii_case("flushdb")
+                }) {
                 RiskClass::Destructive
             } else {
                 RiskClass::Write
@@ -770,15 +912,19 @@ fn classify_git(args: &[String]) -> RiskClass {
         "remote" | "tag" | "stash" if rest.is_empty() || rest[0] == "-v" || rest[0] == "list" => {
             RiskClass::Read
         }
-        "config" if rest.iter().any(|a| a == "--get" || a == "--list" || a == "-l") => {
+        "config"
+            if rest
+                .iter()
+                .any(|a| a == "--get" || a == "--list" || a == "-l") =>
+        {
             RiskClass::Read
         }
         "reset" if rest.iter().any(|a| a == "--hard") => RiskClass::Destructive,
         "clean" if has_flag(rest, 'f', "force") => RiskClass::Destructive,
         "push"
-            if rest
-                .iter()
-                .any(|a| a == "-f" || a == "--force" || a.starts_with("--force") || a.starts_with('+')) =>
+            if rest.iter().any(|a| {
+                a == "-f" || a == "--force" || a.starts_with("--force") || a.starts_with('+')
+            }) =>
         {
             RiskClass::Destructive
         }
@@ -794,17 +940,34 @@ fn classify_docker(args: &[String]) -> RiskClass {
         .collect();
     let force = has_flag(args, 'f', "force");
     match words.as_slice() {
-        ["ps", ..] | ["images", ..] | ["logs", ..] | ["inspect", ..] | ["stats", ..]
-        | ["version", ..] | ["info", ..] | ["top", ..] | ["port", ..] | ["diff", ..]
-        | ["history", ..] | ["search", ..] | [] => RiskClass::Read,
+        ["ps", ..]
+        | ["images", ..]
+        | ["logs", ..]
+        | ["inspect", ..]
+        | ["stats", ..]
+        | ["version", ..]
+        | ["info", ..]
+        | ["top", ..]
+        | ["port", ..]
+        | ["diff", ..]
+        | ["history", ..]
+        | ["search", ..]
+        | [] => RiskClass::Read,
         [_, "ls", ..] | [_, "list", ..] | [_, "inspect", ..] | [_, "ps", ..] | [_, "logs", ..] => {
             RiskClass::Read
         }
         ["compose", "config", ..] => RiskClass::Read,
-        ["system", "prune", ..] | ["volume", "prune", ..] | ["volume", "rm", ..]
-        | ["image", "prune", ..] | ["container", "prune", ..] | ["network", "prune", ..]
+        ["system", "prune", ..]
+        | ["volume", "prune", ..]
+        | ["volume", "rm", ..]
+        | ["image", "prune", ..]
+        | ["container", "prune", ..]
+        | ["network", "prune", ..]
         | ["compose", "down", ..]
-            if force || args.iter().any(|a| a == "-v" || a == "--volumes" || a == "-a") =>
+            if force
+                || args
+                    .iter()
+                    .any(|a| a == "-v" || a == "--volumes" || a == "-a") =>
         {
             RiskClass::Destructive
         }
@@ -819,7 +982,10 @@ fn classify_docker(args: &[String]) -> RiskClass {
 fn classify_kubectl(args: &[String]) -> RiskClass {
     let mut j = 0;
     while j < args.len() && args[j].starts_with('-') {
-        if matches!(args[j].as_str(), "-n" | "--namespace" | "--context" | "--kubeconfig") {
+        if matches!(
+            args[j].as_str(),
+            "-n" | "--namespace" | "--context" | "--kubeconfig"
+        ) {
             j += 1;
         }
         j += 1;
@@ -828,7 +994,12 @@ fn classify_kubectl(args: &[String]) -> RiskClass {
     match sub {
         "get" | "describe" | "logs" | "top" | "version" | "explain" | "api-resources"
         | "api-versions" | "cluster-info" | "events" | "auth" | "diff" | "" => RiskClass::Read,
-        "config" if matches!(args.get(j + 1).map(|s| s.as_str()), Some("view" | "get-contexts" | "current-context")) => {
+        "config"
+            if matches!(
+                args.get(j + 1).map(|s| s.as_str()),
+                Some("view" | "get-contexts" | "current-context")
+            ) =>
+        {
             RiskClass::Read
         }
         "delete" | "drain" => RiskClass::Destructive,
@@ -924,7 +1095,11 @@ mod tests {
                 failures.push(format!("{cmd:?}: want {want:?}, got {got:?}"));
             }
         }
-        assert!(failures.is_empty(), "misclassified:\n{}", failures.join("\n"));
+        assert!(
+            failures.is_empty(),
+            "misclassified:\n{}",
+            failures.join("\n")
+        );
         assert!(cases.len() >= 40);
     }
 

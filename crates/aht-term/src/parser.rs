@@ -156,7 +156,11 @@ impl vte::Perform for Perf {
         let Some(&first) = params.first() else {
             return;
         };
-        let text = |i: usize| params.get(i).map(|p| String::from_utf8_lossy(p).into_owned());
+        let text = |i: usize| {
+            params
+                .get(i)
+                .map(|p| String::from_utf8_lossy(p).into_owned())
+        };
         match first {
             b"133" | b"633" => match params.get(1).and_then(|p| p.first()) {
                 Some(b'A') => self.events.push(TrackEvent::PromptStart),
@@ -203,10 +207,7 @@ impl vte::Perform for Perf {
 /// `file://host/path` → `/path` (percent-decoded). Accepts bare paths too.
 pub fn parse_osc7(s: &str) -> Option<String> {
     let path = if let Some(rest) = s.strip_prefix("file://") {
-        match rest.find('/') {
-            Some(i) => &rest[i..],
-            None => return None,
-        }
+        &rest[rest.find('/')?..]
     } else if s.starts_with('/') {
         s
     } else {
@@ -487,7 +488,8 @@ mod tests {
     fn ui_filter_hidden_window() {
         let mut f = UiFilter::default();
         f.hide_until(Some("N".into()));
-        let mut out = f.filter(b" printf '\\033]1337;AhtEnd=N\\007'\r\n\x1b]1337;AhtEnd=X\x07still hidden");
+        let mut out =
+            f.filter(b" printf '\\033]1337;AhtEnd=N\\007'\r\n\x1b]1337;AhtEnd=X\x07still hidden");
         assert!(out.is_empty());
         out = f.filter(b"\x1b]1337;AhtEnd=N\x07$ ");
         assert_eq!(out, b"\r\x1b[K$ ");
