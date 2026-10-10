@@ -13,12 +13,12 @@ pub struct CreatedVault {
     secret_key: String,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn vault_status(state: State<'_, AppState>) -> Result<VaultStatus> {
     Ok(state.vault.lock().await.status())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn vault_create(state: State<'_, AppState>, password: String) -> Result<CreatedVault> {
     if password.chars().count() < 10 {
         return Err(Error::Invalid(
@@ -43,7 +43,7 @@ pub async fn vault_create(state: State<'_, AppState>, password: String) -> Resul
     })
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn vault_unlock(
     state: State<'_, AppState>,
     password: String,
@@ -76,7 +76,7 @@ pub async fn vault_unlock(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn vault_lock(state: State<'_, AppState>) -> Result<()> {
     state.vault.lock().await.lock();
     Ok(())
@@ -100,12 +100,12 @@ async fn delete<T: VaultItem>(state: &AppState, id: &str) -> Result<()> {
         .map_err(Error::from)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_connections(state: State<'_, AppState>) -> Result<Vec<Connection>> {
     list(&state).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn save_connection(
     state: State<'_, AppState>,
     connection: Connection,
@@ -114,23 +114,23 @@ pub async fn save_connection(
     Ok(connection)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn delete_connection(state: State<'_, AppState>, id: String) -> Result<()> {
     delete::<Connection>(&state, &id).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_groups(state: State<'_, AppState>) -> Result<Vec<Group>> {
     list(&state).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn save_group(state: State<'_, AppState>, group: Group) -> Result<Group> {
     put(&state, &group).await?;
     Ok(group)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn delete_group(state: State<'_, AppState>, id: String) -> Result<()> {
     // Children move up to the deleted group's parent so nothing becomes orphaned.
     let mut vault = state.vault.lock().await;
@@ -162,13 +162,13 @@ pub struct SecretMeta {
     label: String,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn save_secret(state: State<'_, AppState>, secret: Secret) -> Result<SecretId> {
     put(&state, &secret).await?;
     Ok(secret.id)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_secrets(state: State<'_, AppState>) -> Result<Vec<SecretMeta>> {
     Ok(list::<Secret>(&state)
         .await?
@@ -181,12 +181,12 @@ pub async fn list_secrets(state: State<'_, AppState>) -> Result<Vec<SecretMeta>>
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_providers(state: State<'_, AppState>) -> Result<Vec<Provider>> {
     list(&state).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn save_provider(
     state: State<'_, AppState>,
     mut provider: Provider,
@@ -207,7 +207,7 @@ pub async fn save_provider(
     Ok(provider)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn delete_provider(state: State<'_, AppState>, id: String) -> Result<()> {
     let mut vault = state.vault.lock().await;
     if let Some(p) = vault.get::<Provider>(&id).map_err(Error::from)? {
@@ -223,12 +223,12 @@ pub async fn delete_provider(state: State<'_, AppState>, id: String) -> Result<(
         .map_err(Error::from)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_harness_profiles(state: State<'_, AppState>) -> Result<Vec<HarnessProfile>> {
     list(&state).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn save_harness_profile(
     state: State<'_, AppState>,
     profile: HarnessProfile,
@@ -237,12 +237,12 @@ pub async fn save_harness_profile(
     Ok(profile)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn delete_harness_profile(state: State<'_, AppState>, id: String) -> Result<()> {
     delete::<HarnessProfile>(&state, &id).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<Value>> {
     let vault = state.vault.lock().await;
     Ok(vault
@@ -251,7 +251,7 @@ pub async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Opti
         .map(|s| s.value))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn set_setting(state: State<'_, AppState>, key: String, value: Value) -> Result<()> {
     put(&state, &Setting { key, value }).await
 }

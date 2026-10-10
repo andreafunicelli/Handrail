@@ -30,3 +30,7 @@ aht-vault.workspace = true
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 base64 = "0.23.1"
 uuid.workspace = true
+async-trait.workspace = true
+zeroize = "1.9.1"
+tokio-util = "0.7.20"
+regex = "1.13.1"

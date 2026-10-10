@@ -14,7 +14,7 @@ use tauri::State;
 
 // ---------- import ----------
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn import_detect() -> Result<Vec<DetectedSource>> {
     tokio::task::spawn_blocking(aht_import::detect)
         .await
@@ -53,7 +53,7 @@ pub struct ImportPreview {
     duplicates: Vec<Duplicate>,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn import_preview(
     state: State<'_, AppState>,
     args: PreviewArgs,
@@ -111,7 +111,7 @@ pub struct ImportResult {
     imported: usize,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn import_apply(
     state: State<'_, AppState>,
     preview_id: String,
@@ -153,12 +153,12 @@ fn references(c: &Connection, id: aht_core::SecretId) -> bool {
 
 // ---------- harnesses & providers ----------
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn detect_harnesses() -> Result<Vec<aht_harness::HarnessInfo>> {
     Ok(aht_harness::detect_all().await)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_harness_extensions(kind: HarnessKind) -> Result<aht_harness::Extensions> {
     tokio::task::spawn_blocking(move || aht_harness::list_extensions(kind))
         .await
@@ -184,7 +184,7 @@ pub async fn provider_client(
     Ok((provider, client))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn list_models(state: State<'_, AppState>, provider_id: String) -> Result<Vec<String>> {
     let (_, client) = provider_client(&state, &provider_id).await?;
     let models = client.list_models().await.map_err(aht_core::Error::from)?;
@@ -238,7 +238,7 @@ pub struct SyncStatus {
     can_join: bool,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus> {
     let f = load_sync(&state);
     let initialized = state.vault.lock().await.status().initialized;
@@ -250,7 +250,7 @@ pub async fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn sync_configure_github_start(state: State<'_, AppState>) -> Result<DeviceCode> {
     let code = github_device_flow::start(&github_device_flow::client_id(), "repo")
         .await
@@ -267,7 +267,7 @@ pub struct PollOutcome {
     repo: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn sync_configure_github_poll(state: State<'_, AppState>) -> Result<PollOutcome> {
     let code = state
         .github_device
@@ -364,7 +364,7 @@ async fn github_token(state: &AppState) -> Result<String> {
         .ok_or_else(|| Error::Auth("GitHub sign-in required".into()))
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn sync_configure_folder(state: State<'_, AppState>, path: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&path)?;
     let mut f = load_sync(&state);
@@ -391,7 +391,7 @@ async fn backend(state: &AppState, cfg: &SyncConfig) -> Result<Box<dyn SyncBacke
 
 /// New device: download the remote manifest and create the local (locked) vault from it.
 /// The user then unlocks with master password + Secret Key.
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn sync_join(state: State<'_, AppState>) -> Result<()> {
     let f = load_sync(&state);
     let cfg = f
@@ -406,7 +406,7 @@ pub async fn sync_join(state: State<'_, AppState>) -> Result<()> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn sync_now(state: State<'_, AppState>) -> Result<SyncReport> {
     let mut f = load_sync(&state);
     let cfg = f

@@ -15,6 +15,8 @@ pub struct LocalShellSpec {
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,
+    /// Variables removed from the inherited environment (e.g. API keys a harness must not see).
+    pub env_remove: Vec<String>,
     pub cols: u16,
     pub rows: u16,
 }
@@ -26,6 +28,7 @@ impl LocalShellSpec {
             args,
             cwd: None,
             env: Vec::new(),
+            env_remove: Vec::new(),
             cols: 80,
             rows: 24,
         }
@@ -72,6 +75,9 @@ pub fn spawn_local(spec: LocalShellSpec) -> Result<(LocalPty, mpsc::Receiver<Tra
     }
     if !spec.env.iter().any(|(k, _)| k == "TERM") {
         cmd.env("TERM", "xterm-256color");
+    }
+    for k in &spec.env_remove {
+        cmd.env_remove(k);
     }
     for (k, v) in &spec.env {
         cmd.env(k, v);

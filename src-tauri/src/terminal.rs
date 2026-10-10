@@ -1,5 +1,1041 @@
-//! Terminal sessions and the `TerminalTools` implementation shared by the agent and MCP.
-//! Filled in once `aht-ssh` and `aht-term` land.
+//! Terminal sessions, approvals, agents and the MCP bridge.
+//!
+//! Everything that acts on a terminal goes through [`TermSession`] (aht-term), which enforces
+//! the approval policy. The built-in agent and every MCP-connected harness use the same
+//! [`Tools`] implementation of `TerminalTools`, so both see identical behavior.
+
+use crate::cmd_vault::secret_value;
+use crate::state::{err, AppState};
+use aht_core::agent::{AgentEvent, ApprovalDecision, ApprovalRequest};
+use aht_core::model::{
+    ApprovalMode, Brain, Connection, ConnectionKind, HarnessDisplay, HarnessKind, HarnessProfile,
+    SshAuth,
+};
+use aht_core::terminal::{
+    Actor, CommandResult, ConnectionSummary, ControlKey, OutputChunk, RunCommandRequest,
+    SessionInfo, TerminalTools, Transport, TransportEvent,
+};
+use aht_core::{ApprovalId, ConnectionId, Error, OutputId, Result, SessionId};
+use aht_harness::{HeadlessRun, LaunchContext, LaunchMode, LaunchSpec};
+use aht_mcp::{McpOptions, McpServer, McpToken};
+use aht_ssh::{AuthMaterial, HostKeyPrompt, JumpHop, KnownHosts, PromptingVerifier, SshParams};
+use aht_term::{Approver, Policy, SessionEvent, TermConfig, TermSession};
+use async_trait::async_trait;
+use base64::Engine;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex, OnceCell, RwLock};
+use tokio_util::sync::CancellationToken;
+use zeroize::Zeroizing;
+
+const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+
+struct SessionEntry {
+    term: Arc<TermSession>,
+    /// MCP tokens bound to harnesses launched from (or in) this session; revoked on close.
+    tokens: Vec<McpToken>,
+    temp_files: Vec<PathBuf>,
+}
+
+enum Run {
+    BuiltIn(CancellationToken),
+    Harness(Arc<HeadlessRun>),
+}
+
+struct HarnessChat {
+    run: Arc<HeadlessRun>,
+    token: McpToken,
+}
 
 #[derive(Default)]
-pub struct TerminalHub {}
+pub struct TerminalHub {
+    app: std::sync::OnceLock<AppHandle>,
+    sessions: RwLock<HashMap<SessionId, SessionEntry>>,
+    approvals: Mutex<HashMap<ApprovalId, oneshot::Sender<ApprovalDecision>>>,
+    host_keys: Mutex<HashMap<String, oneshot::Sender<bool>>>,
+    mcp: OnceCell<McpServer>,
+    agents: Mutex<HashMap<String, Arc<Mutex<aht_agent::Agent>>>>,
+    harness_chats: Mutex<HashMap<(SessionId, String), HarnessChat>>,
+    runs: Mutex<HashMap<String, Run>>,
+}
+
+impl TerminalHub {
+    pub fn attach(&self, app: AppHandle) {
+        let _ = self.app.set(app);
+    }
+
+    fn app(&self) -> &AppHandle {
+        self.app.get().expect("TerminalHub attached at setup")
+    }
+
+    async fn session(&self, id: SessionId) -> Result<Arc<TermSession>> {
+        self.sessions
+            .read()
+            .await
+            .get(&id)
+            .map(|e| e.term.clone())
+            .ok_or_else(|| Error::NotFound(format!("session {id}")))
+    }
+
+    async fn mcp(&self) -> Result<&McpServer> {
+        let app = self.app().clone();
+        self.mcp
+            .get_or_try_init(|| async move {
+                McpServer::start(Arc::new(Tools { app }), McpOptions::default()).await
+            })
+            .await
+    }
+}
+
+fn hub(app: &AppHandle) -> &TerminalHub {
+    &app.state::<AppState>().inner().terminal
+}
+
+// ---------- events ----------
+
+#[derive(Clone, Serialize)]
+struct DataEvent {
+    session_id: SessionId,
+    data_b64: String,
+}
+
+#[derive(Clone, Serialize)]
+struct AgentMarkEvent {
+    session_id: SessionId,
+    command: String,
+    actor_label: String,
+    output_id: OutputId,
+}
+
+#[derive(Clone, Serialize)]
+struct AgentRunEvent {
+    run_id: String,
+    session_id: SessionId,
+    event: AgentEvent,
+}
+
+#[derive(Clone, Serialize)]
+struct HostKeyEvent {
+    request_id: String,
+    host: String,
+    port: u16,
+    fingerprint: String,
+    old_fingerprint: Option<String>,
+    kind: &'static str,
+}
+
+/// Register a running session and pump its output/events to the UI.
+async fn register(
+    app: &AppHandle,
+    transport: Arc<dyn Transport>,
+    events: mpsc::Receiver<TransportEvent>,
+    cfg: TermConfig,
+    tokens: Vec<McpToken>,
+    temp_files: Vec<PathBuf>,
+) -> SessionInfo {
+    let term = Arc::new(TermSession::spawn(transport, events, cfg));
+    let id = term.id();
+    let mut ui = term.subscribe_ui();
+    let mut ev = term.subscribe_events();
+    let a = app.clone();
+    tokio::spawn(async move {
+        loop {
+            match ui.recv().await {
+                Ok(bytes) => {
+                    let _ = a.emit(
+                        "session://data",
+                        DataEvent {
+                            session_id: id,
+                            data_b64: B64.encode(bytes),
+                        },
+                    );
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    let a = app.clone();
+    let t = term.clone();
+    tokio::spawn(async move {
+        loop {
+            match ev.recv().await {
+                Ok(SessionEvent::AgentMark {
+                    actor_label,
+                    command,
+                    output_id,
+                    ..
+                }) => {
+                    let _ = a.emit(
+                        "session://agent_mark",
+                        AgentMarkEvent {
+                            session_id: id,
+                            command,
+                            actor_label,
+                            output_id,
+                        },
+                    );
+                }
+                Ok(SessionEvent::Audit { .. }) => {}
+                Ok(_) => {
+                    let _ = a.emit("session://state", t.info());
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    let info = term.info();
+    hub(app).sessions.write().await.insert(
+        id,
+        SessionEntry {
+            term,
+            tokens,
+            temp_files,
+        },
+    );
+    info
+}
+
+// ---------- approvals & host keys ----------
+
+struct UiApprover {
+    app: AppHandle,
+}
+
+#[async_trait]
+impl Approver for UiApprover {
+    async fn request(&self, req: ApprovalRequest) -> ApprovalDecision {
+        let (tx, rx) = oneshot::channel();
+        hub(&self.app)
+            .approvals
+            .lock()
+            .await
+            .insert(req.approval_id, tx);
+        let _ = self.app.emit("approval://requested", req);
+        rx.await.unwrap_or(ApprovalDecision::Deny {
+            message: Some("cancelled".into()),
+        })
+    }
+}
+
+struct UiHostKeyPrompt {
+    app: AppHandle,
+}
+
+impl UiHostKeyPrompt {
+    async fn ask(&self, ev: HostKeyEvent) -> bool {
+        let (tx, rx) = oneshot::channel();
+        hub(&self.app)
+            .host_keys
+            .lock()
+            .await
+            .insert(ev.request_id.clone(), tx);
+        let _ = self.app.emit("session://host_key", ev);
+        tokio::time::timeout(Duration::from_secs(300), rx)
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or(false)
+    }
+}
+
+#[async_trait]
+impl HostKeyPrompt for UiHostKeyPrompt {
+    async fn confirm_new(&self, host: &str, port: u16, fingerprint: &str) -> bool {
+        self.ask(HostKeyEvent {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            host: host.into(),
+            port,
+            fingerprint: fingerprint.into(),
+            old_fingerprint: None,
+            kind: "new",
+        })
+        .await
+    }
+
+    async fn confirm_replace(&self, host: &str, port: u16, old: &str, new: &str) -> bool {
+        self.ask(HostKeyEvent {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            host: host.into(),
+            port,
+            fingerprint: new.into(),
+            old_fingerprint: Some(old.into()),
+            kind: "changed",
+        })
+        .await
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn approval_decide(
+    state: tauri::State<'_, AppState>,
+    approval_id: ApprovalId,
+    decision: ApprovalDecision,
+) -> Result<()> {
+    match state.terminal.approvals.lock().await.remove(&approval_id) {
+        Some(tx) => {
+            let _ = tx.send(decision);
+            Ok(())
+        }
+        None => Err(Error::NotFound("approval already resolved".into())),
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn host_key_decision(
+    state: tauri::State<'_, AppState>,
+    request_id: String,
+    accept: bool,
+) -> Result<()> {
+    if let Some(tx) = state.terminal.host_keys.lock().await.remove(&request_id) {
+        let _ = tx.send(accept);
+    }
+    Ok(())
+}
+
+// ---------- opening sessions ----------
+
+/// The UI stores `{ default_mode, deny_list: string[] }` under the `approvals` setting.
+async fn approval_settings(state: &AppState) -> (ApprovalMode, Vec<regex::Regex>) {
+    let value = {
+        let vault = state.vault.lock().await;
+        vault
+            .get::<aht_vault::Setting>("approvals")
+            .ok()
+            .flatten()
+            .map(|s| s.value)
+    };
+    let mode = value
+        .as_ref()
+        .and_then(|v| serde_json::from_value(v.get("default_mode")?.clone()).ok())
+        .unwrap_or_default();
+    let mut deny = aht_term::policy::default_deny_list();
+    if let Some(list) = value
+        .as_ref()
+        .and_then(|v| v.get("deny_list")?.as_array().cloned())
+    {
+        deny.extend(
+            list.iter()
+                .filter_map(|p| p.as_str())
+                .filter_map(|p| regex::Regex::new(p).ok()),
+        );
+    }
+    (mode, deny)
+}
+
+async fn auth_material(state: &AppState, c: &Connection) -> Result<AuthMaterial> {
+    Ok(match &c.auth {
+        SshAuth::Password { secret } => {
+            AuthMaterial::Password(Zeroizing::new(secret_value(state, *secret).await?))
+        }
+        SshAuth::Key { key, passphrase } => AuthMaterial::Key {
+            pem: Zeroizing::new(secret_value(state, *key).await?),
+            passphrase: match passphrase {
+                Some(p) => Some(Zeroizing::new(secret_value(state, *p).await?)),
+                None => None,
+            },
+        },
+        SshAuth::Agent => AuthMaterial::Agent,
+        SshAuth::Prompt => {
+            return Err(Error::Auth(format!(
+                "no saved credentials for {} — edit the connection to add a password or key",
+                c.name
+            )))
+        }
+    })
+}
+
+async fn load_connection(state: &AppState, id: ConnectionId) -> Result<Connection> {
+    state
+        .vault
+        .lock()
+        .await
+        .get::<Connection>(&id.to_string())
+        .map_err(Error::from)?
+        .ok_or_else(|| Error::NotFound(format!("connection {id}")))
+}
+
+pub async fn open_ssh(
+    app: &AppHandle,
+    connection_id: ConnectionId,
+    cols: u16,
+    rows: u16,
+) -> Result<SessionInfo> {
+    let state = app.state::<AppState>();
+    let conn = load_connection(&state, connection_id).await?;
+    if conn.kind != ConnectionKind::Ssh {
+        return Err(Error::Invalid(format!(
+            "{:?} connections are not supported yet",
+            conn.kind
+        )));
+    }
+    let mut params = SshParams::new(
+        conn.host.clone(),
+        conn.port,
+        conn.user.clone(),
+        auth_material(&state, &conn).await?,
+    );
+    params.cols = cols;
+    params.rows = rows;
+    for jid in &conn.jump {
+        let j = load_connection(&state, *jid).await?;
+        params.jump.push(JumpHop {
+            host: j.host.clone(),
+            port: j.port,
+            user: j.user.clone(),
+            auth: auth_material(&state, &j).await?,
+        });
+    }
+    let store = KnownHosts::with_user_known_hosts(state.paths.data_dir.join("known_hosts"));
+    let verifier = Arc::new(PromptingVerifier::new(
+        store,
+        Arc::new(UiHostKeyPrompt { app: app.clone() }),
+    ));
+    let (shell, events) = aht_ssh::connect_shell(&params, verifier).await?;
+    let (default, deny_list) = approval_settings(&state).await;
+    let mode = conn.approval_mode.unwrap_or(default);
+    let cfg = TermConfig {
+        connection_id: Some(conn.id),
+        title: conn.name.clone(),
+        policy: Policy {
+            mode,
+            env: conn.env,
+            deny_list,
+        },
+        ..TermConfig::default()
+    };
+    Ok(register(app, Arc::new(shell), events, cfg, vec![], vec![]).await)
+}
+
+async fn open_local(
+    app: &AppHandle,
+    spec: aht_ssh::LocalShellSpec,
+    title: String,
+    inject: bool,
+    tokens: Vec<McpToken>,
+    temp_files: Vec<PathBuf>,
+) -> Result<SessionInfo> {
+    let (pty, events) = tokio::task::spawn_blocking(move || aht_ssh::spawn_local(spec))
+        .await
+        .map_err(err)??;
+    let (mode, deny_list) = approval_settings(&app.state::<AppState>()).await;
+    let cfg = TermConfig {
+        title,
+        inject,
+        policy: Policy {
+            mode,
+            deny_list,
+            ..Policy::default()
+        },
+        ..TermConfig::default()
+    };
+    Ok(register(app, Arc::new(pty), events, cfg, tokens, temp_files).await)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn open_session(
+    app: AppHandle,
+    connection_id: ConnectionId,
+    cols: u16,
+    rows: u16,
+) -> Result<SessionInfo> {
+    open_ssh(&app, connection_id, cols, rows).await
+}
+
+#[derive(Serialize)]
+pub struct LocalShell {
+    id: String,
+    label: String,
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_local_shells() -> Result<Vec<LocalShell>> {
+    Ok(tokio::task::spawn_blocking(aht_ssh::default_local_shells)
+        .await
+        .map_err(err)?
+        .into_iter()
+        .map(|s| LocalShell {
+            id: s.id,
+            label: s.label,
+        })
+        .collect())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn open_local_session(
+    app: AppHandle,
+    shell: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<SessionInfo> {
+    let shells = tokio::task::spawn_blocking(aht_ssh::default_local_shells)
+        .await
+        .map_err(err)?;
+    let chosen = match &shell {
+        Some(id) => shells.iter().find(|s| &s.id == id),
+        None => shells.first(),
+    }
+    .ok_or_else(|| Error::NotFound("no local shell found".into()))?;
+    let title = chosen.label.clone();
+    open_local(
+        &app,
+        chosen.to_spec(cols, rows),
+        title,
+        true,
+        vec![],
+        vec![],
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn session_write(
+    state: tauri::State<'_, AppState>,
+    session_id: SessionId,
+    data_b64: String,
+) -> Result<()> {
+    let bytes = B64
+        .decode(data_b64)
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+    state
+        .terminal
+        .session(session_id)
+        .await?
+        .write_user(&bytes)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn session_resize(
+    state: tauri::State<'_, AppState>,
+    session_id: SessionId,
+    cols: u16,
+    rows: u16,
+) -> Result<()> {
+    state
+        .terminal
+        .session(session_id)
+        .await?
+        .resize(cols, rows)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn close_session(state: tauri::State<'_, AppState>, session_id: SessionId) -> Result<()> {
+    let hub = &state.terminal;
+    let entry = hub.sessions.write().await.remove(&session_id);
+    let chats: Vec<HarnessChat> = {
+        let mut map = hub.harness_chats.lock().await;
+        let keys: Vec<_> = map
+            .keys()
+            .filter(|(s, _)| *s == session_id)
+            .cloned()
+            .collect();
+        keys.into_iter().filter_map(|k| map.remove(&k)).collect()
+    };
+    for chat in chats {
+        chat.run.cancel().await;
+        if let Some(mcp) = hub.mcp.get() {
+            mcp.revoke(&chat.token);
+        }
+    }
+    if let Some(e) = entry {
+        if let Some(mcp) = hub.mcp.get() {
+            for t in &e.tokens {
+                mcp.revoke(t);
+            }
+        }
+        aht_harness_cleanup(&e.temp_files);
+        let _ = e.term.close().await;
+    }
+    Ok(())
+}
+
+fn aht_harness_cleanup(files: &[PathBuf]) {
+    for f in files {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_sessions(state: tauri::State<'_, AppState>) -> Result<Vec<SessionInfo>> {
+    Ok(state
+        .terminal
+        .sessions
+        .read()
+        .await
+        .values()
+        .map(|e| e.term.info())
+        .collect())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_approval_mode(
+    state: tauri::State<'_, AppState>,
+    session_id: SessionId,
+    mode: ApprovalMode,
+) -> Result<()> {
+    let s = state.terminal.session(session_id).await?;
+    let mut p = s.policy();
+    p.mode = mode;
+    s.set_policy(p);
+    let _ = state.terminal.app().emit("session://state", s.info());
+    Ok(())
+}
+
+// ---------- TerminalTools (shared by built-in agent and MCP) ----------
+
+pub struct Tools {
+    app: AppHandle,
+}
+
+#[async_trait]
+impl TerminalTools for Tools {
+    async fn list_connections(&self, _actor: &Actor) -> Result<Vec<ConnectionSummary>> {
+        let state = self.app.state::<AppState>();
+        let conns = state
+            .vault
+            .lock()
+            .await
+            .list::<Connection>()
+            .map_err(Error::from)?;
+        Ok(conns
+            .into_iter()
+            .map(|c| ConnectionSummary {
+                id: c.id,
+                name: c.name,
+                kind: c.kind,
+                host: c.host,
+                user: c.user,
+                env: c.env,
+                group_id: c.group_id,
+                tags: c.tags,
+            })
+            .collect())
+    }
+
+    async fn open_session(&self, _actor: &Actor, connection: ConnectionId) -> Result<SessionInfo> {
+        let info = open_ssh(&self.app, connection, 120, 32).await?;
+        // The UI adds a tab for sessions an agent opened.
+        let _ = self.app.emit("session://opened", info.clone());
+        Ok(info)
+    }
+
+    async fn list_sessions(&self, actor: &Actor) -> Result<Vec<SessionInfo>> {
+        Ok(hub(&self.app)
+            .sessions
+            .read()
+            .await
+            .values()
+            .map(|e| e.term.info())
+            .filter(|i| actor.may_access(i.session_id))
+            .collect())
+    }
+
+    async fn session_info(&self, actor: &Actor, session: SessionId) -> Result<SessionInfo> {
+        if !actor.may_access(session) {
+            return Err(Error::Denied("session outside the actor's scope".into()));
+        }
+        Ok(hub(&self.app).session(session).await?.info())
+    }
+
+    async fn run_command(&self, actor: &Actor, req: RunCommandRequest) -> Result<CommandResult> {
+        let s = hub(&self.app).session(req.session_id).await?;
+        s.run_command(
+            actor,
+            req,
+            &UiApprover {
+                app: self.app.clone(),
+            },
+        )
+        .await
+    }
+
+    async fn read_output(
+        &self,
+        _actor: &Actor,
+        output: OutputId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<OutputChunk> {
+        for e in hub(&self.app).sessions.read().await.values() {
+            if let Ok(chunk) = e.term.read_output(output, offset, limit) {
+                return Ok(chunk);
+            }
+        }
+        Err(Error::NotFound(format!("output {output}")))
+    }
+
+    async fn send_keys(
+        &self,
+        actor: &Actor,
+        session: SessionId,
+        keys: Vec<ControlKey>,
+    ) -> Result<()> {
+        hub(&self.app)
+            .session(session)
+            .await?
+            .send_keys(actor, &keys)
+            .await
+    }
+}
+
+// ---------- agents ----------
+
+#[derive(Serialize)]
+pub struct RunStarted {
+    run_id: String,
+}
+
+fn emit_run(app: &AppHandle, run_id: &str, session_id: SessionId, event: AgentEvent) {
+    let _ = app.emit(
+        "agent://event",
+        AgentRunEvent {
+            run_id: run_id.to_string(),
+            session_id,
+            event,
+        },
+    );
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn agent_send(
+    app: AppHandle,
+    session_id: SessionId,
+    brain: Brain,
+    message: String,
+) -> Result<RunStarted> {
+    let run_id = uuid::Uuid::new_v4().to_string();
+    match brain {
+        Brain::BuiltIn { provider, model } => {
+            start_builtin(
+                &app,
+                &run_id,
+                session_id,
+                provider.to_string(),
+                model,
+                message,
+            )
+            .await?
+        }
+        Brain::Harness { profile } => {
+            start_harness(&app, &run_id, session_id, profile.to_string(), message).await?
+        }
+    }
+    Ok(RunStarted { run_id })
+}
+
+async fn start_builtin(
+    app: &AppHandle,
+    run_id: &str,
+    session_id: SessionId,
+    provider_id: String,
+    model: String,
+    message: String,
+) -> Result<()> {
+    let state = app.state::<AppState>();
+    let hub = &state.terminal;
+    let info = hub.session(session_id).await?.info();
+    let key = format!("{session_id}:{provider_id}:{model}");
+    let agent = {
+        let mut agents = hub.agents.lock().await;
+        match agents.get(&key) {
+            Some(a) => a.clone(),
+            None => {
+                let (provider, client) =
+                    crate::cmd_misc::provider_client(&state, &provider_id).await?;
+                let actor = Actor {
+                    id: format!("builtin:{model}"),
+                    label: format!("{} · {model}", provider.name),
+                    session_scope: None,
+                };
+                let a = Arc::new(Mutex::new(aht_agent::Agent::new(
+                    client,
+                    Arc::new(Tools { app: app.clone() }),
+                    actor,
+                    aht_agent::AgentConfig::new(model.clone()),
+                )));
+                agents.insert(key, a.clone());
+                a
+            }
+        }
+    };
+    let cancel = CancellationToken::new();
+    hub.runs
+        .lock()
+        .await
+        .insert(run_id.to_string(), Run::BuiltIn(cancel.clone()));
+    let (tx, mut rx) = mpsc::channel(256);
+    let a = app.clone();
+    let rid = run_id.to_string();
+    tokio::spawn(async move {
+        while let Some(ev) = rx.recv().await {
+            emit_run(&a, &rid, session_id, ev);
+        }
+        self::hub(&a).runs.lock().await.remove(&rid);
+    });
+    let a = app.clone();
+    let rid = run_id.to_string();
+    tokio::spawn(async move {
+        let Ok(mut agent) = agent.try_lock_owned() else {
+            emit_run(
+                &a,
+                &rid,
+                session_id,
+                AgentEvent::Error {
+                    message: "the agent is still answering".into(),
+                    retryable: true,
+                },
+            );
+            emit_run(&a, &rid, session_id, AgentEvent::Done);
+            return;
+        };
+        // Errors are already reported through the event stream.
+        let _ = agent.run(&message, Some(info), tx, cancel).await;
+    });
+    Ok(())
+}
+
+async fn load_profile(state: &AppState, id: &str) -> Result<HarnessProfile> {
+    state
+        .vault
+        .lock()
+        .await
+        .get::<HarnessProfile>(id)
+        .map_err(Error::from)?
+        .ok_or_else(|| Error::NotFound(format!("harness profile {id}")))
+}
+
+fn session_summary(info: &SessionInfo) -> String {
+    let mut s = format!(
+        "Live terminal session id {} titled \"{}\"",
+        info.session_id, info.title
+    );
+    if let (Some(u), Some(h)) = (&info.user, &info.host) {
+        s.push_str(&format!(", logged in as {u}@{h}"));
+    }
+    if let Some(os) = &info.os {
+        s.push_str(&format!(", OS {os}"));
+    }
+    if let Some(sh) = &info.shell {
+        s.push_str(&format!(", shell {sh}"));
+    }
+    s.push_str(&format!(
+        ", environment {:?}. Use session_id {} with the aihubterm tools (run_command, read_output, \
+send_keys). Commands are typed into the user's live terminal and may need their approval.",
+        info.env, info.session_id
+    ));
+    s
+}
+
+async fn launch_context(
+    app: &AppHandle,
+    profile: &HarnessProfile,
+    info: &SessionInfo,
+) -> Result<(LaunchContext, McpToken)> {
+    let state = app.state::<AppState>();
+    let mcp = state.terminal.mcp().await?;
+    let token = mcp.issue_token(Actor {
+        id: format!("harness:{:?}:{}", profile.harness, profile.id).to_lowercase(),
+        label: format!("{} ({})", harness_label(profile.harness), profile.name),
+        session_scope: None,
+    });
+    let base = state.paths.profiles_dir.clone();
+    let p = profile.clone();
+    let profile_dir =
+        tokio::task::spawn_blocking(move || aht_harness::prepare_profile_dir(&base, &p))
+            .await
+            .map_err(err)??;
+    let ctx = LaunchContext {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        mcp_url: mcp.url(),
+        token_env_var: aht_harness::DEFAULT_TOKEN_ENV_VAR.to_string(),
+        token: token.as_str().to_string(),
+        session_summary: session_summary(info),
+        profile_dir,
+        plugin_dirs: aht_harness::resolve_plugin_dirs(profile.harness, &profile.plugins),
+    };
+    Ok((ctx, token))
+}
+
+fn harness_label(kind: HarnessKind) -> &'static str {
+    match kind {
+        HarnessKind::ClaudeCode => "Claude Code",
+        HarnessKind::Codex => "Codex",
+        HarnessKind::OpenCode => "OpenCode",
+    }
+}
+
+async fn start_harness(
+    app: &AppHandle,
+    run_id: &str,
+    session_id: SessionId,
+    profile_id: String,
+    message: String,
+) -> Result<()> {
+    let state = app.state::<AppState>();
+    let hub = &state.terminal;
+    let profile = load_profile(&state, &profile_id).await?;
+    if profile.display == HarnessDisplay::Native {
+        return Err(Error::Invalid(
+            "this profile runs in Native mode — open it in a pane next to the terminal".into(),
+        ));
+    }
+    // Claude Code keeps one streaming process per tab, so follow-ups keep their context.
+    let key = (session_id, profile_id.clone());
+    if profile.harness == HarnessKind::ClaudeCode {
+        if let Some(chat) = hub.harness_chats.lock().await.get(&key) {
+            if !chat.run.is_finished() {
+                chat.run.send_user_message(&message).await?;
+                hub.runs
+                    .lock()
+                    .await
+                    .insert(run_id.to_string(), Run::Harness(chat.run.clone()));
+                return Ok(());
+            }
+        }
+    }
+    let info = hub.session(session_id).await?.info();
+    let (ctx, token) = launch_context(app, &profile, &info).await?;
+    let spec = aht_harness::build_launch(profile.harness, &profile, LaunchMode::Headless, &ctx);
+    let (run, mut rx) = HeadlessRun::start(spec, &message).await?;
+    let run = Arc::new(run);
+    hub.runs
+        .lock()
+        .await
+        .insert(run_id.to_string(), Run::Harness(run.clone()));
+    if let Some(old) = hub.harness_chats.lock().await.insert(
+        key,
+        HarnessChat {
+            run: run.clone(),
+            token,
+        },
+    ) {
+        old.run.cancel().await;
+        if let Some(m) = hub.mcp.get() {
+            m.revoke(&old.token);
+        }
+    }
+    // Follow-up messages reuse this stream; tag events with the latest run id for the tab.
+    let a = app.clone();
+    let rid = run_id.to_string();
+    tokio::spawn(async move {
+        while let Some(ev) = rx.recv().await {
+            emit_run(&a, &rid, session_id, ev);
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn agent_cancel(state: tauri::State<'_, AppState>, run_id: String) -> Result<()> {
+    let run = state.terminal.runs.lock().await.remove(&run_id);
+    match run {
+        Some(Run::BuiltIn(c)) => c.cancel(),
+        Some(Run::Harness(r)) => r.cancel().await,
+        None => {}
+    }
+    Ok(())
+}
+
+/// Forget a tab's built-in agent conversation.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn agent_reset(state: tauri::State<'_, AppState>, session_id: SessionId) -> Result<()> {
+    let prefix = format!("{session_id}:");
+    state
+        .terminal
+        .agents
+        .lock()
+        .await
+        .retain(|k, _| !k.starts_with(&prefix));
+    Ok(())
+}
+
+// ---------- native harness panes & login ----------
+
+fn local_spec_from(spec: &LaunchSpec, cols: u16, rows: u16) -> Result<aht_ssh::LocalShellSpec> {
+    let program = aht_harness::resolve_program(&spec.program);
+    let (program, mut args) = wrap_shim(program);
+    args.extend(spec.args.iter().cloned());
+    for (path, content) in &spec.files {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, content)?;
+    }
+    let mut local = aht_ssh::LocalShellSpec::new(program, args);
+    local.cwd = spec.cwd.clone();
+    local.env = spec.env.clone();
+    local.env_remove = spec.env_remove.clone();
+    local.cols = cols;
+    local.rows = rows;
+    Ok(local)
+}
+
+/// npm installs `.cmd` / `.ps1` shims on Windows, which CreateProcess cannot run directly.
+fn wrap_shim(program: PathBuf) -> (String, Vec<String>) {
+    let ext = program
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    let p = program.to_string_lossy().to_string();
+    match ext.as_deref() {
+        Some("cmd") | Some("bat") => ("cmd.exe".into(), vec!["/d".into(), "/c".into(), p]),
+        Some("ps1") => (
+            "powershell.exe".into(),
+            vec![
+                "-NoProfile".into(),
+                "-ExecutionPolicy".into(),
+                "Bypass".into(),
+                "-File".into(),
+                p,
+            ],
+        ),
+        _ => (p, vec![]),
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn harness_open_native(
+    app: AppHandle,
+    session_id: SessionId,
+    profile_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<SessionInfo> {
+    let state = app.state::<AppState>();
+    let profile = load_profile(&state, &profile_id).await?;
+    let info = state.terminal.session(session_id).await?.info();
+    let (ctx, token) = launch_context(&app, &profile, &info).await?;
+    let spec = aht_harness::native_spec(profile.harness, &profile, &ctx);
+    let files: Vec<PathBuf> = spec.files.iter().map(|(p, _)| p.clone()).collect();
+    let local = local_spec_from(&spec, cols, rows)?;
+    let title = format!("{} · {}", harness_label(profile.harness), info.title);
+    // A TUI pane: no shell integration, and agent tools never target it.
+    open_local(&app, local, title, false, vec![token], files).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn harness_login(
+    app: AppHandle,
+    kind: HarnessKind,
+    cols: u16,
+    rows: u16,
+) -> Result<SessionInfo> {
+    let spec = aht_harness::login_spec(kind);
+    let local = local_spec_from(&spec, cols, rows)?;
+    open_local(
+        &app,
+        local,
+        format!("{} sign-in", harness_label(kind)),
+        false,
+        vec![],
+        vec![],
+    )
+    .await
+}

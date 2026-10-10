@@ -5,7 +5,7 @@ mod terminal;
 
 use tauri::Manager;
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
@@ -15,6 +15,7 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let state = state::AppState::new(dir).map_err(|e| e.to_string())?;
+            state.terminal.attach(app.handle().clone());
             app.manage(state);
             Ok(())
         })
@@ -52,6 +53,21 @@ pub fn run() {
             cmd_misc::sync_configure_folder,
             cmd_misc::sync_join,
             cmd_misc::sync_now,
+            terminal::approval_decide,
+            terminal::host_key_decision,
+            terminal::open_session,
+            terminal::list_local_shells,
+            terminal::open_local_session,
+            terminal::session_write,
+            terminal::session_resize,
+            terminal::close_session,
+            terminal::list_sessions,
+            terminal::set_approval_mode,
+            terminal::agent_send,
+            terminal::agent_cancel,
+            terminal::agent_reset,
+            terminal::harness_open_native,
+            terminal::harness_login,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AIHubTerm");
