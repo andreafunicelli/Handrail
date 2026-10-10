@@ -45,6 +45,9 @@ pub struct TermConfig {
     pub output_store: Option<Arc<OutputStore>>,
     /// Bytes of head and of tail returned when output is truncated.
     pub excerpt_bytes: usize,
+    /// Clear the screen after injecting the hook (local ConPTY sessions; see
+    /// [`hooks::clear_suffix`]).
+    pub clear_after_inject: bool,
 }
 
 impl Default for TermConfig {
@@ -60,6 +63,7 @@ impl Default for TermConfig {
             inject: true,
             output_store: None,
             excerpt_bytes: 4096,
+            clear_after_inject: false,
         }
     }
 }
@@ -305,7 +309,10 @@ impl Inner {
                 self.info.shell = Some(kind.name().to_string());
                 let nonce = new_nonce();
                 match hooks::hook_for(kind, &nonce) {
-                    Some(hook) => {
+                    Some(mut hook) => {
+                        if sh.cfg.clear_after_inject {
+                            hook.push_str(hooks::clear_suffix(kind));
+                        }
                         self.filter.hide_until(Some(nonce.clone()));
                         self.init = Init::Injecting {
                             nonce,

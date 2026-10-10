@@ -126,6 +126,20 @@ const PWSH_HOOK: &str = concat!(
     r#"[Console]::Write("$($global:__ahtE)]1337;AhtEnd=NONCE$($global:__ahtB)")"#,
 );
 
+/// Clears screen and scrollback once the hidden hook has finished. Sent *after* the end
+/// sentinel so the terminal emulator and the PTY agree on the (now empty) screen. Needed for
+/// ConPTY, which repaints the viewport from its own buffer on resize and would otherwise
+/// replay the hidden probe and hook lines.
+pub fn clear_suffix(shell: ShellKind) -> &'static str {
+    match shell {
+        ShellKind::Bash | ShellKind::Zsh | ShellKind::Posix => r#"; printf '\033[H\033[2J\033[3J'"#,
+        ShellKind::Fish => r#"; printf '\e[H\e[2J\e[3J'"#,
+        ShellKind::PowerShell => {
+            r#"; [Console]::Write("$([char]27)[H$([char]27)[2J$([char]27)[3J")"#
+        }
+    }
+}
+
 /// One-line hook for `shell`, or `None` when the shell has no supported integration.
 pub fn hook_for(shell: ShellKind, nonce: &str) -> Option<String> {
     let tpl = match shell {

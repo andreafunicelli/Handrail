@@ -13,7 +13,11 @@ fn app_version() -> String {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let dir = app.path().app_data_dir()?;
+            // AIHUBTERM_DATA_DIR isolates test runs from the user's real vault.
+            let dir = match std::env::var_os("AIHUBTERM_DATA_DIR") {
+                Some(d) => std::path::PathBuf::from(d),
+                None => app.path().app_data_dir()?,
+            };
             let state = state::AppState::new(dir).map_err(|e| e.to_string())?;
             state.terminal.attach(app.handle().clone());
             app.manage(state);

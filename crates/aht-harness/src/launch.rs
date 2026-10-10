@@ -249,8 +249,12 @@ fn codex(
     ));
     cfg(format!("mcp_servers.{MCP_SERVER_NAME}.required=true"));
     // Codex defaults to a 60 s tool timeout, which would kill commands waiting on user approval.
-    cfg(format!("mcp_servers.{MCP_SERVER_NAME}.tool_timeout_sec=900"));
-    cfg(format!("mcp_servers.{MCP_SERVER_NAME}.startup_timeout_sec=30"));
+    cfg(format!(
+        "mcp_servers.{MCP_SERVER_NAME}.tool_timeout_sec=900"
+    ));
+    cfg(format!(
+        "mcp_servers.{MCP_SERVER_NAME}.startup_timeout_sec=30"
+    ));
     cfg(format!(
         "mcp_servers.{MCP_SERVER_NAME}.default_tools_approval_mode=approve"
     ));

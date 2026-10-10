@@ -427,6 +427,8 @@ async fn open_local(
     let cfg = TermConfig {
         title,
         inject,
+        // ConPTY repaints from its own buffer, which would replay the hidden hook lines.
+        clear_after_inject: cfg!(windows),
         policy: Policy {
             mode,
             deny_list,
