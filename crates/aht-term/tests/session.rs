@@ -540,3 +540,14 @@ async fn whole_chunk_delivery() {
 "
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn send_keys_cannot_submit_at_idle_prompt() {
+    let c = start(Kind::Bash, auto()).await;
+    for keys in [[ControlKey::Enter], [ControlKey::Up], [ControlKey::Tab]] {
+        let e = c.s.send_keys(&actor(), &keys).await.unwrap_err();
+        assert!(matches!(e, aht_core::Error::Denied(_)), "{e:?}");
+    }
+    // Interrupting is always allowed.
+    c.s.send_keys(&actor(), &[ControlKey::CtrlC]).await.unwrap();
+}

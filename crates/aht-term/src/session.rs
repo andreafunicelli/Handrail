@@ -48,6 +48,9 @@ pub struct TermConfig {
     /// Clear the screen after injecting the hook (local ConPTY sessions; see
     /// [`hooks::clear_suffix`]).
     pub clear_after_inject: bool,
+    /// Whether agents may act on this session. False for panes that host an agent CLI
+    /// themselves (typing into them would bypass that agent's own permission prompts).
+    pub agent_target: bool,
 }
 
 impl Default for TermConfig {
@@ -64,6 +67,7 @@ impl Default for TermConfig {
             output_store: None,
             excerpt_bytes: 4096,
             clear_after_inject: false,
+            agent_target: true,
         }
     }
 }
@@ -724,8 +728,19 @@ impl TermSession {
 
     /// Send control keys on behalf of an agent (only [`ControlKey`] bytes can be sent).
     pub async fn send_keys(&self, actor: &Actor, keys: &[ControlKey]) -> Result<()> {
-        if !actor.may_access(self.id()) {
-            return Err(Error::Denied("session outside the actor's scope".into()));
+        self.check_agent(actor)?;
+        // At an idle prompt, Enter/Up/Down/Tab could submit half-typed input or re-run history
+        // without approval. Keys are for interrupting or steering a running program only.
+        let submits = keys.iter().any(|k| {
+            matches!(
+                k,
+                ControlKey::Enter | ControlKey::Up | ControlKey::Down | ControlKey::Tab
+            )
+        });
+        if submits && self.state() == SessionState::Idle {
+            return Err(Error::Denied(
+                "the shell is at a prompt; use run_command to run commands".into(),
+            ));
         }
         let bytes: Vec<u8> = keys
             .iter()
@@ -751,6 +766,23 @@ impl TermSession {
             exit_code: None,
             state: CommandState::Completed,
         });
+        Ok(())
+    }
+
+    /// Whether agents may target this session at all.
+    pub fn agent_target(&self) -> bool {
+        self.s.cfg.agent_target
+    }
+
+    fn check_agent(&self, actor: &Actor) -> Result<()> {
+        if !self.s.cfg.agent_target {
+            return Err(Error::Denied(
+                "this pane hosts an agent CLI and is not an agent target".into(),
+            ));
+        }
+        if !actor.may_access(self.id()) {
+            return Err(Error::Denied("session outside the actor's scope".into()));
+        }
         Ok(())
     }
 
@@ -781,9 +813,7 @@ impl TermSession {
         req: RunCommandRequest,
         approver: &dyn Approver,
     ) -> Result<CommandResult> {
-        if !actor.may_access(self.id()) {
-            return Err(Error::Denied("session outside the actor's scope".into()));
-        }
+        self.check_agent(actor)?;
         let original = req.command.trim().to_string();
         validate_command(&original)?;
         let _guard = self.s.agent_lock.try_lock().map_err(|_| {

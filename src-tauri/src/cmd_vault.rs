@@ -61,7 +61,9 @@ pub async fn vault_unlock(
         None => state
             .keystore
             .get(&vault_id)
-            .map_err(Error::from)?
+            .ok()
+            .flatten()
+            // Missing or unreadable keychain entry: the user types the Secret Key instead.
             .ok_or_else(|| Error::Auth("secret_key_required".into()))?,
     };
     let key = tokio::task::spawn_blocking(move || -> Result<SecretKey> {
@@ -79,6 +81,18 @@ pub async fn vault_unlock(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn vault_lock(state: State<'_, AppState>) -> Result<()> {
     state.vault.lock().await.lock();
+    // Nothing decrypted may outlive the lock: agents hold API keys, previews hold passwords.
+    state.terminal.on_lock().await;
+    state.import_previews.lock().await.clear();
+    *state.pending_github_token.lock().await = None;
+    Ok(())
+}
+
+/// Settings under `sync.` hold credentials and are managed by the sync commands only.
+fn check_setting_key(key: &str) -> Result<()> {
+    if key.starts_with("sync.") {
+        return Err(Error::Denied(format!("setting {key} is not accessible")));
+    }
     Ok(())
 }
 
@@ -244,6 +258,7 @@ pub async fn delete_harness_profile(state: State<'_, AppState>, id: String) -> R
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<Value>> {
+    check_setting_key(&key)?;
     let vault = state.vault.lock().await;
     Ok(vault
         .get::<Setting>(&key)
@@ -253,6 +268,7 @@ pub async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Opti
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn set_setting(state: State<'_, AppState>, key: String, value: Value) -> Result<()> {
+    check_setting_key(&key)?;
     put(&state, &Setting { key, value }).await
 }
 

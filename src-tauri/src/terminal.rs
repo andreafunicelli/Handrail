@@ -23,7 +23,7 @@ use aht_term::{Approver, Policy, SessionEvent, TermConfig, TermSession};
 use async_trait::async_trait;
 use base64::Engine;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,21 +41,32 @@ struct SessionEntry {
     temp_files: Vec<PathBuf>,
 }
 
-enum Run {
+enum RunKind {
     BuiltIn(CancellationToken),
     Harness(Arc<HeadlessRun>),
+}
+
+struct Run {
+    session_id: SessionId,
+    kind: RunKind,
 }
 
 struct HarnessChat {
     run: Arc<HeadlessRun>,
     token: McpToken,
+    /// Run id the UI currently tracks for this chat (follow-ups get a new one).
+    run_id: Arc<std::sync::Mutex<String>>,
 }
+
+type PendingApprovals = HashMap<ApprovalId, (SessionId, oneshot::Sender<ApprovalDecision>)>;
 
 #[derive(Default)]
 pub struct TerminalHub {
     app: std::sync::OnceLock<AppHandle>,
     sessions: RwLock<HashMap<SessionId, SessionEntry>>,
-    approvals: Mutex<HashMap<ApprovalId, oneshot::Sender<ApprovalDecision>>>,
+    approvals: std::sync::Mutex<PendingApprovals>,
+    /// Sessions an agent opened itself (via `open_session`), added to its scope.
+    grants: std::sync::Mutex<HashMap<String, HashSet<SessionId>>>,
     host_keys: Mutex<HashMap<String, oneshot::Sender<bool>>>,
     mcp: OnceCell<McpServer>,
     agents: Mutex<HashMap<String, Arc<Mutex<aht_agent::Agent>>>>,
@@ -79,6 +90,39 @@ impl TerminalHub {
             .get(&id)
             .map(|e| e.term.clone())
             .ok_or_else(|| Error::NotFound(format!("session {id}")))
+    }
+
+    fn revoke(&self, token: &McpToken) {
+        if let Some(mcp) = self.mcp.get() {
+            mcp.revoke(token);
+        }
+    }
+
+    /// Vault locked: stop every agent and forget cached clients holding decrypted keys.
+    pub async fn on_lock(&self) {
+        let runs: Vec<Run> = self.runs.lock().await.drain().map(|(_, r)| r).collect();
+        for r in runs {
+            match r.kind {
+                RunKind::BuiltIn(c) => c.cancel(),
+                RunKind::Harness(h) => h.cancel().await,
+            }
+        }
+        let chats: Vec<HarnessChat> = self
+            .harness_chats
+            .lock()
+            .await
+            .drain()
+            .map(|(_, c)| c)
+            .collect();
+        for c in chats {
+            c.run.cancel().await;
+            self.revoke(&c.token);
+        }
+        self.agents.lock().await.clear();
+        self.grants.lock().unwrap().clear();
+        // Dropping the senders denies the commands still waiting for approval.
+        let pending: Vec<_> = self.approvals.lock().unwrap().drain().collect();
+        drop(pending);
     }
 
     async fn mcp(&self) -> Result<&McpServer> {
@@ -207,19 +251,44 @@ struct UiApprover {
     app: AppHandle,
 }
 
+/// Removes a pending approval when its wait ends for any reason (decision, timeout, cancel).
+struct PendingGuard<'a> {
+    app: &'a AppHandle,
+    id: ApprovalId,
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        let removed = hub(self.app).approvals.lock().unwrap().remove(&self.id);
+        if removed.is_some() {
+            let _ = self.app.emit("approval://resolved", self.id);
+        }
+    }
+}
+
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
 #[async_trait]
 impl Approver for UiApprover {
     async fn request(&self, req: ApprovalRequest) -> ApprovalDecision {
         let (tx, rx) = oneshot::channel();
+        let id = req.approval_id;
         hub(&self.app)
             .approvals
             .lock()
-            .await
-            .insert(req.approval_id, tx);
+            .unwrap()
+            .insert(id, (req.session_id, tx));
+        let _guard = PendingGuard { app: &self.app, id };
         let _ = self.app.emit("approval://requested", req);
-        rx.await.unwrap_or(ApprovalDecision::Deny {
-            message: Some("cancelled".into()),
-        })
+        match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
+            Ok(Ok(decision)) => decision,
+            Ok(Err(_)) => ApprovalDecision::Deny {
+                message: Some("cancelled".into()),
+            },
+            Err(_) => ApprovalDecision::Deny {
+                message: Some("no answer within 15 minutes".into()),
+            },
+        }
     }
 }
 
@@ -277,8 +346,14 @@ pub async fn approval_decide(
     approval_id: ApprovalId,
     decision: ApprovalDecision,
 ) -> Result<()> {
-    match state.terminal.approvals.lock().await.remove(&approval_id) {
-        Some(tx) => {
+    let pending = state
+        .terminal
+        .approvals
+        .lock()
+        .unwrap()
+        .remove(&approval_id);
+    match pending {
+        Some((_, tx)) => {
             let _ = tx.send(decision);
             Ok(())
         }
@@ -427,6 +502,8 @@ async fn open_local(
     let cfg = TermConfig {
         title,
         inject,
+        // Panes hosting an agent CLI (native harness, login) are never agent targets.
+        agent_target: inject,
         // ConPTY repaints from its own buffer, which would replay the hidden hook lines.
         clear_after_inject: cfg!(windows),
         policy: Policy {
@@ -531,6 +608,36 @@ pub async fn session_resize(
 pub async fn close_session(state: tauri::State<'_, AppState>, session_id: SessionId) -> Result<()> {
     let hub = &state.terminal;
     let entry = hub.sessions.write().await.remove(&session_id);
+    let pending: Vec<_> = {
+        let mut map = hub.approvals.lock().unwrap();
+        let ids: Vec<_> = map
+            .iter()
+            .filter(|(_, (s, _))| *s == session_id)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.into_iter().filter_map(|id| map.remove(&id)).collect()
+    };
+    drop(pending);
+    let runs: Vec<Run> = {
+        let mut map = hub.runs.lock().await;
+        let ids: Vec<_> = map
+            .iter()
+            .filter(|(_, r)| r.session_id == session_id)
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.into_iter().filter_map(|id| map.remove(&id)).collect()
+    };
+    for r in runs {
+        match r.kind {
+            RunKind::BuiltIn(c) => c.cancel(),
+            RunKind::Harness(h) => h.cancel().await,
+        }
+    }
+    let prefix = format!("{session_id}:");
+    hub.agents
+        .lock()
+        .await
+        .retain(|k, _| !k.starts_with(&prefix));
     let chats: Vec<HarnessChat> = {
         let mut map = hub.harness_chats.lock().await;
         let keys: Vec<_> = map
@@ -542,15 +649,11 @@ pub async fn close_session(state: tauri::State<'_, AppState>, session_id: Sessio
     };
     for chat in chats {
         chat.run.cancel().await;
-        if let Some(mcp) = hub.mcp.get() {
-            mcp.revoke(&chat.token);
-        }
+        hub.revoke(&chat.token);
     }
     if let Some(e) = entry {
-        if let Some(mcp) = hub.mcp.get() {
-            for t in &e.tokens {
-                mcp.revoke(t);
-            }
+        for t in &e.tokens {
+            hub.revoke(t);
         }
         aht_harness_cleanup(&e.temp_files);
         let _ = e.term.close().await;
@@ -596,6 +699,19 @@ pub struct Tools {
     app: AppHandle,
 }
 
+impl Tools {
+    /// The actor's scope plus any sessions it opened itself.
+    fn scoped(&self, actor: &Actor) -> Actor {
+        let mut a = actor.clone();
+        if let Some(scope) = a.session_scope.as_mut() {
+            if let Some(extra) = hub(&self.app).grants.lock().unwrap().get(&actor.id) {
+                scope.extend(extra.iter().copied());
+            }
+        }
+        a
+    }
+}
+
 #[async_trait]
 impl TerminalTools for Tools {
     async fn list_connections(&self, _actor: &Actor) -> Result<Vec<ConnectionSummary>> {
@@ -621,26 +737,35 @@ impl TerminalTools for Tools {
             .collect())
     }
 
-    async fn open_session(&self, _actor: &Actor, connection: ConnectionId) -> Result<SessionInfo> {
+    async fn open_session(&self, actor: &Actor, connection: ConnectionId) -> Result<SessionInfo> {
         let info = open_ssh(&self.app, connection, 120, 32).await?;
+        hub(&self.app)
+            .grants
+            .lock()
+            .unwrap()
+            .entry(actor.id.clone())
+            .or_default()
+            .insert(info.session_id);
         // The UI adds a tab for sessions an agent opened.
         let _ = self.app.emit("session://opened", info.clone());
         Ok(info)
     }
 
     async fn list_sessions(&self, actor: &Actor) -> Result<Vec<SessionInfo>> {
+        let actor = self.scoped(actor);
         Ok(hub(&self.app)
             .sessions
             .read()
             .await
             .values()
+            .filter(|e| e.term.agent_target())
             .map(|e| e.term.info())
             .filter(|i| actor.may_access(i.session_id))
             .collect())
     }
 
     async fn session_info(&self, actor: &Actor, session: SessionId) -> Result<SessionInfo> {
-        if !actor.may_access(session) {
+        if !self.scoped(actor).may_access(session) {
             return Err(Error::Denied("session outside the actor's scope".into()));
         }
         Ok(hub(&self.app).session(session).await?.info())
@@ -649,7 +774,7 @@ impl TerminalTools for Tools {
     async fn run_command(&self, actor: &Actor, req: RunCommandRequest) -> Result<CommandResult> {
         let s = hub(&self.app).session(req.session_id).await?;
         s.run_command(
-            actor,
+            &self.scoped(actor),
             req,
             &UiApprover {
                 app: self.app.clone(),
@@ -660,12 +785,16 @@ impl TerminalTools for Tools {
 
     async fn read_output(
         &self,
-        _actor: &Actor,
+        actor: &Actor,
         output: OutputId,
         offset: usize,
         limit: usize,
     ) -> Result<OutputChunk> {
+        let actor = self.scoped(actor);
         for e in hub(&self.app).sessions.read().await.values() {
+            if !actor.may_access(e.term.id()) {
+                continue;
+            }
             if let Ok(chunk) = e.term.read_output(output, offset, limit) {
                 return Ok(chunk);
             }
@@ -682,7 +811,7 @@ impl TerminalTools for Tools {
         hub(&self.app)
             .session(session)
             .await?
-            .send_keys(actor, &keys)
+            .send_keys(&self.scoped(actor), &keys)
             .await
     }
 }
@@ -752,9 +881,9 @@ async fn start_builtin(
                 let (provider, client) =
                     crate::cmd_misc::provider_client(&state, &provider_id).await?;
                 let actor = Actor {
-                    id: format!("builtin:{model}"),
+                    id: format!("builtin:{session_id}:{model}"),
                     label: format!("{} · {model}", provider.name),
-                    session_scope: None,
+                    session_scope: Some(vec![session_id]),
                 };
                 let a = Arc::new(Mutex::new(aht_agent::Agent::new(
                     client,
@@ -768,10 +897,13 @@ async fn start_builtin(
         }
     };
     let cancel = CancellationToken::new();
-    hub.runs
-        .lock()
-        .await
-        .insert(run_id.to_string(), Run::BuiltIn(cancel.clone()));
+    hub.runs.lock().await.insert(
+        run_id.to_string(),
+        Run {
+            session_id,
+            kind: RunKind::BuiltIn(cancel.clone()),
+        },
+    );
     let (tx, mut rx) = mpsc::channel(256);
     let a = app.clone();
     let rid = run_id.to_string();
@@ -842,19 +974,27 @@ async fn launch_context(
 ) -> Result<(LaunchContext, McpToken)> {
     let state = app.state::<AppState>();
     let mcp = state.terminal.mcp().await?;
+    let run_id = uuid::Uuid::new_v4().to_string();
     let token = mcp.issue_token(Actor {
-        id: format!("harness:{:?}:{}", profile.harness, profile.id).to_lowercase(),
+        id: format!("harness:{run_id}"),
         label: format!("{} ({})", harness_label(profile.harness), profile.name),
-        session_scope: None,
+        session_scope: Some(vec![info.session_id]),
     });
     let base = state.paths.profiles_dir.clone();
     let p = profile.clone();
-    let profile_dir =
-        tokio::task::spawn_blocking(move || aht_harness::prepare_profile_dir(&base, &p))
-            .await
-            .map_err(err)??;
+    let prepared = tokio::task::spawn_blocking(move || aht_harness::prepare_profile_dir(&base, &p))
+        .await
+        .map_err(err)
+        .and_then(|r| r);
+    let profile_dir = match prepared {
+        Ok(dir) => dir,
+        Err(e) => {
+            mcp.revoke(&token);
+            return Err(e);
+        }
+    };
     let ctx = LaunchContext {
-        run_id: uuid::Uuid::new_v4().to_string(),
+        run_id,
         mcp_url: mcp.url(),
         token_env_var: aht_harness::DEFAULT_TOKEN_ENV_VAR.to_string(),
         token: token.as_str().to_string(),
@@ -891,45 +1031,71 @@ async fn start_harness(
     // Claude Code keeps one streaming process per tab, so follow-ups keep their context.
     let key = (session_id, profile_id.clone());
     if profile.harness == HarnessKind::ClaudeCode {
-        if let Some(chat) = hub.harness_chats.lock().await.get(&key) {
-            if !chat.run.is_finished() {
-                chat.run.send_user_message(&message).await?;
-                hub.runs
-                    .lock()
-                    .await
-                    .insert(run_id.to_string(), Run::Harness(chat.run.clone()));
-                return Ok(());
-            }
+        let live = hub
+            .harness_chats
+            .lock()
+            .await
+            .get(&key)
+            .filter(|c| !c.run.is_finished())
+            .map(|c| (c.run.clone(), c.run_id.clone()));
+        if let Some((run, current)) = live {
+            run.send_user_message(&message).await?;
+            *current.lock().unwrap() = run_id.to_string();
+            hub.runs.lock().await.insert(
+                run_id.to_string(),
+                Run {
+                    session_id,
+                    kind: RunKind::Harness(run),
+                },
+            );
+            return Ok(());
         }
     }
     let info = hub.session(session_id).await?.info();
     let (ctx, token) = launch_context(app, &profile, &info).await?;
     let spec = aht_harness::build_launch(profile.harness, &profile, LaunchMode::Headless, &ctx);
-    let (run, mut rx) = HeadlessRun::start(spec, &message).await?;
+    let (run, mut rx) = match HeadlessRun::start(spec, &message).await {
+        Ok(r) => r,
+        Err(e) => {
+            hub.revoke(&token);
+            return Err(e);
+        }
+    };
     let run = Arc::new(run);
-    hub.runs
-        .lock()
-        .await
-        .insert(run_id.to_string(), Run::Harness(run.clone()));
-    if let Some(old) = hub.harness_chats.lock().await.insert(
+    hub.runs.lock().await.insert(
+        run_id.to_string(),
+        Run {
+            session_id,
+            kind: RunKind::Harness(run.clone()),
+        },
+    );
+    let current = Arc::new(std::sync::Mutex::new(run_id.to_string()));
+    let old = hub.harness_chats.lock().await.insert(
         key,
         HarnessChat {
             run: run.clone(),
-            token,
+            token: token.clone(),
+            run_id: current.clone(),
         },
-    ) {
+    );
+    if let Some(old) = old {
         old.run.cancel().await;
-        if let Some(m) = hub.mcp.get() {
-            m.revoke(&old.token);
-        }
+        hub.revoke(&old.token);
     }
-    // Follow-up messages reuse this stream; tag events with the latest run id for the tab.
+    // Events are tagged with the run id the UI is currently tracking for this chat.
     let a = app.clone();
-    let rid = run_id.to_string();
     tokio::spawn(async move {
         while let Some(ev) = rx.recv().await {
+            let rid = current.lock().unwrap().clone();
             emit_run(&a, &rid, session_id, ev);
         }
+        // The process exited: its MCP token dies with it.
+        let hub = self::hub(&a);
+        hub.revoke(&token);
+        hub.runs.lock().await.retain(|_, r| match &r.kind {
+            RunKind::Harness(h) => !Arc::ptr_eq(h, &run),
+            RunKind::BuiltIn(_) => true,
+        });
     });
     Ok(())
 }
@@ -937,9 +1103,9 @@ async fn start_harness(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn agent_cancel(state: tauri::State<'_, AppState>, run_id: String) -> Result<()> {
     let run = state.terminal.runs.lock().await.remove(&run_id);
-    match run {
-        Some(Run::BuiltIn(c)) => c.cancel(),
-        Some(Run::Harness(r)) => r.cancel().await,
+    match run.map(|r| r.kind) {
+        Some(RunKind::BuiltIn(c)) => c.cancel(),
+        Some(RunKind::Harness(r)) => r.cancel().await,
         None => {}
     }
     Ok(())
@@ -1016,10 +1182,27 @@ pub async fn harness_open_native(
     let (ctx, token) = launch_context(&app, &profile, &info).await?;
     let spec = aht_harness::native_spec(profile.harness, &profile, &ctx);
     let files: Vec<PathBuf> = spec.files.iter().map(|(p, _)| p.clone()).collect();
-    let local = local_spec_from(&spec, cols, rows)?;
     let title = format!("{} · {}", harness_label(profile.harness), info.title);
     // A TUI pane: no shell integration, and agent tools never target it.
-    open_local(&app, local, title, false, vec![token], files).await
+    let opened = match local_spec_from(&spec, cols, rows) {
+        Ok(local) => {
+            open_local(
+                &app,
+                local,
+                title,
+                false,
+                vec![token.clone()],
+                files.clone(),
+            )
+            .await
+        }
+        Err(e) => Err(e),
+    };
+    if opened.is_err() {
+        state.terminal.revoke(&token);
+        aht_harness_cleanup(&files);
+    }
+    opened
 }
 
 #[tauri::command(rename_all = "snake_case")]

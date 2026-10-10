@@ -415,12 +415,15 @@ pub async fn sync_now(state: State<'_, AppState>) -> Result<SyncReport> {
         .ok_or_else(|| Error::Invalid("sync not configured".into()))?;
     let b = backend(&state, &cfg).await?;
     // Persist a token obtained before the vault was unlocked on this device.
-    if let Some(t) = state.pending_github_token.lock().await.take() {
+    // Take the token on its own line: holding this guard across store_token would deadlock.
+    let pending = state.pending_github_token.lock().await.take();
+    if let Some(t) = pending {
         if let Err(e) = store_token(&state, t.clone()).await {
             *state.pending_github_token.lock().await = Some(t);
             return Err(e);
         }
     }
+    // Note: the vault stays locked for the whole sync, so other commands wait for it.
     let report = {
         let mut vault = state.vault.lock().await;
         if vault.status().locked {
