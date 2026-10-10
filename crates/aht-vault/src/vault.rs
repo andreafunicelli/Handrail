@@ -143,7 +143,7 @@ pub struct ConflictRecord {
     pub loser: Envelope,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SnapshotInfo {
     /// File name inside `snapshots/`; pass to [`Vault::restore_snapshot`].
     pub name: String,
@@ -178,6 +178,8 @@ pub struct Vault {
     manifest: Option<Manifest>,
     clock: HlcClock,
     unlocked: Option<Unlocked>,
+    /// Bumped on every change to the item files; see [`Vault::revision`].
+    revision: u64,
 }
 
 impl fmt::Debug for Vault {
@@ -311,6 +313,7 @@ impl Vault {
                 index: HashMap::new(),
                 corrupt: Vec::new(),
             }),
+            revision: 0,
         };
         Ok((vault, secret_key))
     }
@@ -328,6 +331,7 @@ impl Vault {
             manifest,
             clock: HlcClock::new(device),
             unlocked: None,
+            revision: 0,
         })
     }
 
@@ -365,6 +369,12 @@ impl Vault {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// A counter that changes whenever item files are written, merged, removed or restored in
+    /// this process. Lets a background syncer notice local edits without hashing files.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Derive the vault key and decrypt all items into the in-memory index. Item files that
@@ -443,6 +453,7 @@ impl Vault {
         let file_id = u.key.file_id(item_type, id);
         let bytes = u.seal_item(&file_id, &plaintext)?;
         atomic_write(&self.item_path(&file_id), &bytes)?;
+        self.revision += 1;
         let u = self.unlocked.as_mut().ok_or(VaultError::Locked)?;
         u.index.insert(
             file_id,
@@ -522,6 +533,7 @@ impl Vault {
             if let Some(u) = self.unlocked.as_mut() {
                 u.index.remove(fid);
             }
+            self.revision += 1;
         }
         Ok(doomed.len())
     }
@@ -580,6 +592,7 @@ impl Vault {
         };
         if matches!(outcome, MergeOutcome::Added | MergeOutcome::RemoteWon) {
             atomic_write(&self.item_path(&file_id), bytes)?;
+            self.revision += 1;
             if let Some(u) = self.unlocked.as_mut() {
                 u.index.insert(file_id, remote);
             }
@@ -647,6 +660,19 @@ impl Vault {
         Ok(out)
     }
 
+    /// Bring back the version a merge discarded: it is written as a fresh edit (new HLC), so it
+    /// wins on the next sync. `file_id` and `recorded_at_ms` identify the [`ConflictRecord`].
+    pub fn restore_conflict(&mut self, file_id: &str, recorded_at_ms: u64) -> Result<()> {
+        let rec = self
+            .conflict_history()?
+            .into_iter()
+            .rev()
+            .find(|r| r.file_id == file_id && r.recorded_at_ms == recorded_at_ms)
+            .ok_or_else(|| VaultError::NotFound(format!("conflict {file_id}@{recorded_at_ms}")))?;
+        let l = rec.loser;
+        self.write_envelope(&l.item_type, &l.id, l.payload, l.deleted)
+    }
+
     /// Delete all local conflict history.
     pub fn clear_conflict_history(&mut self) -> Result<()> {
         match std::fs::remove_dir_all(self.dir.join(LOCAL).join(HISTORY)) {
@@ -660,6 +686,15 @@ impl Vault {
     /// Write an encrypted snapshot of all current item files; keeps the newest
     /// [`MAX_SNAPSHOTS`].
     pub fn snapshot(&self) -> Result<SnapshotInfo> {
+        let info = self.snapshot_unpruned()?;
+        self.prune_snapshots()?;
+        Ok(info)
+    }
+
+    /// Like [`Vault::snapshot`] without deleting old snapshots. For a tentative snapshot (e.g.
+    /// before a sync) that may be dropped again with [`Vault::delete_snapshot`]: pruning first
+    /// would lose an old snapshot for nothing. Call [`Vault::prune_snapshots`] to keep it.
+    pub fn snapshot_unpruned(&self) -> Result<SnapshotInfo> {
         let u = self.unlocked()?;
         let mut plain = Zeroizing::new(SNAPSHOT_MAGIC.to_vec());
         for (stem, path) in sorted_dir(&self.dir.join(ITEMS), ".enc")? {
@@ -673,19 +708,35 @@ impl Vault {
         let name = format!("{created_ms:015}-{}.snap", random_hex(4)?);
         let mut bytes = vec![FORMAT_VERSION as u8];
         bytes.extend(u.key.seal(&snapshot_aad(&name), &plain)?);
-        let dir = self.dir.join(SNAPSHOTS);
-        atomic_write(&dir.join(&name), &bytes)?;
-        let all = self.list_snapshots()?;
-        if all.len() > MAX_SNAPSHOTS {
-            for old in &all[..all.len() - MAX_SNAPSHOTS] {
-                std::fs::remove_file(dir.join(&old.name))?;
-            }
-        }
+        atomic_write(&self.dir.join(SNAPSHOTS).join(&name), &bytes)?;
         Ok(SnapshotInfo {
             name,
             created_ms,
             size: bytes.len() as u64,
         })
+    }
+
+    /// Delete all but the newest [`MAX_SNAPSHOTS`] snapshots.
+    pub fn prune_snapshots(&self) -> Result<()> {
+        let all = self.list_snapshots()?;
+        if all.len() > MAX_SNAPSHOTS {
+            for old in &all[..all.len() - MAX_SNAPSHOTS] {
+                std::fs::remove_file(self.dir.join(SNAPSHOTS).join(&old.name))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete one snapshot. Works while locked.
+    pub fn delete_snapshot(&self, name: &str) -> Result<()> {
+        check_snapshot_name(name)?;
+        match std::fs::remove_file(self.dir.join(SNAPSHOTS).join(name)) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(VaultError::NotFound(format!("snapshot {name}")))
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Snapshots on disk, oldest first. Works while locked.
@@ -710,9 +761,7 @@ impl Vault {
     /// first. Differences are written as fresh edits (new HLC) so the rollback wins on sync;
     /// items absent from the snapshot become tombstones.
     pub fn restore_snapshot(&mut self, name: &str) -> Result<()> {
-        if name.contains(['/', '\\']) || !name.ends_with(".snap") {
-            return Err(VaultError::Invalid(format!("bad snapshot name {name}")));
-        }
+        check_snapshot_name(name)?;
         let u = self.unlocked()?;
         let bytes = read_opt(&self.dir.join(SNAPSHOTS).join(name))?
             .ok_or_else(|| VaultError::NotFound(format!("snapshot {name}")))?;
@@ -749,6 +798,13 @@ impl Vault {
         }
         Ok(())
     }
+}
+
+fn check_snapshot_name(name: &str) -> Result<()> {
+    if name.contains(['/', '\\']) || !name.ends_with(".snap") {
+        return Err(VaultError::Invalid(format!("bad snapshot name {name}")));
+    }
+    Ok(())
 }
 
 fn history_aad(name: &str) -> Vec<u8> {

@@ -10,6 +10,7 @@ mod error;
 mod folder;
 pub mod github;
 pub mod github_device_flow;
+pub mod presets;
 
 pub use backend::{Change, RemoteEntry, SyncBackend};
 pub use engine::{fetch_manifest, sync_once, SyncReport, SyncState};

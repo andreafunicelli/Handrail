@@ -24,6 +24,9 @@ import type {
   SecretId,
   SessionDataEvent,
   SessionInfo,
+  ConflictView,
+  FolderPreset,
+  SnapshotInfo,
   SyncReport,
   SyncStatus,
   VaultStatus,
@@ -38,6 +41,7 @@ export interface EventMap {
   "session://host_key": HostKeyEvent;
   "approval://requested": ApprovalRequest;
   "agent://event": AgentEventEnvelope;
+  "sync://status": SyncStatus;
 }
 export type EventName = keyof EventMap;
 
@@ -101,6 +105,17 @@ export interface Api {
   syncConfigureFolder(path: string): Promise<void>;
   syncJoin(): Promise<void>;
   syncNow(): Promise<SyncReport>;
+  syncSetAuto(enabled: boolean): Promise<void>;
+  syncDisconnect(): Promise<void>;
+  syncFolderPresets(): Promise<FolderPreset[]>;
+
+  // snapshots & conflict history
+  vaultSnapshots(): Promise<SnapshotInfo[]>;
+  vaultSnapshotCreate(): Promise<SnapshotInfo>;
+  vaultSnapshotRestore(name: string): Promise<void>;
+  vaultConflicts(): Promise<ConflictView[]>;
+  vaultConflictRestore(fileId: string, recordedAtMs: number): Promise<void>;
+  vaultConflictsClear(): Promise<void>;
 
   // misc
   getSetting<T = unknown>(key: string): Promise<T | null>;
