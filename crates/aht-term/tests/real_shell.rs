@@ -256,8 +256,13 @@ async fn real_pwsh_hook_marks_and_exit_codes() {
         "{r:?}"
     );
     assert_eq!(r.output.trim(), "hello");
+    // A native child process's exit code, on every OS (`cmd` exists only on Windows).
     let r = s
-        .run_command(&actor(), req("cmd /c exit 4"), &ap)
+        .run_command(
+            &actor(),
+            req("pwsh -NoLogo -NoProfile -NonInteractive -Command 'exit 4'"),
+            &ap,
+        )
         .await
         .unwrap();
     assert_eq!(r.exit_code, Some(4), "{r:?}");
