@@ -71,7 +71,6 @@ Design spec: [`docs/superpowers/specs/2026-10-10-aihubterm-design.md`](docs/supe
 ## Status
 
 Pre-release (v0.1, milestones M1–M3 in place). Before a public release:
-- Register a GitHub OAuth App and set its client ID (`AIHUBTERM_GITHUB_CLIENT_ID`).
 - Choose a license.
 - Set up code signing and the updater.
 - Confirm with Anthropic and OpenAI that the subscription integration complies with their terms.

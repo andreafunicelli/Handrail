@@ -1,21 +1,21 @@
 //! GitHub OAuth device flow (RFC 8628): the app shows `user_code` + `verification_uri`, then
 //! polls until the user authorizes.
 //!
-//! The product needs a registered GitHub OAuth App with "Enable Device Flow" ticked. Its client id
-//! is configuration, not a secret: [`AIHUBTERM_GITHUB_CLIENT_ID`] is a placeholder that is
-//! overridden at runtime by the `AIHUBTERM_GITHUB_CLIENT_ID` environment variable
+//! Uses the registered "AIHubTerm" GitHub OAuth App (device flow enabled). Its client id is
+//! public configuration, not a secret, and the device flow needs no client secret. The
+//! `AIHUBTERM_GITHUB_CLIENT_ID` environment variable overrides it, e.g. for a fork's own app
 //! (see [`client_id`]).
 
 use crate::error::{Result, SyncError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Placeholder; replace with the registered OAuth App client id before shipping.
-pub const AIHUBTERM_GITHUB_CLIENT_ID: &str = "REPLACE_WITH_REGISTERED_OAUTH_APP_CLIENT_ID";
+/// Client id of the registered "AIHubTerm" OAuth App.
+pub const AIHUBTERM_GITHUB_CLIENT_ID: &str = "Ov23li7s0xtB6dHz5HgF";
 pub const DEFAULT_BASE: &str = "https://github.com";
 pub const DEFAULT_SCOPE: &str = "repo";
 
-/// Client id from the `AIHUBTERM_GITHUB_CLIENT_ID` env var, else the compiled-in placeholder.
+/// Client id from the `AIHUBTERM_GITHUB_CLIENT_ID` env var, else the compiled-in one.
 pub fn client_id() -> String {
     std::env::var("AIHUBTERM_GITHUB_CLIENT_ID")
         .ok()
@@ -23,9 +23,11 @@ pub fn client_id() -> String {
         .unwrap_or_else(|| AIHUBTERM_GITHUB_CLIENT_ID.to_string())
 }
 
-/// False while the build still carries the placeholder and no env override is set.
+/// False for an empty id or a leftover placeholder (e.g. a fork that has not registered its own
+/// app yet).
 pub fn is_configured(client_id: &str) -> bool {
-    !client_id.trim().is_empty() && client_id != AIHUBTERM_GITHUB_CLIENT_ID
+    let id = client_id.trim();
+    !id.is_empty() && !id.starts_with("REPLACE_")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,16 +212,19 @@ mod tests {
     }
 
     #[test]
-    fn client_id_has_placeholder_default() {
-        // Not asserting the env override here (process-global); just the fallback shape.
+    fn client_id_defaults_to_the_registered_app() {
+        // Not asserting the env override here (process-global); just the fallback.
         if std::env::var("AIHUBTERM_GITHUB_CLIENT_ID").is_err() {
             assert_eq!(client_id(), AIHUBTERM_GITHUB_CLIENT_ID);
         }
+        assert!(is_configured(AIHUBTERM_GITHUB_CLIENT_ID));
     }
 
     #[test]
     fn placeholder_is_not_configured() {
-        assert!(!is_configured(AIHUBTERM_GITHUB_CLIENT_ID));
+        assert!(!is_configured(
+            "REPLACE_WITH_REGISTERED_OAUTH_APP_CLIENT_ID"
+        ));
         assert!(!is_configured("  "));
         assert!(is_configured("Ov23liExample0000000"));
     }
