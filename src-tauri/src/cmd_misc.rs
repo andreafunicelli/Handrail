@@ -539,7 +539,7 @@ async fn sync_round(state: &AppState, f: &mut SyncFile) -> Result<SyncReport> {
     // Take the token on its own line: holding this guard across store_token would deadlock.
     let pending = state.pending_github_token.lock().await.take();
     if let Some(t) = pending {
-        if let Err(e) = store_token(&state, t.clone()).await {
+        if let Err(e) = store_token(state, t.clone()).await {
             *state.pending_github_token.lock().await = Some(t);
             return Err(e);
         }
