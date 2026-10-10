@@ -164,6 +164,18 @@ name = "aht-sync"
 version = "0.1.0"
 dependencies = [
  "aht-core",
+ "aht-vault",
+ "async-trait",
+ "base64 0.23.1",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -3719,6 +3731,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
