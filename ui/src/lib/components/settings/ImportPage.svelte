@@ -2,17 +2,31 @@
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import { api } from "../../api";
-  import type { Connection, ImportPreview, ImportSource } from "../../api/types";
+  import type { Connection, ImportPreview, ImportPreviewArgs, ImportSource } from "../../api/types";
   import { connections } from "../../stores/connections.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { groupPath } from "../../util/tree";
+  import { IMPORT_TOOLS, needsMremotengPassword, toolLabel, type ImportTool } from "../../util/importers";
 
-  let step = $state<"start" | "sources" | "preview">("start");
+  let step = $state<"start" | "sources" | "file" | "preview">("start");
   let sources = $state<ImportSource[]>([]);
   let busy = $state(false);
   let preview = $state<ImportPreview | null>(null);
   /** Indices (into preview.connections) the user chose to import. */
   let selected = $state<Set<number>>(new Set());
+  /** Where "Back" from the preview returns to. */
+  let origin = $state<"sources" | "file">("sources");
+
+  // "From a file" form.
+  let fileTool = $state<ImportTool>("securecrt");
+  let filePath = $state("");
+  let importPasswords = $state(true);
+  let mremotengPassword = $state("");
+
+  /** An mRemoteNG preview that failed on its master password, waiting for the user to type it. */
+  let pwRetry = $state<{ args: ImportPreviewArgs; wrong: boolean } | null>(null);
+  let pwInput = $state("");
+  let mrngField = $state<HTMLInputElement | null>(null);
 
   const dupIndex = $derived(new Set(preview?.duplicates.map((d) => d.index) ?? []));
   const grouped = $derived.by(() => {
@@ -37,17 +51,50 @@
     }
   }
 
-  async function open(src: ImportSource) {
+  function goto(next: typeof step) {
+    pwRetry = null;
+    step = next;
+  }
+
+  async function load(args: ImportPreviewArgs, tool: string, from: "sources" | "file") {
     busy = true;
     try {
-      preview = await api.importPreview({ source_id: src.id });
+      preview = await api.importPreview(args);
       selected = new Set(preview.connections.map((_, i) => i).filter((i) => !preview!.duplicates.some((d) => d.index === i)));
+      origin = from;
+      pwRetry = null;
+      pwInput = "";
       step = "preview";
     } catch (e) {
-      toasts.error(e);
+      if (needsMremotengPassword(tool, e)) {
+        pwRetry = { args, wrong: !!args.mremoteng_password };
+        // The file form has its own password field; detected sources get the inline prompt.
+        if (from === "file") mrngField?.focus();
+      } else {
+        toasts.error(e);
+      }
     } finally {
       busy = false;
     }
+  }
+
+  function open(src: ImportSource) {
+    void load({ source_id: src.id }, src.tool, "sources");
+  }
+
+  function openFile(e: SubmitEvent) {
+    e.preventDefault();
+    const path = filePath.trim();
+    if (!path) return;
+    const args: ImportPreviewArgs = { tool: fileTool, file_path: path, import_passwords: importPasswords };
+    if (fileTool === "mremoteng" && mremotengPassword) args.mremoteng_password = mremotengPassword;
+    void load(args, fileTool, "file");
+  }
+
+  function retryWithPassword(e: SubmitEvent) {
+    e.preventDefault();
+    if (!pwRetry || !pwInput) return;
+    void load({ ...pwRetry.args, mremoteng_password: pwInput }, "mremoteng", "sources");
   }
 
   function toggle(i: number) {
@@ -75,10 +122,26 @@
   }
 </script>
 
+{#snippet passwordPrompt()}
+  {#if pwRetry}
+    <form class="card pwprompt" onsubmit={retryWithPassword}>
+      <p class="hint">{t(pwRetry.wrong ? "imp.mrngWrong" : "imp.mrngNeeded")}</p>
+      <div class="row">
+        <!-- svelte-ignore a11y_autofocus -->
+        <input class="input" type="password" bind:value={pwInput} placeholder={t("imp.mrngPassword")} aria-label={t("imp.mrngPassword")} autocomplete="off" autofocus />
+        <button class="btn primary" disabled={busy || !pwInput}>{t("imp.retry")}</button>
+      </div>
+    </form>
+  {/if}
+{/snippet}
+
 <p class="intro">{t("imp.body")}</p>
 
 {#if step === "start"}
-  <button class="btn primary" onclick={scan} disabled={busy}><Icon name="search" size={14} />{busy ? t("imp.scanning") : t("imp.detect")}</button>
+  <div class="actions start">
+    <button class="btn primary" onclick={scan} disabled={busy}><Icon name="search" size={14} />{busy ? t("imp.scanning") : t("imp.detect")}</button>
+    <button class="btn" onclick={() => goto("file")} disabled={busy}><Icon name="folder" size={14} />{t("imp.fromFile")}</button>
+  </div>
 {:else if step === "sources"}
   {#if !sources.length}
     <p class="hint">{t("imp.none")}</p>
@@ -86,7 +149,7 @@
     <div class="card">
       {#each sources as s (s.id)}
         <div class="list-row">
-          <span class="tool">{s.tool}</span>
+          <span class="tool">{toolLabel(s.tool)}</span>
           <span class="path mono" title={s.path ?? ""}>{s.path ?? ""}</span>
           {#if s.count_hint != null}<span class="pill">{t("imp.found", { count: s.count_hint })}</span>{/if}
           <button class="btn sm" onclick={() => open(s)} disabled={busy}>{t("imp.preview")}</button>
@@ -94,9 +157,44 @@
       {/each}
     </div>
   {/if}
-  <button class="btn ghost back" onclick={() => (step = "start")}>{t("imp.back")}</button>
+  {@render passwordPrompt()}
+  <div class="actions split">
+    <button class="btn ghost" onclick={() => goto("start")}>{t("imp.back")}</button>
+    <button class="btn ghost" onclick={() => goto("file")}>{t("imp.notListed")}</button>
+  </div>
+{:else if step === "file"}
+  <form class="fileform" onsubmit={openFile}>
+    <label class="field">
+      <span class="label">{t("imp.tool")}</span>
+      <select class="select" bind:value={fileTool} onchange={() => (pwRetry = null)}>
+        {#each IMPORT_TOOLS as tool (tool)}<option value={tool}>{toolLabel(tool)}</option>{/each}
+      </select>
+    </label>
+    <label class="field">
+      <span class="label">{t("imp.path")}</span>
+      <input class="input mono" bind:value={filePath} placeholder={t("imp.pathPlaceholder")} spellcheck="false" autocomplete="off" />
+      <span class="hint">{t(`imp.pathHint.${fileTool}`)} · {t("imp.pathAbsolute")}</span>
+    </label>
+    {#if fileTool === "mremoteng"}
+      <label class="field">
+        <span class="label">{t("imp.mrngPassword")}</span>
+        <input class="input" type="password" bind:value={mremotengPassword} bind:this={mrngField} oninput={() => (pwRetry = null)} autocomplete="off" aria-invalid={!!pwRetry} />
+        {#if pwRetry}
+          <span class="hint err" role="alert">{t(pwRetry.wrong ? "imp.mrngWrong" : "imp.mrngNeeded")}</span>
+        {:else}
+          <span class="hint">{t("imp.mrngOptional")}</span>
+        {/if}
+      </label>
+    {/if}
+    <label class="check"><input type="checkbox" bind:checked={importPasswords} /><span>{t("imp.passwords")}</span></label>
+    {#if fileTool === "securecrt"}<p class="hint">{t("imp.securecrtNote")}</p>{/if}
+    <div class="actions split">
+      <button type="button" class="btn ghost" onclick={() => goto("start")}>{t("imp.back")}</button>
+      <button class="btn primary" disabled={busy || !filePath.trim()}>{t("imp.preview")}</button>
+    </div>
+  </form>
 {:else if preview}
-  <h3>{preview.tool}</h3>
+  <h3>{toolLabel(preview.tool)}</h3>
   {#if preview.warnings.length}
     <ul class="warnings">
       {#each preview.warnings as w, i (i)}<li><Icon name="alert" size={12} />{w}</li>{/each}
@@ -117,7 +215,7 @@
   </div>
   {#if preview.duplicates.length}<p class="hint dupnote">{t("imp.duplicateHint")}</p>{/if}
   <div class="actions">
-    <button class="btn ghost" onclick={() => (step = "sources")}>{t("imp.back")}</button>
+    <button class="btn ghost" onclick={() => goto(origin)}>{t("imp.back")}</button>
     <button class="btn primary" onclick={apply} disabled={busy || !selected.size}>{t("imp.apply", { count: selected.size })}</button>
   </div>
 {/if}
@@ -136,8 +234,37 @@
     font-size: 11.5px;
     color: var(--faint);
   }
-  .back {
+  .actions.start {
+    justify-content: flex-start;
+    margin-top: 0;
+  }
+  .actions.split {
+    justify-content: space-between;
+  }
+  .fileform {
+    display: grid;
+    gap: 12px;
+    max-width: 520px;
+  }
+  .pwprompt {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
     margin-top: 12px;
+  }
+  .pwprompt .hint {
+    margin: 0;
+  }
+  .hint.err {
+    color: var(--danger);
+  }
+  .row {
+    display: flex;
+    gap: 8px;
+  }
+  .row .input {
+    flex: 1;
+    min-width: 0;
   }
   .warnings {
     list-style: none;

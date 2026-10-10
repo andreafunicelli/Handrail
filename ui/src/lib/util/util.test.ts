@@ -5,6 +5,7 @@ import { escapeHtml, renderMarkdown } from "./markdown";
 import { canSetApprovalMode, needsTypedConfirm } from "./approval";
 import { buildTree, groupPath, isDescendant } from "./tree";
 import { passwordStrength } from "../stores/vault.svelte";
+import { joinArgs, splitArgs } from "./args";
 
 describe("fuzzy", () => {
   it("matches subsequences and rejects non-matches", () => {
@@ -121,5 +122,25 @@ describe("password strength", () => {
     expect(passwordStrength("short")).toBe(0);
     expect(passwordStrength("password1234")).toBe(1);
     expect(passwordStrength("correct horse battery staple 9!")).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("args", () => {
+  it("splits like a shell without expansion", () => {
+    expect(splitArgs("  --verbose  --name 'my profile' \"say \\\"hi\\\"\" C:\\tools\\x ")).toEqual([
+      "--verbose",
+      "--name",
+      "my profile",
+      'say "hi"',
+      "C:\\tools\\x",
+    ]);
+    expect(splitArgs("a''b \"\"")).toEqual(["ab", ""]);
+    expect(splitArgs("")).toEqual([]);
+    expect(splitArgs("--x 'open")).toBeNull();
+    expect(splitArgs('--x "open\\"')).toBeNull();
+  });
+  it("round-trips through joinArgs", () => {
+    const cases = [["--a", "b c"], ["it's", 'say "x"'], ["", "C:\\p\\"], ["mixed '\"\\ "]];
+    for (const c of cases) expect(splitArgs(joinArgs(c))).toEqual(c);
   });
 });

@@ -199,7 +199,7 @@ export function createMockApi(): Api {
   const previews = new Map<string, ImportPreview>();
   let approvalSettings: ApprovalSettings = {
     default_mode: "confirm_all",
-    deny_list: ["rm -rf /", "mkfs", "dd if=", ":(){ :|:& };:", "shutdown", "reboot"],
+    deny_list: ["shutdown", "reboot"],
   };
   let sync: SyncStatus = { config: null, last_sync_ms: null, last_report: null, can_join: false };
   const settingsKv = new Map<string, unknown>();
@@ -633,8 +633,15 @@ export function createMockApi(): Api {
         { id: "mobaxterm", tool: "MobaXterm", path: "%APPDATA%\\MobaXterm\\MobaXterm.ini", count_hint: 4 },
       ];
     },
-    async importPreview() {
+    async importPreview(args) {
       await sleep(300);
+      if (args.file_path && !args.file_path.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(args.file_path)) {
+        throw fail("io", `${args.file_path}: No such file or directory`);
+      }
+      // Pretend every mRemoteNG file uses the custom master password "secret".
+      if (args.tool === "mremoteng" && args.mremoteng_password !== "secret") {
+        throw fail("auth", "mRemoteNG data could not be decrypted (wrong master password?)");
+      }
       const gr = g("Imported · OpenSSH", 10);
       const sub = g("homelab", 0, gr.id);
       const existing = db.connections[1];
