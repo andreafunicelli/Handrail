@@ -13,7 +13,7 @@ use crate::reg::{self, get_str, get_u32, Fields, RegValue};
 use crate::text::{parse_port, percent_decode, read_text};
 use crate::{ImportBundle, ImportOptions, Tool};
 use aht_core::model::SshAuth;
-use aht_core::{Error, Result};
+use aht_core::Result;
 use std::path::Path;
 
 #[cfg(windows)]
@@ -98,7 +98,7 @@ pub fn registry_count() -> Option<usize> {
 #[cfg(windows)]
 pub fn parse_registry(opts: &ImportOptions) -> Result<ImportBundle> {
     let raw = reg::read_hkcu_subkeys(REG_SESSIONS)
-        .ok_or_else(|| Error::NotFound("WinSCP registry sessions".into()))?;
+        .ok_or_else(|| aht_core::Error::NotFound("WinSCP registry sessions".into()))?;
     Ok(from_sessions(
         raw.into_iter()
             .map(|(n, f)| (percent_decode(&n), f))
