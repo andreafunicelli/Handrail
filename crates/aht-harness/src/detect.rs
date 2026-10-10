@@ -123,6 +123,8 @@ pub(crate) fn command_for(path: &Path) -> Command {
     let is_ps1 = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("ps1"));
+    // Mutated only by the Windows-only `creation_flags` call below.
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut cmd = if is_ps1 {
         let mut c = Command::new("powershell");
         c.args(["-NoProfile", "-NonInteractive", "-File"]).arg(path);
