@@ -6,3 +6,16 @@ license.workspace = true
 
 [dependencies]
 aht-core.workspace = true
+async-trait.workspace = true
+data-encoding = "2"
+hmac = "0.13"
+portable-pty = "0.9"
+russh = { version = "0.64", default-features = false, features = ["flate2", "ring", "rsa"] }
+sha1 = "0.11"
+tokio.workspace = true
+tracing.workspace = true
+zeroize = "1.9"
+
+[dev-dependencies]
+rand = { version = "0.10", features = ["thread_rng"] }
+tempfile = "3.27.0"
