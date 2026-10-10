@@ -6,3 +6,18 @@ license.workspace = true
 
 [dependencies]
 aht-core.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+regex = "1"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+vte = "0.15.0"
+
+[dev-dependencies]
+async-trait.workspace = true
+portable-pty = "0.9.0"
+regex = "1"
+tokio = { workspace = true, features = ["test-util"] }
