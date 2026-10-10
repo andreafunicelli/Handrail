@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createMockApi } from "./mock";
 import { b64ToStr, strToB64 } from "../util/b64";
+import { needsMremotengPassword } from "../util/importers";
 import type { AgentEvent } from "./types";
 
 const wait = (cond: () => boolean, ms = 5000) =>
@@ -81,5 +82,17 @@ describe("mock api", () => {
     expect(imported).toBe(preview.connections.length - 1);
     expect((await api.listConnections()).length).toBe(before + imported);
     await expect(api.importApply(preview.preview_id, [])).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("previews a file import and asks for an mRemoteNG password", async () => {
+    const api = createMockApi();
+    const preview = await api.importPreview({ tool: "securecrt", file_path: "/tmp/export.xml" });
+    expect(preview.connections.length).toBeGreaterThan(0);
+    await expect(api.importPreview({ tool: "securecrt", file_path: "export.xml" })).rejects.toMatchObject({ kind: "io" });
+    const locked = api.importPreview({ tool: "mremoteng", file_path: "/tmp/confCons.xml" });
+    await expect(locked).rejects.toMatchObject({ kind: "auth" });
+    expect(needsMremotengPassword("mremoteng", await locked.catch((e: unknown) => e))).toBe(true);
+    const ok = await api.importPreview({ tool: "mremoteng", file_path: "/tmp/confCons.xml", mremoteng_password: "secret" });
+    expect(ok.preview_id).toBeTruthy();
   });
 });

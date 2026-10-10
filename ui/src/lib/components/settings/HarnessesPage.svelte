@@ -14,10 +14,25 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { ui } from "../../stores/ui.svelte";
   import { uuid } from "../../util/id";
+  import { joinArgs, splitArgs } from "../../util/args";
+
+  /** `aht_harness::launch::API_BILLING_FLAG`: consumed by the launcher, never passed to the CLI. */
+  const API_BILLING_FLAG = "--aht-api-billing";
 
   let detecting = $state(false);
   let editing = $state<HarnessProfile | null>(null);
   let ext = $state<HarnessExtensions | null>(null);
+  /** The editor's extra arguments, as typed (without the billing marker). */
+  let extraText = $state("");
+  let apiBilling = $state(false);
+  const extraParsed = $derived(splitArgs(extraText));
+
+  function startEditing(p: HarnessProfile) {
+    editing = p;
+    extraText = joinArgs(p.extra_args.filter((a) => a !== API_BILLING_FLAG));
+    apiBilling = p.extra_args.includes(API_BILLING_FLAG);
+    void loadExt();
+  }
 
   onMount(() => void detect());
 
@@ -43,12 +58,10 @@
   }
 
   function newProfile() {
-    editing = { id: uuid(), name: "", harness: "claude_code", display: "native", server_mode: true, skills: [], plugins: [], extra_args: [], model: null };
-    void loadExt();
+    startEditing({ id: uuid(), name: "", harness: "claude_code", display: "native", server_mode: true, skills: [], plugins: [], extra_args: [], model: null });
   }
   function edit(p: HarnessProfile) {
-    editing = structuredClone($state.snapshot(p) as HarnessProfile);
-    void loadExt();
+    startEditing(structuredClone($state.snapshot(p) as HarnessProfile));
   }
   async function loadExt() {
     if (!editing) return;
@@ -76,6 +89,10 @@
     if (!editing) return;
     const p = $state.snapshot(editing) as HarnessProfile;
     if (!p.name.trim()) p.name = HARNESS_NAMES[p.harness];
+    if (!extraParsed) return;
+    // OpenCode never scrubs API keys, so the marker only means something for the other two.
+    const billing = (apiBilling || extraParsed.includes(API_BILLING_FLAG)) && p.harness !== "open_code";
+    p.extra_args = [...extraParsed.filter((a) => a !== API_BILLING_FLAG), ...(billing ? [API_BILLING_FLAG] : [])];
     try {
       await api.saveHarnessProfile(p);
       await agent.reload();
@@ -163,6 +180,20 @@
       <input type="checkbox" bind:checked={editing.server_mode} />
       <span><strong>{t("harn.serverMode")}</strong><br /><span class="hint">{t("harn.serverModeHint")}</span></span>
     </label>
+    <label class="field">
+      <span class="label">{t("harn.extraArgs")}</span>
+      <input class="input mono" bind:value={extraText} placeholder={t("harn.extraArgsPlaceholder")} spellcheck="false" autocomplete="off" aria-invalid={!extraParsed} />
+      <span class="hint" class:err={!extraParsed}>{extraParsed ? t("harn.extraArgsHint") : t("harn.extraArgsUnterminated")}</span>
+    </label>
+    {#if editing.harness !== "open_code"}
+      <label class="check toggle">
+        <input type="checkbox" bind:checked={apiBilling} />
+        <span>
+          <strong>{t("harn.apiBilling")}</strong><br />
+          <span class="hint">{t(editing.harness === "claude_code" ? "harn.apiBillingHint.claude_code" : "harn.apiBillingHint.codex")}</span>
+        </span>
+      </label>
+    {/if}
     <label class="field"><span class="label">{t("harn.model")}</span><input class="input mono" value={editing.model ?? ""} oninput={(e) => (editing!.model = (e.currentTarget as HTMLInputElement).value || null)} placeholder={t("harn.modelPlaceholder")} /></label>
     <div class="form-grid">
       {#each ["skills", "plugins"] as const as list (list)}
@@ -184,7 +215,7 @@
       {#if agent.profiles.some((p) => p.id === editing!.id)}<button class="btn ghost danger-text" onclick={remove}>{t("harn.delete")}</button>{/if}
       <span class="grow"></span>
       <button class="btn ghost" onclick={() => (editing = null)}>{t("common.cancel")}</button>
-      <button class="btn primary" onclick={save}>{t("harn.save")}</button>
+      <button class="btn primary" onclick={save} disabled={!extraParsed}>{t("harn.save")}</button>
     </div>
   </div>
 {/if}
@@ -217,6 +248,9 @@
   }
   .grow {
     flex: 1;
+  }
+  .hint.err {
+    color: var(--danger);
   }
   .editor {
     display: grid;

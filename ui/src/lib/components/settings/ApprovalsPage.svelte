@@ -5,14 +5,19 @@
   import { api } from "../../api";
   import type { ApprovalMode, ApprovalSettings } from "../../api/types";
   import { toasts } from "../../stores/toasts.svelte";
+  import { literalText, normalizeDenyList, parseDenyInput } from "../../util/denylist";
 
   let s = $state<ApprovalSettings | null>(null);
   let pattern = $state("");
+  let patternError = $state<string | null>(null);
   const modes: ApprovalMode[] = ["confirm_all", "confirm_writes", "auto"];
 
   onMount(async () => {
     try {
-      s = await api.getApprovalSettings();
+      const loaded = await api.getApprovalSettings();
+      const list = normalizeDenyList(loaded.deny_list);
+      s = { ...loaded, deny_list: list };
+      if (list !== loaded.deny_list) void persist();
     } catch (e) {
       toasts.error(e);
     }
@@ -29,10 +34,16 @@
   }
   function add(e: SubmitEvent) {
     e.preventDefault();
-    const p = pattern.trim();
-    if (!s || !p || s.deny_list.includes(p)) return;
-    s.deny_list.push(p);
+    if (!s) return;
+    const r = parseDenyInput(pattern);
+    if (!r.ok) {
+      patternError = r.error === "empty" ? null : t(`appr.denyError.${r.error}`);
+      return;
+    }
+    patternError = null;
     pattern = "";
+    if (s.deny_list.includes(r.pattern)) return;
+    s.deny_list.push(r.pattern);
     void persist();
   }
   function remove(p: string) {
@@ -58,23 +69,39 @@
 
   <h3>{t("appr.deny")}</h3>
   <p class="hint sub">{t("appr.denyHint")}</p>
+  <p class="hint sub">{t("appr.denyBuiltIn")}</p>
   <div class="card">
     {#each s.deny_list as p (p)}
+      {@const text = literalText(p)}
       <div class="list-row">
-        <code class="mono pat">{p}</code>
+        <code class="mono pat">{text ?? p}</code>
+        {#if text == null}<span class="pill" title={t("appr.denyRegexHint")}>{t("appr.denyRegex")}</span>{/if}
         <button class="icon-btn" aria-label={t("common.delete")} onclick={() => remove(p)}><Icon name="x" size={13} /></button>
       </div>
     {/each}
   </div>
   <form class="add" onsubmit={add}>
-    <input class="input mono" bind:value={pattern} placeholder={t("appr.denyPlaceholder")} spellcheck="false" />
+    <input
+      class="input mono"
+      bind:value={pattern}
+      oninput={() => (patternError = null)}
+      placeholder={t("appr.denyPlaceholder")}
+      spellcheck="false"
+      aria-invalid={patternError != null}
+      aria-describedby={patternError ? "deny-error" : undefined}
+    />
     <button class="btn" disabled={!pattern.trim()}>{t("appr.denyAdd")}</button>
   </form>
+  {#if patternError}<p class="hint err" id="deny-error" role="alert">{patternError}</p>{/if}
 {:else}
   <p class="hint">{t("common.loading")}</p>
 {/if}
 
 <style>
+  .err {
+    color: var(--danger);
+    margin: 6px 0 0;
+  }
   .modes {
     display: grid;
     gap: 6px;
