@@ -205,7 +205,8 @@ async fn real_bash_hook_marks_and_exit_codes() {
         .run_command(&actor(), req("ls /definitely_missing_dir_aht"), &ap)
         .await
         .unwrap();
-    assert_eq!(r.exit_code, Some(2), "{r:?}");
+    // GNU ls exits 2 for a missing operand, BSD ls (macOS) exits 1.
+    assert!(matches!(r.exit_code, Some(1 | 2)), "{r:?}");
     assert!(r.output.contains("No such file"), "{r:?}");
     let r = s
         .run_command(&actor(), req("printf 'a\\nb\\n'; echo c"), &ap)
