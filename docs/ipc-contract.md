@@ -42,8 +42,19 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 - `harness_login({ kind, cols, rows }) -> SessionInfo` (runs the CLI's own login in a local tab)
 
 ## Import & sync
-- `import_detect() -> { source_id, tool, path, count }[]`
-- `import_preview({ source_id } | { tool, file_path }) -> ImportBundle`
-- `import_apply({ bundle, skip_ids: string[] }) -> { imported: number }`
-- `sync_status()`, `sync_configure_github_start() -> { user_code, verification_uri }`,
-  `sync_configure_github_poll() -> { done: bool }`, `sync_configure_folder({ path })`, `sync_now()`
+- `import_detect() -> { id, tool, path?, count_hint? }[]`
+- `import_preview({ args: { source_id? , tool?, file_path?, mremoteng_password?, import_passwords? } })
+  -> { preview_id, tool, groups, connections, secret_count, warnings, duplicates: { index, existing_id }[] }`
+  (bundle and secret values stay in the backend)
+- `import_apply({ preview_id, skip_indices: number[] }) -> { imported }`
+- `sync_status() -> { config?: {kind:"github",owner,repo,branch}|{kind:"folder",path}, last_sync_ms?, last_report?, can_join }`
+- `sync_configure_github_start() -> { device_code, user_code, verification_uri, interval, expires_in }`
+- `sync_configure_github_poll() -> { done, status: "pending"|"slow_down"|"expired"|"denied"|"ok", repo? }`
+  (poll every `interval` s; creates private repo `aihubterm-vault`)
+- `sync_configure_folder({ path })`, `sync_join()` (new device: pull manifest, then unlock with Secret Key),
+  `sync_now() -> { pulled, pushed, conflicts, warnings }`
+
+## Misc
+- `get_setting({ key }) -> any|null`, `set_setting({ key, value })`, `list_secrets() -> { id, kind, label }[]`
+- Errors reject with `{ kind, message }` (aht-core `Error`); `vault_unlock` rejects
+  `{ kind: "auth", message: "secret_key_required" }` when this device needs the Secret Key.
