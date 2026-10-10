@@ -246,6 +246,15 @@ async fn real_zsh_hook_marks_and_exit_codes() {
         IntegrationMode::Full,
         "hook did not install"
     );
+    // zsh draws its prompt through ZLE, so precmd's OSC 7 can arrive a moment after the hook's
+    // end sentinel (bash prints both in one burst). The cwd assertion after `cd /` below still
+    // fails if OSC 7 is never sent.
+    for _ in 0..30 {
+        if s.info().cwd.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     let info = s.info();
     assert_eq!(info.shell.as_deref(), Some("zsh"));
     assert!(
