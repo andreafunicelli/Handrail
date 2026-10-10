@@ -4,12 +4,15 @@
   import { t, type MessageKey } from "../../i18n";
   import { passwordStrength, vault } from "../../stores/vault.svelte";
   import { toasts } from "../../stores/toasts.svelte";
+  import { api } from "../../api";
 
   let password = $state("");
   let confirm = $state("");
   let busy = $state(false);
   let saved = $state(false);
   let copied = $state(false);
+  /** Where "Download as text" saved the kit. */
+  let savedPath = $state<string | null>(null);
 
   const strength = $derived(passwordStrength(password));
   const mismatch = $derived(confirm.length > 0 && confirm !== password);
@@ -40,15 +43,14 @@
     }
   }
 
-  function download() {
+  async function download() {
     if (!vault.secretKey) return;
     const body = `${t("vault.kit.fileHeader")}\n${new Date().toISOString().slice(0, 10)}\n\n${t("vault.kit.secretKey")}: ${vault.secretKey}\n\n${t("vault.kit.fileBody")}\n`;
-    const url = URL.createObjectURL(new Blob([body], { type: "text/plain" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "AIHubTerm-Emergency-Kit.txt";
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    try {
+      savedPath = await api.saveEmergencyKit(body);
+    } catch (err) {
+      toasts.error(err);
+    }
   }
 </script>
 
@@ -64,8 +66,9 @@
       </div>
       <div class="kit-actions">
         <button class="btn sm" onclick={copy}><Icon name={copied ? "check" : "copy"} size={13} />{copied ? t("vault.kit.copied") : t("vault.kit.copy")}</button>
-        <button class="btn sm" onclick={download}><Icon name="download" size={13} />{t("vault.kit.download")}</button>
+        <button class="btn sm" onclick={download}><Icon name={savedPath ? "check" : "download"} size={13} />{t("vault.kit.download")}</button>
       </div>
+      {#if savedPath}<p class="hint saved" role="status">{t("vault.kit.savedTo", { path: savedPath })}</p>{/if}
     </div>
 
     <label class="check confirm">
@@ -103,6 +106,10 @@
 </VaultFrame>
 
 <style>
+  .saved {
+    margin: 8px 0 0;
+    word-break: break-all;
+  }
   .link.join {
     display: block;
     margin: 18px auto 0;

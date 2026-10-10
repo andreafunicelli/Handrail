@@ -453,6 +453,18 @@ export function createMockApi(): Api {
     async vaultLock() {
       vault.locked = true;
     },
+    async saveEmergencyKit(contents) {
+      // In a real browser a blob download works; the desktop webview needs the backend command.
+      if (typeof document !== "undefined" && typeof URL.createObjectURL === "function") {
+        const url = URL.createObjectURL(new Blob([contents], { type: "text/plain" }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "AIHubTerm Emergency Kit.txt";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+      return "~/Downloads/AIHubTerm Emergency Kit.txt";
+    },
 
     async listConnections() {
       return structuredClone(db.connections);

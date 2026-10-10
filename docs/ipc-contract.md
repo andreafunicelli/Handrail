@@ -7,6 +7,8 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 ## Vault
 - `vault_status() -> { initialized: bool, locked: bool }`
 - `vault_create({ password }) -> { secret_key: string }` — Secret Key shown once (Emergency Kit)
+- `save_emergency_kit({ contents }) -> string` — writes `AIHubTerm Emergency Kit.txt` to Downloads
+  (never overwrites; owner-only on Unix) and returns the path. The webview cannot save `blob:` downloads.
 - `vault_unlock({ password, secret_key? }) -> void` (secret_key needed only on a new device)
 - `vault_lock() -> void`
 

@@ -54,6 +54,8 @@ export interface Api {
   vaultCreate(password: string): Promise<{ secret_key: string }>;
   vaultUnlock(password: string, secretKey?: string): Promise<void>;
   vaultLock(): Promise<void>;
+  /** Saves the Emergency Kit text to the Downloads folder; returns the file path. */
+  saveEmergencyKit(contents: string): Promise<string>;
 
   // connections & groups
   listConnections(): Promise<Connection[]>;

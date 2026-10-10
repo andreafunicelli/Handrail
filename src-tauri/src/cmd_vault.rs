@@ -8,7 +8,9 @@ use aht_vault::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use tauri::State;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Manager, State};
 
 #[derive(Serialize)]
 pub struct CreatedVault {
@@ -43,6 +45,57 @@ pub async fn vault_create(state: State<'_, AppState>, password: String) -> Resul
     Ok(CreatedVault {
         secret_key: key.reveal().to_string(),
     })
+}
+
+/// Write the Emergency Kit to the Downloads folder (home if there is none) and return its path.
+/// The webview cannot save `blob:` downloads itself. Never overwrites: "… (2).txt" and so on.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn save_emergency_kit(app: AppHandle, contents: String) -> Result<String> {
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(err)?;
+    let path = tokio::task::spawn_blocking(move || {
+        save_new_file(&dir, "AIHubTerm Emergency Kit", "txt", contents.as_bytes())
+    })
+    .await
+    .map_err(err)??;
+    Ok(path.display().to_string())
+}
+
+/// Create `<dir>/<stem>.<ext>`, or `<stem> (2).<ext>`... if taken. Owner-only on Unix: the file
+/// holds the Secret Key.
+fn save_new_file(dir: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    for n in 1..=100 {
+        let name = if n == 1 {
+            format!("{stem}.{ext}")
+        } else {
+            format!("{stem} ({n}).{ext}")
+        };
+        let path = dir.join(name);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        match opts.open(&path) {
+            Ok(mut f) => {
+                f.write_all(bytes)?;
+                f.sync_all()?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other(format!(
+        "too many files named {stem} in {}",
+        dir.display()
+    )))
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -390,4 +443,27 @@ pub async fn secret_value(state: &AppState, id: SecretId) -> Result<String> {
         .map_err(Error::from)?
         .map(|s| s.value)
         .ok_or_else(|| Error::NotFound(format!("secret {id}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_new_file_never_overwrites() {
+        let dir = std::env::temp_dir().join(format!("aht-kit-{}", uuid::Uuid::new_v4()));
+        let a = save_new_file(&dir, "Kit", "txt", b"one").unwrap();
+        let b = save_new_file(&dir, "Kit", "txt", b"two").unwrap();
+        assert_eq!(a, dir.join("Kit.txt"));
+        assert_eq!(b, dir.join("Kit (2).txt"));
+        assert_eq!(std::fs::read(&a).unwrap(), b"one");
+        assert_eq!(std::fs::read(&b).unwrap(), b"two");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&a).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

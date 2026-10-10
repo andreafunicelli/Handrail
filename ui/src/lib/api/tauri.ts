@@ -73,6 +73,7 @@ export function createTauriApi(): Api {
     syncConfigureFolder: (path) => invoke("sync_configure_folder", { path }),
     syncJoin: () => invoke("sync_join"),
     syncNow: () => invoke("sync_now"),
+    saveEmergencyKit: (contents) => invoke("save_emergency_kit", { contents }),
     syncSetAuto: (enabled) => invoke("sync_set_auto", { enabled }),
     syncDisconnect: () => invoke("sync_disconnect"),
     syncFolderPresets: () => invoke("sync_folder_presets"),

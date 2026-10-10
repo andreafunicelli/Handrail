@@ -21,6 +21,7 @@ export const en = {
   "vault.kit.copy": "Copy",
   "vault.kit.copied": "Copied",
   "vault.kit.download": "Download as text",
+  "vault.kit.savedTo": "Saved to {path}. Print it or move it somewhere offline, then delete this copy.",
   "vault.kit.confirm": "I saved my Secret Key somewhere safe",
   "vault.kit.continue": "Continue",
   "vault.kit.fileHeader": "AIHubTerm Emergency Kit",
