@@ -233,6 +233,71 @@ async fn real_bash_hook_marks_and_exit_codes() {
     let _ = s.close().await;
 }
 
+/// zsh is the default shell on macOS. `-f` skips the user's rc files, like `--norc` for bash.
+#[tokio::test(flavor = "multi_thread")]
+async fn real_zsh_hook_marks_and_exit_codes() {
+    if !on_path("zsh") {
+        eprintln!("zsh not on PATH; skipping");
+        return;
+    }
+    let (s, ui) = start("zsh", &["-f", "-i"]).await;
+    assert_eq!(
+        s.integration(),
+        IntegrationMode::Full,
+        "hook did not install"
+    );
+    let info = s.info();
+    assert_eq!(info.shell.as_deref(), Some("zsh"));
+    assert!(
+        info.os.is_some() && info.user.is_some() && info.host.is_some(),
+        "{info:?}"
+    );
+    assert!(info.cwd.is_some(), "OSC 7 cwd: {info:?}");
+
+    let ap = TestApprover::approve();
+    let r = s
+        .run_command(&actor(), req("echo hello"), &ap)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CommandState::Completed, "{r:?}");
+    assert_eq!(r.exit_code, Some(0));
+    assert_eq!(r.output.trim(), "hello");
+
+    let r = s.run_command(&actor(), req("false"), &ap).await.unwrap();
+    assert_eq!(r.exit_code, Some(1), "{r:?}");
+    let r = s.run_command(&actor(), req("(exit 3)"), &ap).await.unwrap();
+    assert_eq!(r.exit_code, Some(3), "{r:?}");
+    let r = s
+        .run_command(&actor(), req("ls /definitely_missing_dir_aht"), &ap)
+        .await
+        .unwrap();
+    assert!(matches!(r.exit_code, Some(1 | 2)), "{r:?}");
+    assert!(r.output.contains("No such file"), "{r:?}");
+    let r = s
+        .run_command(&actor(), req("printf 'a\\nb\\n'; echo c"), &ap)
+        .await
+        .unwrap();
+    assert_eq!(
+        r.output.trim().lines().collect::<Vec<_>>(),
+        ["a", "b", "c"],
+        "{r:?}"
+    );
+    let r = s
+        .run_command(&actor(), req("cd / && pwd"), &ap)
+        .await
+        .unwrap();
+    assert_eq!(r.output.trim(), "/");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.info().cwd.as_deref(), Some("/"));
+
+    let ui = String::from_utf8_lossy(&ui.lock().unwrap()).into_owned();
+    for leak in ["AHTPROBE", "Aht", "__aht"] {
+        assert!(!ui.contains(leak), "UI leaked {leak:?}");
+    }
+    assert!(ui.contains("\x1b]133;A"), "prompt marks reach the UI");
+    let _ = s.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn real_pwsh_hook_marks_and_exit_codes() {
     if !on_path("pwsh") {
