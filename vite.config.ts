@@ -5,9 +5,14 @@ const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
   root: "ui",
-  plugins: [svelte()],
+  plugins: [svelte({ configFile: "../svelte.config.js" })],
   clearScreen: false,
-  build: { outDir: "dist", emptyOutDir: true, target: "es2022" },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    target: "es2022",
+    rollupOptions: { output: { manualChunks: { xterm: ["@xterm/xterm", "@xterm/addon-fit"] } } },
+  },
   server: {
     port: 1420,
     strictPort: true,
