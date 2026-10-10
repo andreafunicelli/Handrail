@@ -5,7 +5,7 @@
   import { api } from "../../api";
   import type { ConflictView, FolderPreset, SnapshotInfo, SyncStatus } from "../../api/types";
   import GithubConnect from "./GithubConnect.svelte";
-  import { connections } from "../../stores/connections.svelte";
+  import { reloadVaultData } from "../../stores/vaultData";
   import { toasts } from "../../stores/toasts.svelte";
   import { formatBytes, relativeTime } from "../../util/time";
 
@@ -120,13 +120,13 @@
   function restoreSnapshot(s: SnapshotInfo) {
     if (!confirm(`snap:${s.name}`)) return;
     void run(
-      async () => (await api.vaultSnapshotRestore(s.name), await Promise.all([loadHistory(), connections.load()])),
+      async () => (await api.vaultSnapshotRestore(s.name), await Promise.all([loadHistory(), reloadVaultData()])),
       t("sync.restored", { when: new Date(s.created_ms).toLocaleString() }),
     );
   }
   function keepConflict(c: ConflictView) {
     void run(
-      async () => (await api.vaultConflictRestore(c.file_id, c.recorded_at_ms), await connections.load()),
+      async () => (await api.vaultConflictRestore(c.file_id, c.recorded_at_ms), await reloadVaultData()),
       t("sync.kept", { label: c.label }),
     );
   }

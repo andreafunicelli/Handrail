@@ -24,6 +24,9 @@
   import { ui } from "../../stores/ui.svelte";
   import { vault } from "../../stores/vault.svelte";
   import { updates } from "../../stores/updates.svelte";
+  import { reloadVaultData, syncChangedVault } from "../../stores/vaultData";
+  import { api } from "../../api";
+  import type { SyncStatus } from "../../api/types";
 
   let wsName = $state("");
 
@@ -37,6 +40,16 @@
   onMount(() => {
     void Promise.all([connections.load(), sessions.init(), agent.init()]).catch(toasts.error);
     updates.start();
+
+    // Background syncs change the vault behind the UI: refresh the cached items when one pulled.
+    let lastSync: SyncStatus | null = null;
+    let unlistenSync: (() => void) | null = null;
+    void api
+      .on("sync://status", (s) => {
+        if (syncChangedVault(lastSync, s)) void reloadVaultData().catch(toasts.error);
+        lastSync = s;
+      })
+      .then((un) => (unlistenSync = un));
 
     const mq = matchMedia("(max-width: 819px)");
     const sync = () => {
@@ -59,6 +72,7 @@
       mq.removeEventListener("change", sync);
       evs.forEach((e) => removeEventListener(e, bump, { capture: true }));
       clearInterval(iv);
+      unlistenSync?.();
     };
   });
 

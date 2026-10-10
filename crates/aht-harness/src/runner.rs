@@ -27,6 +27,16 @@ use tokio::sync::{mpsc, watch, Mutex, Notify};
 const MAX_STDERR_EVENTS: usize = 200;
 const EVENT_CHANNEL: usize = 256;
 
+/// A CLI that exits before reading its prompt (bad flag, not signed in) closes its stdin. Its
+/// stderr and exit status, reported by the reader tasks, explain why; a broken pipe on the
+/// prompt write would only hide that.
+fn tolerate_exit(r: std::io::Result<()>) -> std::io::Result<()> {
+    match r {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
+}
+
 /// Handle to a running headless harness process.
 #[derive(Clone)]
 pub struct HeadlessRun {
@@ -92,14 +102,14 @@ impl HeadlessRun {
         match spec.kind {
             HarnessKind::ClaudeCode => {
                 if let Some(si) = stdin.as_mut() {
-                    si.write_all(user_message_line(prompt).as_bytes()).await?;
-                    si.flush().await?;
+                    tolerate_exit(si.write_all(user_message_line(prompt).as_bytes()).await)?;
+                    tolerate_exit(si.flush().await)?;
                 }
             }
             HarnessKind::Codex => {
                 if let Some(mut si) = stdin.take() {
-                    si.write_all(prompt.as_bytes()).await?;
-                    si.shutdown().await?;
+                    tolerate_exit(si.write_all(prompt.as_bytes()).await)?;
+                    tolerate_exit(si.shutdown().await)?;
                 }
             }
             HarnessKind::OpenCode => {}

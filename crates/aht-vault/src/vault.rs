@@ -564,6 +564,19 @@ impl Vault {
     /// losing version goes to the local conflict history. Tampered input is rejected with
     /// `Corrupt` and nothing is written.
     pub fn merge_remote(&mut self, path: &str, bytes: &[u8]) -> Result<MergeOutcome> {
+        self.merge_remote_tracked(path, bytes, false)
+    }
+
+    /// Like [`Vault::merge_remote`] for a syncer that knows whether the local file is still the
+    /// version it last synced (`local_in_sync`). A newer remote version then replaces it as an
+    /// ordinary pull, not a conflict: nothing was edited here, so nothing is kept in the
+    /// conflict history.
+    pub fn merge_remote_tracked(
+        &mut self,
+        path: &str,
+        bytes: &[u8],
+        local_in_sync: bool,
+    ) -> Result<MergeOutcome> {
         let path = path.replace('\\', "/");
         if path == MANIFEST {
             return self.merge_manifest(bytes);
@@ -582,7 +595,9 @@ impl Vault {
             None => MergeOutcome::Added,
             Some(l) if l.updated_at == remote.updated_at => MergeOutcome::Unchanged,
             Some(l) if remote.updated_at > l.updated_at => {
-                self.record_conflict(&file_id, remote.updated_at, l.envelope()?)?;
+                if !local_in_sync {
+                    self.record_conflict(&file_id, remote.updated_at, l.envelope()?)?;
+                }
                 MergeOutcome::RemoteWon
             }
             Some(l) => {

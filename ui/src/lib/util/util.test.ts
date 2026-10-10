@@ -7,6 +7,8 @@ import { buildTree, groupPath, isDescendant } from "./tree";
 import { passwordStrength } from "../stores/vault.svelte";
 import { joinArgs, splitArgs } from "./args";
 import { formatBytes, relativeTime } from "./time";
+import { syncChangedVault } from "../stores/vaultData";
+import type { SyncStatus } from "../api/types";
 
 describe("fuzzy", () => {
   it("matches subsequences and rejects non-matches", () => {
@@ -162,5 +164,27 @@ describe("time", () => {
     expect(formatBytes(4300)).toBe("4.2 KB");
     expect(formatBytes(50 * 1024)).toBe("50 KB");
     expect(formatBytes(3 * 1024 * 1024)).toBe("3.0 MB");
+  });
+});
+
+describe("syncChangedVault", () => {
+  const st = (at: number | null, pulled = 0, conflicts = 0, extra: Partial<SyncStatus> = {}): SyncStatus => ({
+    can_join: false,
+    auto: true,
+    syncing: false,
+    last_error: null,
+    last_sync_ms: at,
+    last_report: { pulled, pushed: 0, conflicts, warnings: [] },
+    ...extra,
+  });
+  it("reloads only when a completed sync pulled or merged something", () => {
+    expect(syncChangedVault(st(1), st(2, 2))).toBe(true);
+    expect(syncChangedVault(st(1), st(2, 0, 1))).toBe(true);
+    expect(syncChangedVault(st(1), st(2))).toBe(false);
+    expect(syncChangedVault(st(2, 2), st(2, 2)), "same sync reported twice").toBe(false);
+    expect(syncChangedVault(st(1), st(1, 2, 0, { syncing: true })), "still running").toBe(false);
+    expect(syncChangedVault(st(1), st(2, 2, 0, { last_error: "offline" }))).toBe(false);
+    // The listener started after the sync had begun: still reloads.
+    expect(syncChangedVault(null, st(2, 2))).toBe(true);
   });
 });
