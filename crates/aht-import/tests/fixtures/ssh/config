@@ -1,0 +1,24 @@
+# synthetic fixture
+Host web
+    HostName web.example.test
+    User deploy
+    Port 2222
+    IdentityFile {{DIR}}/id_test
+
+Host db
+    ProxyJump bastion
+
+Host bastion
+    HostName bastion.example.test
+
+Host *.internal !secret.internal
+    ProxyJump none
+
+Host *
+    User fallbackuser
+    ServerAliveInterval 30
+
+Include conf.d/*.conf
+
+Match host foo
+    User matched

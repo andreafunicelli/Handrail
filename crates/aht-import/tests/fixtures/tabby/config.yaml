@@ -1,0 +1,56 @@
+version: 1
+groups:
+  - id: grp-infra
+    name: Infra
+  - id: grp-prod
+    name: Prod
+    parentGroupId: grp-infra
+profiles:
+  - id: ssh:custom:bastion:0001
+    type: ssh
+    name: bastion
+    group: grp-infra
+    options:
+      host: bastion.example.test
+      port: 22
+      user: jump
+      auth: password
+  - id: ssh:custom:app:0002
+    type: ssh
+    name: app
+    group: grp-prod
+    options:
+      host: app.example.test
+      port: 2200
+      user: deploy
+      auth: publicKey
+      privateKeys:
+        - "{{DIR}}/id_tabby"
+      jumpHost: ssh:custom:bastion:0001
+  - id: ssh:custom:agent:0003
+    type: ssh
+    name: agent host
+    options:
+      host: agent.example.test
+      auth: agent
+  - id: ssh:custom:pw:0004
+    type: ssh
+    name: pw host
+    options:
+      host: pw.example.test
+      user: root
+      auth: keyboardInteractive
+      jumpHost: ssh:custom:missing:9999
+  - id: serial:custom:0005
+    type: serial
+    name: console
+    options: {}
+  - id: ssh:template
+    type: ssh
+    name: template
+    isTemplate: true
+    options:
+      host: ""
+vault:
+  version: 1
+  contents: ZmFrZQ==

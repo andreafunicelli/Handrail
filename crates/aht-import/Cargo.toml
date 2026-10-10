@@ -5,4 +5,23 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+aes = "0.9.3"
+aes-gcm = "0.11.1"
 aht-core.workspace = true
+base64 = "0.23.1"
+cbc = { version = "0.2.1", features = ["alloc", "block-padding"] }
+dirs = "7.0.0"
+glob = "0.3.4"
+md-5 = "0.11.0"
+pbkdf2 = "0.13.0"
+percent-encoding = "2.3.2"
+roxmltree = "0.21.1"
+serde = { workspace = true, features = ["derive"] }
+serde_yaml_ng = "0.10.0"
+sha1 = "0.11.0"
+
+[target."cfg(windows)".dependencies]
+winreg = "0.56.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
