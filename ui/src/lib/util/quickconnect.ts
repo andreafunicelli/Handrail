@@ -27,7 +27,7 @@ export function parseQuickConnect(input: string): QuickTarget | null {
   if (at !== -1) {
     user = s.slice(0, at);
     s = s.slice(at + 1);
-    if (!user || !/^[A-Za-z0-9._\-$\]+$/.test(user)) return null;
+    if (!user || !/^[A-Za-z0-9._\-$\\]+$/.test(user)) return null;
   }
   let host = s;
   const v6 = s.match(/^\[([0-9a-fA-F:.]+)\](?::(\d+))?$/);

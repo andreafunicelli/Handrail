@@ -13,7 +13,10 @@ import type {
   HarnessKind,
   HarnessProfile,
   HostKeyEvent,
+  GithubDeviceStart,
+  GithubPoll,
   ImportPreview,
+  ImportPreviewArgs,
   ImportSource,
   Provider,
   ProviderTestResult,
@@ -21,6 +24,7 @@ import type {
   SecretId,
   SessionDataEvent,
   SessionInfo,
+  SyncReport,
   SyncStatus,
   VaultStatus,
 } from "./types";
@@ -89,16 +93,18 @@ export interface Api {
 
   // import & sync
   importDetect(): Promise<ImportSource[]>;
-  importPreview(arg: { source_id: string } | { tool: string; file_path: string }): Promise<ImportPreview>;
+  importPreview(args: ImportPreviewArgs): Promise<ImportPreview>;
   importApply(previewId: string, skipIndices: number[]): Promise<{ imported: number }>;
   syncStatus(): Promise<SyncStatus>;
-  syncGithubStart(): Promise<{ user_code: string; verification_uri: string }>;
-  syncGithubPoll(): Promise<{ done: boolean }>;
+  syncGithubStart(): Promise<GithubDeviceStart>;
+  syncGithubPoll(): Promise<GithubPoll>;
   syncConfigureFolder(path: string): Promise<void>;
-  syncNow(): Promise<void>;
+  syncJoin(): Promise<void>;
+  syncNow(): Promise<SyncReport>;
 
-  // auto-lock (contract addition)
-  vaultSetAutoLock(minutes: number): Promise<void>;
+  // misc
+  getSetting<T = unknown>(key: string): Promise<T | null>;
+  setSetting(key: string, value: unknown): Promise<void>;
 
   on<E extends EventName>(event: E, cb: (payload: EventMap[E]) => void): Promise<Unlisten>;
 }

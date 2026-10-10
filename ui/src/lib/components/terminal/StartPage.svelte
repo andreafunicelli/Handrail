@@ -62,8 +62,8 @@
     <dl class="keys">
       <div><dt>{t("start.hint.palette")}</dt><dd><span class="kbd">{mod}</span><span class="kbd">K</span></dd></div>
       <div><dt>{t("start.hint.ai")}</dt><dd><span class="kbd">{mod}</span><span class="kbd">J</span></dd></div>
-      <div><dt>{t("start.hint.newTab")}</dt><dd><span class="kbd">{mod}</span><span class="kbd">T</span></dd></div>
-      <div><dt>{t("start.hint.close")}</dt><dd><span class="kbd">{mod}</span><span class="kbd">W</span></dd></div>
+      <div><dt>{t("start.hint.newTab")}</dt><dd><span class="kbd">{mod}</span><span class="kbd">⇧</span><span class="kbd">T</span></dd></div>
+      <div><dt>{t("start.hint.close")}</dt><dd><span class="kbd">{mod}</span><span class="kbd">⇧</span><span class="kbd">W</span></dd></div>
     </dl>
   </div>
 </div>

@@ -72,6 +72,7 @@
 {#if node.type === "split"}
   <div class="split {node.dir}" bind:this={el}>
     <div class="child" style:flex-basis="{node.ratio * 100}%"><PaneTree node={node.a} {tabId} multi /></div>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
     <div
       class="divider"
       role="separator"

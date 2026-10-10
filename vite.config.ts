@@ -7,7 +7,12 @@ export default defineConfig({
   root: "ui",
   plugins: [svelte()],
   clearScreen: false,
-  build: { outDir: "dist", emptyOutDir: true, target: "es2022" },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    target: "es2022",
+    rollupOptions: { output: { manualChunks: { xterm: ["@xterm/xterm", "@xterm/addon-fit"] } } },
+  },
   server: {
     port: 1420,
     strictPort: true,

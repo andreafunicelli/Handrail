@@ -1,7 +1,26 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
-  let version = $state("…");
-  invoke<string>("app_version").then((v) => (version = v)).catch(() => (version = "web"));
+  import { onMount } from "svelte";
+  import AppShell from "./lib/components/shell/AppShell.svelte";
+  import Onboarding from "./lib/components/vault/Onboarding.svelte";
+  import Unlock from "./lib/components/vault/Unlock.svelte";
+  import Toasts from "./lib/components/common/Toasts.svelte";
+  import { vault } from "./lib/stores/vault.svelte";
+  import { toasts } from "./lib/stores/toasts.svelte";
+  import "./lib/stores/settings.svelte"; // applies theme before first paint
+
+  onMount(() => {
+    vault.refresh().catch((e) => {
+      toasts.error(e);
+      vault.phase = "unlock";
+    });
+  });
 </script>
 
-<main>AIHubTerm {version}</main>
+{#if vault.phase === "ready"}
+  <AppShell />
+{:else if vault.phase === "create" || vault.phase === "kit"}
+  <Onboarding />
+{:else if vault.phase === "unlock"}
+  <Unlock />
+{/if}
+<Toasts />

@@ -200,7 +200,9 @@ export function createMockApi(): Api {
     default_mode: "confirm_all",
     deny_list: ["rm -rf /", "mkfs", "dd if=", ":(){ :|:& };:", "shutdown", "reboot"],
   };
-  let sync: SyncStatus = { backend: "none", target: null, last_sync: null, error: null };
+  let sync: SyncStatus = { config: null, last_sync_ms: null, last_report: null, can_join: false };
+  const settingsKv = new Map<string, unknown>();
+  const fail = (kind: string, message: string) => Object.assign(new Error(message), { kind, message });
   let githubPolls = 0;
 
   function emit<E extends EventName>(event: E, payload: EventMap[E]) {
@@ -413,13 +415,12 @@ export function createMockApi(): Api {
     },
     async vaultUnlock(password) {
       await sleep(300);
-      if (vault.password && password !== vault.password) throw new Error("Wrong master password.");
+      if (vault.password && password !== vault.password) throw fail("auth", "Wrong master password.");
       vault.locked = false;
     },
     async vaultLock() {
       vault.locked = true;
     },
-    async vaultSetAutoLock() {},
 
     async listConnections() {
       return structuredClone(db.connections);
@@ -453,7 +454,7 @@ export function createMockApi(): Api {
 
     async openSession(connection_id) {
       const c = db.connections.find((x) => x.id === connection_id);
-      if (!c) throw new Error("Connection not found.");
+      if (!c) throw fail("not_found", "Connection not found.");
       const mode = c.approval_mode ?? approvalSettings.default_mode;
       const sh = newSession(
         { connection_id, title: c.name, env: c.env, user: c.user, host: c.host, cwd: "~", approval_mode: c.env === "prod" && mode === "auto" ? "confirm_all" : mode },
@@ -521,6 +522,7 @@ export function createMockApi(): Api {
     },
     async saveApprovalSettings(s) {
       approvalSettings = structuredClone(s);
+      settingsKv.set("approvals", structuredClone(s));
     },
 
     async listProviders() {
@@ -591,7 +593,7 @@ export function createMockApi(): Api {
     },
     async agentSend(session_id, brain, message) {
       const sh = shells.get(session_id);
-      if (!sh) throw new Error("Session not found.");
+      if (!sh) throw fail("not_found", "Session not found.");
       const run_id = uuid();
       void agentRun(run_id, sh, brain, message);
       return { run_id };
@@ -625,9 +627,9 @@ export function createMockApi(): Api {
     async importDetect() {
       await sleep(300);
       return [
-        { source_id: "ssh_config", tool: "OpenSSH", path: "~/.ssh/config", count: 6 },
-        { source_id: "putty", tool: "PuTTY", path: "HKCU\\Software\\SimonTatham\\PuTTY\\Sessions", count: 3 },
-        { source_id: "mobaxterm", tool: "MobaXterm", path: "%APPDATA%\\MobaXterm\\MobaXterm.ini", count: 4 },
+        { id: "ssh_config", tool: "OpenSSH", path: "~/.ssh/config", count_hint: 6 },
+        { id: "putty", tool: "PuTTY", path: "HKCU\\Software\\SimonTatham\\PuTTY\\Sessions", count_hint: 3 },
+        { id: "mobaxterm", tool: "MobaXterm", path: "%APPDATA%\\MobaXterm\\MobaXterm.ini", count_hint: 4 },
       ];
     },
     async importPreview() {
@@ -648,6 +650,7 @@ export function createMockApi(): Api {
         tool: "OpenSSH",
         groups: [gr, sub],
         connections: items,
+        secret_count: 2,
         warnings: ["Host * block: ForwardAgent ignored (agent forwarding is off by default)."],
         duplicates: [{ index: 0, existing_id: existing.id }],
       };
@@ -657,7 +660,7 @@ export function createMockApi(): Api {
     async importApply(preview_id, skipIndices) {
       await sleep(300);
       const p = previews.get(preview_id);
-      if (!p) throw new Error("Import preview expired — scan again.");
+      if (!p) throw fail("not_found", "Import preview expired — scan again.");
       previews.delete(preview_id);
       db.groups.push(...p.groups);
       const add = p.connections.filter((_, i) => !skipIndices.includes(i));
@@ -665,26 +668,37 @@ export function createMockApi(): Api {
       return { imported: add.length };
     },
     async syncStatus() {
-      return { ...sync };
+      return structuredClone(sync);
     },
     async syncGithubStart() {
       githubPolls = 0;
-      return { user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device" };
+      return { device_code: uuid(), user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", interval: 1, expires_in: 900 };
     },
     async syncGithubPoll() {
       githubPolls++;
       if (githubPolls >= 3) {
-        sync = { backend: "github", target: "andrea/aihubterm-vault (private)", last_sync: new Date().toISOString(), error: null };
-        return { done: true };
+        sync = { ...sync, config: { kind: "github", owner: "andrea", repo: "aihubterm-vault", branch: "main" }, last_sync_ms: Date.now() };
+        return { done: true, status: "ok", repo: "andrea/aihubterm-vault" };
       }
-      return { done: false };
+      return { done: false, status: "pending" };
     },
     async syncConfigureFolder(path) {
-      sync = { backend: "folder", target: path, last_sync: new Date().toISOString(), error: null };
+      sync = { ...sync, config: { kind: "folder", path }, last_sync_ms: Date.now() };
+    },
+    async syncJoin() {
+      await sleep(300);
     },
     async syncNow() {
       await sleep(500);
-      sync = { ...sync, last_sync: new Date().toISOString() };
+      const report = { pulled: 2, pushed: 1, conflicts: 0, warnings: [] };
+      sync = { ...sync, last_sync_ms: Date.now(), last_report: report };
+      return report;
+    },
+    async getSetting(key) {
+      return (settingsKv.has(key) ? structuredClone(settingsKv.get(key)) : null) as never;
+    },
+    async setSetting(key, value) {
+      settingsKv.set(key, structuredClone(value));
     },
 
     async on(event, cb) {

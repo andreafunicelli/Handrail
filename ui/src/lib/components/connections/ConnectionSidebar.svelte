@@ -326,6 +326,7 @@
   <div
     class="tree"
     role="tree"
+    tabindex="-1"
     aria-label={t("rail.connections")}
     class:drop={dropTarget === "root"}
     ondragover={(e) => over(e, "root")}

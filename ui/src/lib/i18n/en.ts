@@ -348,6 +348,7 @@ export const en = {
   "sync.folderPath": "Folder path",
   "sync.folderUse": "Use folder",
   "sync.now": "Sync now",
+  "sync.join": "Join existing vault",
   "sync.connected": "Sync configured",
 
   "app.theme": "Theme",

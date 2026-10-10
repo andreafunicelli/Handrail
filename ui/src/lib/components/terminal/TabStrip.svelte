@@ -25,7 +25,7 @@
         { label: t("tabs.splitDown"), icon: "splitDown", action: () => splitWith(tab, "col") },
         ...(multi ? [{ label: t("tabs.closePane"), icon: "x" as const, action: () => sessions.closePane(tab.id, tab.activeLeaf) }] : []),
         "sep",
-        { label: t("tabs.close"), icon: "x", shortcut: `${mod}W`, action: () => sessions.closeTab(tab.id) },
+        { label: t("tabs.close"), icon: "x", shortcut: `${mod}⇧W`, action: () => sessions.closeTab(tab.id) },
       ],
     };
   }
@@ -103,7 +103,7 @@
           }}><Icon name="x" size={12} /></button>
       </div>
     {/each}
-    <button class="icon-btn add" title="{t('tabs.new')} ({mod}T)" aria-label={t("tabs.new")} onclick={() => sessions.openLocal().catch(toasts.error)}>
+    <button class="icon-btn add" title="{t('tabs.new')} ({mod}⇧T)" aria-label={t("tabs.new")} onclick={() => sessions.openLocal().catch(toasts.error)}>
       <Icon name="plus" size={15} />
     </button>
   </div>

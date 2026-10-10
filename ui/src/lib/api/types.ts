@@ -216,10 +216,18 @@ export interface HarnessExtensions {
 }
 
 export interface ImportSource {
-  source_id: string;
+  id: string;
   tool: string;
-  path: string;
-  count: number;
+  path?: string | null;
+  count_hint?: number | null;
+}
+
+export interface ImportPreviewArgs {
+  source_id?: string;
+  tool?: string;
+  file_path?: string;
+  mremoteng_password?: string;
+  import_passwords?: boolean;
 }
 
 /** `import_preview` result. The parsed bundle (incl. secrets) stays server-side under `preview_id`. */
@@ -229,20 +237,49 @@ export interface ImportPreview {
   groups: Group[];
   /** Connections without secret values. */
   connections: Connection[];
+  secret_count: number;
   warnings: string[];
   /** `index` into `connections` that duplicates an existing connection (host+port+user). */
   duplicates: { index: number; existing_id: ConnectionId }[];
 }
 
-/** Contract addition: shape of `sync_status()`. */
-export interface SyncStatus {
-  backend: "none" | "github" | "folder";
-  target: string | null;
-  last_sync: string | null;
-  error: string | null;
+export type SyncConfig = { kind: "github"; owner: string; repo: string; branch: string } | { kind: "folder"; path: string };
+
+export interface SyncReport {
+  pulled: number;
+  pushed: number;
+  conflicts: number;
+  warnings: string[];
 }
 
-/** Contract addition: global approval policy. */
+export interface SyncStatus {
+  config?: SyncConfig | null;
+  last_sync_ms?: number | null;
+  last_report?: SyncReport | null;
+  can_join: boolean;
+}
+
+export interface GithubDeviceStart {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  interval: number;
+  expires_in: number;
+}
+
+export interface GithubPoll {
+  done: boolean;
+  status: "pending" | "slow_down" | "expired" | "denied" | "ok";
+  repo?: string | null;
+}
+
+/** Backend errors reject with this shape (aht-core `Error`). */
+export interface IpcError {
+  kind: string;
+  message: string;
+}
+
+/** Global approval policy, stored via `set_setting({ key: "approvals" })`. */
 export interface ApprovalSettings {
   default_mode: ApprovalMode;
   deny_list: string[];

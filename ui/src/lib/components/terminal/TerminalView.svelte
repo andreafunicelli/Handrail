@@ -28,7 +28,8 @@
       }
       // Leave app shortcuts to the window handler.
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && !e.altKey && ["k", "j", ","].includes(e.key.toLowerCase())) return false;
+      const k = e.key.toLowerCase();
+      if (mod && !e.altKey && (["k", "j", ","].includes(k) || (e.shiftKey && ["t", "w"].includes(k)) || e.key === "Tab")) return false;
       return true;
     });
 

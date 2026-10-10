@@ -1,3 +1,5 @@
+import { errorMessage } from "../api/errors";
+
 export type ToastKind = "info" | "success" | "error";
 export interface Toast {
   id: number;
@@ -23,11 +25,6 @@ class Toasts {
   }
 }
 
-export function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === "string") return e;
-  if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
-  return "Unexpected error";
-}
+export { errorMessage };
 
 export const toasts = new Toasts();

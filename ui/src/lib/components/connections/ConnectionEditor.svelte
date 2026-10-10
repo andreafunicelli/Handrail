@@ -23,7 +23,7 @@
   let tagsText = $state(c.tags.join(", "));
   let busy = $state(false);
   let sheet: HTMLElement;
-  let fileInput: HTMLInputElement;
+  let fileInput = $state<HTMLInputElement>();
 
   const hasSavedPassword = c.auth.type === "password";
   const hasSavedKey = c.auth.type === "key";
@@ -91,9 +91,9 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="scrim" onmousedown={close}></div>
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<section
+<div
   class="sheet"
+  tabindex="-1"
   role="dialog"
   aria-modal="true"
   aria-label={isNew ? t("editor.new") : t("editor.edit")}
@@ -150,7 +150,7 @@
       {:else if authType === "key"}
         <textarea class="textarea mono" rows="4" bind:value={keyText} placeholder={hasSavedKey ? t("editor.keyKeep") : "-----BEGIN OPENSSH PRIVATE KEY-----"} spellcheck="false"></textarea>
         <div class="row-actions">
-          <button type="button" class="btn sm" onclick={() => fileInput.click()}><Icon name="key" size={13} />{t("editor.keyPick")}</button>
+          <button type="button" class="btn sm" onclick={() => fileInput?.click()}><Icon name="key" size={13} />{t("editor.keyPick")}</button>
           <input type="file" class="visually-hidden" bind:this={fileInput} onchange={pickKey} tabindex="-1" />
         </div>
         <input class="input" type="password" bind:value={passphrase} placeholder={t("editor.passphrase")} autocomplete="off" />
@@ -216,7 +216,7 @@
     <button class="btn" disabled={!valid || busy} onclick={() => save(true)}>{t("editor.saveConnect")}</button>
     <button class="btn primary" disabled={!valid || busy} onclick={() => save()}>{t("editor.save")}</button>
   </footer>
-</section>
+</div>
 
 <style>
   .scrim {

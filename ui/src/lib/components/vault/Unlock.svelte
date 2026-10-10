@@ -2,7 +2,7 @@
   import VaultFrame from "./VaultFrame.svelte";
   import { t } from "../../i18n";
   import { vault } from "../../stores/vault.svelte";
-  import { errorMessage } from "../../stores/toasts.svelte";
+  import { errorMessage, isSecretKeyRequired } from "../../api/errors";
 
   let password = $state("");
   let secretKey = $state("");
@@ -19,7 +19,10 @@
       await vault.unlock(password, newDevice ? secretKey.trim() : undefined);
       password = "";
     } catch (err) {
-      error = errorMessage(err);
+      if (isSecretKeyRequired(err)) {
+        newDevice = true;
+        error = t("vault.unlock.secretKeyHint");
+      } else error = errorMessage(err);
     } finally {
       busy = false;
     }
