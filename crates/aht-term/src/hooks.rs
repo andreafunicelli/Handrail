@@ -70,14 +70,24 @@ const POSIX_INFO: &str = concat!(
 
 const BASH_HOOK: &str = concat!(
     r#" printf '\033]1337;AhtBegin=%s\007' NONCE; "#,
-    r#"__aht_pc() { local ec=$?; if [ -n "$__aht_ran" ]; then printf '\033]133;D;%s\007' "$ec"; fi; __aht_ran=; "#,
+    r#"__aht_pc() { local ec=$?; if [ -n "$__aht_ran$__aht_old" ]; then printf '\033]133;D;%s\007' "$ec"; fi; __aht_ran=; __aht_arm=; "#,
     r#"printf '\033]1337;AhtKV=ctx=%s\007' NONCE; "#,
     r#"printf '\033]7;file://%s%s\007' "$HOSTNAME" "$PWD"; return $ec; }; "#,
     r#"case ";$PROMPT_COMMAND;" in *";__aht_pc;"*) ;; *) PROMPT_COMMAND="__aht_pc${PROMPT_COMMAND:+;$PROMPT_COMMAND}";; esac; "#,
     r#"case "$PS1" in *'133;A'*) ;; *) PS1='\[\033]133;A\007\]'"$PS1"'\[\033]133;B\007\]';; esac; "#,
-    // PS0 is expanded in the main shell after a line is read: the array subscript is an
-    // arithmetic context that sets the "a command ran" flag without printing anything.
-    r#"__aht_z=(); PS0='${__aht_z[__aht_ran=1]}\033]133;C\007'; "#,
+    r#"__aht_z=(); "#,
+    // bash >= 4.4: PS0 is expanded in the main shell after a line is read; the array subscript
+    // is an arithmetic context that sets the "a command ran" flag without printing anything.
+    r#"if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 404)); then PS0='${__aht_z[__aht_ran=1]}\033]133;C\007'; "#,
+    // Older bash (macOS ships 3.2) has no PS0. D is then emitted at every prompt: a line that
+    // is only a subshell `( ... )` never reaches the DEBUG trap, so "did a command run" cannot be
+    // known, and a spurious D after an empty Enter is ignored when no agent command is pending.
+    // C comes from a DEBUG trap armed when PS1 is drawn and disarmed by `__aht_pc`, so commands
+    // inside PROMPT_COMMAND never count. A DEBUG trap the user already set is left alone.
+    r#"else __aht_old=1; __aht_dbg() { [ -n "$__aht_arm" ] || return 0; __aht_arm=; case "$BASH_COMMAND" in __aht_pc*) return 0;; esac; "#,
+    r#"__aht_ran=1; printf '\033]133;C\007'; }; "#,
+    r#"case "$(trap -p DEBUG)" in ''|*__aht_dbg*) trap __aht_dbg DEBUG;; esac; "#,
+    r#"case "$PS1" in *__aht_arm*) ;; *) PS1="$PS1"'${__aht_z[__aht_arm=1]}';; esac; fi; "#,
     r#"printf '\033]1337;AhtKV=shell=bash\007'; "#,
     "POSIX_INFO",
     r#"printf '\033]1337;AhtEnd=%s\007' NONCE"#,
