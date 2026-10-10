@@ -257,6 +257,50 @@ export interface SyncStatus {
   last_sync_ms?: number | null;
   last_report?: SyncReport | null;
   can_join: boolean;
+  /** Background sync on unlock, after edits and every few minutes. */
+  auto: boolean;
+  /** A sync is running right now. */
+  syncing: boolean;
+  /** Error of the last attempt; cleared by the next successful sync. */
+  last_error?: string | null;
+}
+
+/** A newer release found by the updater. */
+export interface UpdateInfo {
+  version: string;
+  current_version: string;
+  notes?: string | null;
+  date?: string | null;
+}
+
+export type CloudDrive = "icloud" | "dropbox" | "onedrive" | "google_drive";
+
+/** A cloud-drive folder found on this device (`sync_folder_presets`). */
+export interface FolderPreset {
+  drive: CloudDrive;
+  label: string;
+  /** `<drive>/AIHubTerm` */
+  path: string;
+  /** Another device already syncs a vault there. */
+  has_vault: boolean;
+}
+
+export interface SnapshotInfo {
+  name: string;
+  created_ms: number;
+  size: number;
+}
+
+/** A version discarded by a last-writer-wins merge (payload stays in the backend). */
+export interface ConflictView {
+  file_id: string;
+  recorded_at_ms: number;
+  item_type: string;
+  label: string;
+  loser_ms: number;
+  loser_device: string;
+  loser_deleted: boolean;
+  winner_ms: number;
 }
 
 export interface GithubDeviceStart {

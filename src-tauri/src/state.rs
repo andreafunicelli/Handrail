@@ -33,6 +33,8 @@ pub struct AppState {
     pub import_previews: Mutex<HashMap<String, aht_import::ImportBundle>>,
     pub github_device: Mutex<Option<aht_sync::github_device_flow::DeviceCode>>,
     pub pending_github_token: Mutex<Option<String>>,
+    /// Held for a whole sync round and while sync settings change: one sync at a time.
+    pub sync_lock: Mutex<()>,
     pub terminal: crate::terminal::TerminalHub,
 }
 
@@ -47,6 +49,7 @@ impl AppState {
             import_previews: Mutex::new(HashMap::new()),
             github_device: Mutex::new(None),
             pending_github_token: Mutex::new(None),
+            sync_lock: Mutex::new(()),
             terminal: crate::terminal::TerminalHub::default(),
             paths,
         })

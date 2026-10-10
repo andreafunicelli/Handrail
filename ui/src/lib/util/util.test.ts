@@ -6,6 +6,9 @@ import { canSetApprovalMode, needsTypedConfirm } from "./approval";
 import { buildTree, groupPath, isDescendant } from "./tree";
 import { passwordStrength } from "../stores/vault.svelte";
 import { joinArgs, splitArgs } from "./args";
+import { formatBytes, relativeTime } from "./time";
+import { syncChangedVault } from "../stores/vaultData";
+import type { SyncStatus } from "../api/types";
 
 describe("fuzzy", () => {
   it("matches subsequences and rejects non-matches", () => {
@@ -142,5 +145,46 @@ describe("args", () => {
   it("round-trips through joinArgs", () => {
     const cases = [["--a", "b c"], ["it's", 'say "x"'], ["", "C:\\p\\"], ["mixed '\"\\ "]];
     for (const c of cases) expect(splitArgs(joinArgs(c))).toEqual(c);
+  });
+});
+
+describe("time", () => {
+  const now = Date.UTC(2026, 9, 10, 12, 0, 0);
+  it("formats relative times", () => {
+    expect(relativeTime(now - 10_000, now)).toBe("just now");
+    expect(relativeTime(now + 60_000, now)).toBe("just now");
+    expect(relativeTime(now - 5 * 60_000, now)).toBe("5 min ago");
+    expect(relativeTime(now - 3 * 3_600_000, now)).toBe("3 h ago");
+    expect(relativeTime(now - 26 * 3_600_000, now)).toBe("yesterday");
+    expect(relativeTime(now - 3 * 86_400_000, now)).toBe("3 days ago");
+    expect(relativeTime(now - 30 * 86_400_000, now)).toBe(new Date(now - 30 * 86_400_000).toLocaleDateString());
+  });
+  it("formats sizes", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(4300)).toBe("4.2 KB");
+    expect(formatBytes(50 * 1024)).toBe("50 KB");
+    expect(formatBytes(3 * 1024 * 1024)).toBe("3.0 MB");
+  });
+});
+
+describe("syncChangedVault", () => {
+  const st = (at: number | null, pulled = 0, conflicts = 0, extra: Partial<SyncStatus> = {}): SyncStatus => ({
+    can_join: false,
+    auto: true,
+    syncing: false,
+    last_error: null,
+    last_sync_ms: at,
+    last_report: { pulled, pushed: 0, conflicts, warnings: [] },
+    ...extra,
+  });
+  it("reloads only when a completed sync pulled or merged something", () => {
+    expect(syncChangedVault(st(1), st(2, 2))).toBe(true);
+    expect(syncChangedVault(st(1), st(2, 0, 1))).toBe(true);
+    expect(syncChangedVault(st(1), st(2))).toBe(false);
+    expect(syncChangedVault(st(2, 2), st(2, 2)), "same sync reported twice").toBe(false);
+    expect(syncChangedVault(st(1), st(1, 2, 0, { syncing: true })), "still running").toBe(false);
+    expect(syncChangedVault(st(1), st(2, 2, 0, { last_error: "offline" }))).toBe(false);
+    // The listener started after the sync had begun: still reloads.
+    expect(syncChangedVault(null, st(2, 2))).toBe(true);
   });
 });

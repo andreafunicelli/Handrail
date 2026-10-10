@@ -68,10 +68,21 @@ Set `AIHUBTERM_DATA_DIR=<dir>` to run against a throwaway vault, and `AIHUBTERM_
 
 Design spec: [`docs/superpowers/specs/2026-10-10-aihubterm-design.md`](docs/superpowers/specs/2026-10-10-aihubterm-design.md)
 
+## Installers and updates
+
+The **Release** workflow (`.github/workflows/release.yml`) builds a universal macOS `.dmg` and Windows `.exe`/`.msi` installers:
+- on every push to `main`, published as a GitHub Release `v<major>.<minor>.<build number>`;
+- on pull requests, as downloadable workflow artifacts (no release).
+
+The version lives only in the workspace `Cargo.toml`; CI stamps the build number into it. Builds are not code-signed yet (macOS: right-click > Open the first time; Windows: SmartScreen > More info > Run anyway).
+
+Installed apps check for updates on start and every 6 hours and offer "Update and restart"; they never restart on their own. Updates need:
+1. An updater key pair: `npx tauri signer generate -w ~/.tauri/aihubterm-updater.key`. The public key goes in `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`; the private key and its password go in the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+2. A public repository `andreafunicelli/aihubterm-releases` (with a README so `main` exists) and a fine-grained token with "Contents: read and write" on it in the secret `RELEASES_TOKEN`. The app repository is private, and the updater cannot download from a private repository.
+
 ## Status
 
 Pre-release (v0.1, milestones M1–M3 in place). Before a public release:
-- Register a GitHub OAuth App and set its client ID (`AIHUBTERM_GITHUB_CLIENT_ID`).
 - Choose a license.
 - Set up code signing and the updater.
 - Confirm with Anthropic and OpenAI that the subscription integration complies with their terms.

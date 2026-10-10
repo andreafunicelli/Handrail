@@ -24,6 +24,10 @@ import type {
   SecretId,
   SessionDataEvent,
   SessionInfo,
+  ConflictView,
+  FolderPreset,
+  SnapshotInfo,
+  UpdateInfo,
   SyncReport,
   SyncStatus,
   VaultStatus,
@@ -38,6 +42,7 @@ export interface EventMap {
   "session://host_key": HostKeyEvent;
   "approval://requested": ApprovalRequest;
   "agent://event": AgentEventEnvelope;
+  "sync://status": SyncStatus;
 }
 export type EventName = keyof EventMap;
 
@@ -50,6 +55,8 @@ export interface Api {
   vaultCreate(password: string): Promise<{ secret_key: string }>;
   vaultUnlock(password: string, secretKey?: string): Promise<void>;
   vaultLock(): Promise<void>;
+  /** Saves the Emergency Kit text to the Downloads folder; returns the file path. */
+  saveEmergencyKit(contents: string): Promise<string>;
 
   // connections & groups
   listConnections(): Promise<Connection[]>;
@@ -101,6 +108,26 @@ export interface Api {
   syncConfigureFolder(path: string): Promise<void>;
   syncJoin(): Promise<void>;
   syncNow(): Promise<SyncReport>;
+  syncSetAuto(enabled: boolean): Promise<void>;
+  syncDisconnect(): Promise<void>;
+  syncFolderPresets(): Promise<FolderPreset[]>;
+
+  // snapshots & conflict history
+  vaultSnapshots(): Promise<SnapshotInfo[]>;
+  vaultSnapshotCreate(): Promise<SnapshotInfo>;
+  vaultSnapshotRestore(name: string): Promise<void>;
+  vaultConflicts(): Promise<ConflictView[]>;
+  vaultConflictRestore(fileId: string, recordedAtMs: number): Promise<void>;
+  vaultConflictsClear(): Promise<void>;
+
+  // app & updates
+  appVersion(): Promise<string>;
+  /** Asks the release endpoint for a newer version; `null` when up to date. */
+  checkForUpdate(): Promise<UpdateInfo | null>;
+  /** Downloads and installs the update found by the last check. `progress` gets 0..1, or null
+   *  while the size is unknown. On Windows the installer then closes and restarts the app. */
+  installUpdate(progress: (fraction: number | null) => void): Promise<void>;
+  restartApp(): Promise<void>;
 
   // misc
   getSetting<T = unknown>(key: string): Promise<T | null>;

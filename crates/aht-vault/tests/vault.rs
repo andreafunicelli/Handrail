@@ -632,6 +632,125 @@ fn snapshot_rotation_keeps_last_ten() {
 }
 
 #[test]
+fn tentative_snapshot_can_be_dropped_without_losing_old_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut v, _) = new_vault(dir.path());
+    v.put(&secret("x")).unwrap();
+    let mut names = Vec::new();
+    for _ in 0..MAX_SNAPSHOTS {
+        names.push(v.snapshot().unwrap().name);
+        tick();
+    }
+    // A tentative snapshot does not push the oldest one out...
+    let t = v.snapshot_unpruned().unwrap();
+    assert_eq!(v.list_snapshots().unwrap().len(), MAX_SNAPSHOTS + 1);
+    // ...so dropping it again leaves exactly what was there.
+    v.delete_snapshot(&t.name).unwrap();
+    let kept: Vec<String> = v
+        .list_snapshots()
+        .unwrap()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(kept, names);
+    // Keeping it prunes the oldest.
+    tick();
+    let t = v.snapshot_unpruned().unwrap();
+    v.prune_snapshots().unwrap();
+    let kept = v.list_snapshots().unwrap();
+    assert_eq!(kept.len(), MAX_SNAPSHOTS);
+    assert_eq!(kept.last().unwrap().name, t.name);
+    assert_ne!(kept[0].name, names[0]);
+
+    assert!(matches!(
+        v.delete_snapshot(&t.name.replace(".snap", "x.snap")),
+        Err(VaultError::NotFound(_))
+    ));
+    assert!(matches!(
+        v.delete_snapshot("../manifest.json"),
+        Err(VaultError::Invalid(_))
+    ));
+}
+
+#[test]
+fn revision_tracks_writes_and_merges_only() {
+    let da = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let (mut a, sk) = new_vault(da.path());
+    let r0 = a.revision();
+    let s = secret("one");
+    a.put(&s).unwrap();
+    let r1 = a.revision();
+    assert!(r1 > r0);
+    // Reads, snapshots and raw file listing do not count as changes.
+    a.get::<Secret>(&s.id.to_string()).unwrap();
+    a.list::<Secret>().unwrap();
+    a.snapshot().unwrap();
+    a.raw_files().unwrap();
+    assert_eq!(a.revision(), r1);
+    assert!(a.delete::<Secret>(&s.id.to_string()).unwrap());
+    assert!(a.revision() > r1);
+
+    let manifest = a.raw_files().unwrap().remove(0);
+    let mut b = Vault::join(db.path(), &manifest.bytes).unwrap();
+    b.unlock(PW, &sk).unwrap();
+    let rb = b.revision();
+    sync(&a, &mut b);
+    let rb1 = b.revision();
+    assert!(rb1 > rb, "a merge that adds files is a change");
+    // Merging the same files again changes nothing.
+    sync(&a, &mut b);
+    assert_eq!(b.revision(), rb1);
+}
+
+#[test]
+fn restore_conflict_brings_back_the_losing_version() {
+    let da = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let (mut a, sk) = new_vault(da.path());
+    let manifest = a.raw_files().unwrap().remove(0);
+    let mut b = Vault::join(db.path(), &manifest.bytes).unwrap();
+    b.unlock(PW, &sk).unwrap();
+
+    a.put(&Setting {
+        key: "theme".into(),
+        value: json!("from-a"),
+    })
+    .unwrap();
+    tick();
+    b.put(&Setting {
+        key: "theme".into(),
+        value: json!("from-b"),
+    })
+    .unwrap();
+    // B's edit is newer: merging it into A records A's version as the loser.
+    sync(&b, &mut a);
+    assert_eq!(
+        a.get::<Setting>("theme").unwrap().unwrap().value,
+        json!("from-b")
+    );
+    let rec = a.conflict_history().unwrap().pop().unwrap();
+    assert_eq!(rec.loser.payload["value"], json!("from-a"));
+
+    a.restore_conflict(&rec.file_id, rec.recorded_at_ms)
+        .unwrap();
+    assert_eq!(
+        a.get::<Setting>("theme").unwrap().unwrap().value,
+        json!("from-a")
+    );
+    // The restored version is a fresh edit, so it wins on the other device too.
+    sync(&a, &mut b);
+    assert_eq!(
+        b.get::<Setting>("theme").unwrap().unwrap().value,
+        json!("from-a")
+    );
+    assert!(matches!(
+        a.restore_conflict(&rec.file_id, rec.recorded_at_ms + 1),
+        Err(VaultError::NotFound(_))
+    ));
+}
+
+#[test]
 fn debug_output_redacts_secrets() {
     let dir = tempfile::tempdir().unwrap();
     let (mut v, sk) = new_vault(dir.path());

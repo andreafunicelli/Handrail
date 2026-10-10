@@ -10,7 +10,7 @@ use aht_sync::{FolderBackend, GitHubBackend, SyncBackend, SyncReport, SyncState}
 use aht_vault::{Setting, Vault};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 // ---------- import ----------
 
@@ -208,15 +208,34 @@ pub enum SyncConfig {
     },
 }
 
-#[derive(Default, Serialize, Deserialize)]
-struct SyncFile {
-    config: Option<SyncConfig>,
+/// Device-local sync settings and progress (`sync-state.json`, never synced).
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SyncFile {
+    pub(crate) config: Option<SyncConfig>,
     state: SyncState,
     last_sync_ms: Option<i64>,
     last_report: Option<SyncReport>,
+    /// Background sync (see `autosync`). On unless the user turned it off.
+    #[serde(default = "yes")]
+    pub(crate) auto: bool,
+    #[serde(default)]
+    last_error: Option<String>,
 }
 
-fn load_sync(state: &AppState) -> SyncFile {
+impl Default for SyncFile {
+    fn default() -> Self {
+        Self {
+            config: None,
+            state: SyncState::default(),
+            last_sync_ms: None,
+            last_report: None,
+            auto: true,
+            last_error: None,
+        }
+    }
+}
+
+pub(crate) fn load_sync(state: &AppState) -> SyncFile {
     std::fs::read(&state.paths.sync_state_file)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -229,30 +248,104 @@ fn save_sync(state: &AppState, f: &SyncFile) -> Result<()> {
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct SyncStatus {
     config: Option<SyncConfig>,
     last_sync_ms: Option<i64>,
     last_report: Option<SyncReport>,
     /// Remote holds a vault this device has not joined yet.
     can_join: bool,
+    auto: bool,
+    /// A sync (manual or background) is running now.
+    syncing: bool,
+    /// Error of the last attempt; cleared by the next successful sync.
+    last_error: Option<String>,
+}
+
+fn status_of(f: &SyncFile, initialized: bool, syncing: bool) -> SyncStatus {
+    SyncStatus {
+        can_join: f.config.is_some() && !initialized,
+        config: f.config.clone(),
+        last_sync_ms: f.last_sync_ms,
+        last_report: f.last_report.clone(),
+        auto: f.auto,
+        syncing,
+        last_error: f.last_error.clone(),
+    }
+}
+
+async fn current_status(state: &AppState) -> SyncStatus {
+    let f = load_sync(state);
+    let initialized = state.vault.lock().await.status().initialized;
+    status_of(&f, initialized, state.sync_lock.try_lock().is_err())
+}
+
+/// Tell the UI that sync status changed (`sync://status`).
+async fn emit_status(app: &AppHandle) {
+    let status = current_status(&app.state::<AppState>()).await;
+    let _ = app.emit("sync://status", status);
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sync_status(state: State<'_, AppState>) -> Result<SyncStatus> {
-    let f = load_sync(&state);
-    let initialized = state.vault.lock().await.status().initialized;
-    Ok(SyncStatus {
-        can_join: f.config.is_some() && !initialized,
-        config: f.config,
-        last_sync_ms: f.last_sync_ms,
-        last_report: f.last_report,
+    Ok(current_status(&state).await)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sync_set_auto(app: AppHandle, enabled: bool) -> Result<()> {
+    {
+        let state = app.state::<AppState>();
+        let _guard = state.sync_lock.lock().await;
+        let mut f = load_sync(&state);
+        f.auto = enabled;
+        save_sync(&state, &f)?;
+    }
+    emit_status(&app).await;
+    Ok(())
+}
+
+/// Stop syncing on this device. The vault, the remote copy and other devices are untouched.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sync_disconnect(app: AppHandle) -> Result<()> {
+    {
+        let state = app.state::<AppState>();
+        let _guard = state.sync_lock.lock().await;
+        let auto = load_sync(&state).auto;
+        save_sync(
+            &state,
+            &SyncFile {
+                auto,
+                ..SyncFile::default()
+            },
+        )?;
+        *state.pending_github_token.lock().await = None;
+    }
+    emit_status(&app).await;
+    Ok(())
+}
+
+/// iCloud Drive, Dropbox, OneDrive and Google Drive folders found on this device.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sync_folder_presets(app: AppHandle) -> Result<Vec<aht_sync::presets::FolderPreset>> {
+    let home = app.path().home_dir().map_err(err)?;
+    tokio::task::spawn_blocking(move || {
+        aht_sync::presets::folder_presets(&home, aht_sync::presets::Os::current())
     })
+    .await
+    .map_err(err)
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sync_configure_github_start(state: State<'_, AppState>) -> Result<DeviceCode> {
-    let code = github_device_flow::start(&github_device_flow::client_id(), "repo")
+    let client_id = github_device_flow::client_id();
+    if !github_device_flow::is_configured(&client_id) {
+        return Err(Error::Invalid(
+            "GitHub sync is not set up in this build: no OAuth client ID \
+             (set AIHUBTERM_GITHUB_CLIENT_ID)"
+                .into(),
+        ));
+    }
+    let code = github_device_flow::start(&client_id, "repo")
         .await
         .map_err(Error::from)?;
     *state.github_device.lock().await = Some(code.clone());
@@ -298,14 +391,15 @@ pub async fn sync_configure_github_poll(state: State<'_, AppState>) -> Result<Po
     let backend = GitHubBackend::new(&owner, &repo, "main", &token);
     backend.ensure_repo().await.map_err(Error::from)?;
     store_token(&state, token).await?;
-    let mut f = load_sync(&state);
-    f.config = Some(SyncConfig::Github {
-        owner: owner.clone(),
-        repo: repo.clone(),
-        branch: "main".into(),
-    });
-    f.state = SyncState::default();
-    save_sync(&state, &f)?;
+    configure(
+        &state,
+        SyncConfig::Github {
+            owner: owner.clone(),
+            repo: repo.clone(),
+            branch: "main".into(),
+        },
+    )
+    .await?;
     Ok(PollOutcome {
         done: true,
         status: "ok",
@@ -364,13 +458,22 @@ async fn github_token(state: &AppState) -> Result<String> {
         .ok_or_else(|| Error::Auth("GitHub sign-in required".into()))
 }
 
+/// Switch to a new sync target, starting from a clean sync state.
+async fn configure(state: &AppState, config: SyncConfig) -> Result<()> {
+    let _guard = state.sync_lock.lock().await;
+    let mut f = load_sync(state);
+    f.config = Some(config);
+    f.state = SyncState::default();
+    f.last_sync_ms = None;
+    f.last_report = None;
+    f.last_error = None;
+    save_sync(state, &f)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sync_configure_folder(state: State<'_, AppState>, path: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&path)?;
-    let mut f = load_sync(&state);
-    f.config = Some(SyncConfig::Folder { path });
-    f.state = SyncState::default();
-    save_sync(&state, &f)
+    configure(&state, SyncConfig::Folder { path }).await
 }
 
 async fn backend(state: &AppState, cfg: &SyncConfig) -> Result<Box<dyn SyncBackend>> {
@@ -407,36 +510,71 @@ pub async fn sync_join(state: State<'_, AppState>) -> Result<()> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn sync_now(state: State<'_, AppState>) -> Result<SyncReport> {
+pub async fn sync_now(app: AppHandle) -> Result<SyncReport> {
+    run_sync(&app).await
+}
+
+/// One sync round, shared by "Sync now" and the background syncer: one at a time, result
+/// recorded in `sync-state.json` and announced with `sync://status`.
+pub(crate) async fn run_sync(app: &AppHandle) -> Result<SyncReport> {
+    let state = app.state::<AppState>();
+    let guard = state.sync_lock.lock().await;
+    emit_status(app).await;
     let mut f = load_sync(&state);
+    let result = sync_round(&state, &mut f).await;
+    match &result {
+        Ok(report) => {
+            f.last_sync_ms = Some(chrono_ms());
+            f.last_report = Some(report.clone());
+            f.last_error = None;
+        }
+        Err(e) => f.last_error = Some(e.to_string()),
+    }
+    let saved = save_sync(&state, &f);
+    drop(guard);
+    emit_status(app).await;
+    saved?;
+    result
+}
+
+async fn sync_round(state: &AppState, f: &mut SyncFile) -> Result<SyncReport> {
     let cfg = f
         .config
         .clone()
         .ok_or_else(|| Error::Invalid("sync not configured".into()))?;
-    let b = backend(&state, &cfg).await?;
+    let b = backend(state, &cfg).await?;
     // Persist a token obtained before the vault was unlocked on this device.
     // Take the token on its own line: holding this guard across store_token would deadlock.
     let pending = state.pending_github_token.lock().await.take();
     if let Some(t) = pending {
-        if let Err(e) = store_token(&state, t.clone()).await {
+        if let Err(e) = store_token(state, t.clone()).await {
             *state.pending_github_token.lock().await = Some(t);
             return Err(e);
         }
     }
     // Note: the vault stays locked for the whole sync, so other commands wait for it.
-    let report = {
-        let mut vault = state.vault.lock().await;
-        if vault.status().locked {
-            return Err(Error::VaultLocked);
+    let mut vault = state.vault.lock().await;
+    if vault.status().locked {
+        return Err(Error::VaultLocked);
+    }
+    // Snapshot the pre-sync state so a bad merge can be rolled back. Kept only when the sync
+    // changed local files; otherwise every routine sync would rotate real history out.
+    let before = vault.revision();
+    let snap = vault.snapshot_unpruned().ok();
+    let result = aht_sync::sync_once(&mut vault, b.as_ref(), &mut f.state)
+        .await
+        .map_err(Error::from);
+    if let Some(snap) = snap {
+        let kept = if vault.revision() != before {
+            vault.prune_snapshots()
+        } else {
+            vault.delete_snapshot(&snap.name)
+        };
+        if let Err(e) = kept {
+            tracing::warn!(error = %e, "could not tidy pre-sync snapshot");
         }
-        aht_sync::sync_once(&mut vault, b.as_ref(), &mut f.state)
-            .await
-            .map_err(Error::from)?
-    };
-    f.last_sync_ms = Some(chrono_ms());
-    f.last_report = Some(report.clone());
-    save_sync(&state, &f)?;
-    Ok(report)
+    }
+    result
 }
 
 fn chrono_ms() -> i64 {

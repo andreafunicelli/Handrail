@@ -7,6 +7,8 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 ## Vault
 - `vault_status() -> { initialized: bool, locked: bool }`
 - `vault_create({ password }) -> { secret_key: string }` — Secret Key shown once (Emergency Kit)
+- `save_emergency_kit({ contents }) -> string` — writes `AIHubTerm Emergency Kit.txt` to Downloads
+  (never overwrites; owner-only on Unix) and returns the path. The webview cannot save `blob:` downloads.
 - `vault_unlock({ password, secret_key? }) -> void` (secret_key needed only on a new device)
 - `vault_lock() -> void`
 
@@ -47,12 +49,36 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
   -> { preview_id, tool, groups, connections, secret_count, warnings, duplicates: { index, existing_id }[] }`
   (bundle and secret values stay in the backend)
 - `import_apply({ preview_id, skip_indices: number[] }) -> { imported }`
-- `sync_status() -> { config?: {kind:"github",owner,repo,branch}|{kind:"folder",path}, last_sync_ms?, last_report?, can_join }`
+- `sync_status() -> { config?: {kind:"github",owner,repo,branch}|{kind:"folder",path}, last_sync_ms?, last_report?, can_join,
+  auto, syncing, last_error? }`
+- Event `sync://status` (same payload as `sync_status`) when a sync starts or ends and when settings change.
+  While the vault is unlocked and `auto` is on, the backend syncs after unlock, ~3 s after a local edit
+  and every 5 min; failures back off from 30 s to 15 min.
+- `sync_set_auto({ enabled })`, `sync_disconnect()` (this device only; vault and remote untouched)
+- `sync_folder_presets() -> { drive: "icloud"|"dropbox"|"onedrive"|"google_drive", label, path, has_vault }[]`
+  (cloud-drive folders found on this device; `path` is `<drive>/AIHubTerm`)
 - `sync_configure_github_start() -> { device_code, user_code, verification_uri, interval, expires_in }`
 - `sync_configure_github_poll() -> { done, status: "pending"|"slow_down"|"expired"|"denied"|"ok", repo? }`
   (poll every `interval` s; creates private repo `aihubterm-vault`)
-- `sync_configure_folder({ path })`, `sync_join()` (new device: pull manifest, then unlock with Secret Key),
+- `sync_configure_folder({ path })`, `sync_join()` (new device: pull manifest, then unlock with Secret Key;
+  rejects `{ kind: "not_found" }` when the target holds no vault yet),
   `sync_now() -> { pulled, pushed, conflicts, warnings }`
+
+## Snapshots & conflict history
+- `vault_snapshots() -> { name, created_ms, size }[]` (newest first; max 10 kept)
+- `vault_snapshot_create() -> { name, created_ms, size }`, `vault_snapshot_restore({ name })`
+  (takes a safety snapshot first; the rollback is written as fresh edits so it wins on sync).
+  Each sync takes a snapshot first and keeps it only if the sync changed local files.
+- `vault_conflicts() -> { file_id, recorded_at_ms, item_type, label, loser_ms, loser_device, loser_deleted, winner_ms }[]`
+  (versions discarded by last-writer-wins merges, newest first; no payloads)
+- `vault_conflict_restore({ file_id, recorded_at_ms })` (re-applies the discarded version as a new edit),
+  `vault_conflicts_clear()`
+
+## App & updates
+- `app_version() -> string` (workspace `Cargo.toml` version; release builds stamp `<major>.<minor>.<build>`)
+- `restart_app()` (after an installed update on macOS/Linux)
+- Updates use `@tauri-apps/plugin-updater` (`updater:default` capability) against
+  `https://github.com/andreafunicelli/aihubterm-releases/releases/latest/download/latest.json`.
 
 ## Misc
 - `get_setting({ key }) -> any|null`, `set_setting({ key, value })`, `list_secrets() -> { id, kind, label }[]`

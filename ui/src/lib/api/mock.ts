@@ -13,6 +13,8 @@ import type {
   Provider,
   SessionInfo,
   SyncStatus,
+  ConflictView,
+  SnapshotInfo,
 } from "./types";
 import { b64ToStr, strToB64 } from "../util/b64";
 import { uuid } from "../util/id";
@@ -201,7 +203,36 @@ export function createMockApi(): Api {
     default_mode: "confirm_all",
     deny_list: ["shutdown", "reboot"],
   };
-  let sync: SyncStatus = { config: null, last_sync_ms: null, last_report: null, can_join: false };
+  let sync: SyncStatus = { config: null, last_sync_ms: null, last_report: null, can_join: false, auto: true, syncing: false, last_error: null };
+  const hour = 3_600_000;
+  const snapName = (ms: number) => `${String(ms).padStart(15, "0")}-${Math.random().toString(16).slice(2, 10)}.snap`;
+  let snapshots: SnapshotInfo[] = [3, 26, 50].map((h) => {
+    const created_ms = Date.now() - h * hour;
+    return { name: snapName(created_ms), created_ms, size: 4096 + h * 37 };
+  });
+  let conflicts: ConflictView[] = [
+    {
+      file_id: "9f2c1d0e8b7a6f5e4d3c2b1a09f8e7d6",
+      recorded_at_ms: Date.now() - 2 * hour,
+      item_type: "connection",
+      label: "web-01",
+      loser_ms: Date.now() - 3 * hour,
+      loser_device: "a1b2c3d4-0000-4000-8000-000000000001",
+      loser_deleted: false,
+      winner_ms: Date.now() - 2.5 * hour,
+    },
+    {
+      file_id: "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      recorded_at_ms: Date.now() - 30 * hour,
+      item_type: "secret",
+      label: "db password",
+      loser_ms: Date.now() - 31 * hour,
+      loser_device: "a1b2c3d4-0000-4000-8000-000000000002",
+      loser_deleted: true,
+      winner_ms: Date.now() - 30.5 * hour,
+    },
+  ];
+  const syncEvent = () => emit("sync://status", structuredClone(sync));
   const settingsKv = new Map<string, unknown>();
   const fail = (kind: string, message: string) => Object.assign(new Error(message), { kind, message });
   let githubPolls = 0;
@@ -421,6 +452,36 @@ export function createMockApi(): Api {
     },
     async vaultLock() {
       vault.locked = true;
+    },
+    async appVersion() {
+      return "0.1.0";
+    },
+    async checkForUpdate() {
+      await sleep(400);
+      // `?update` in the URL simulates a published update.
+      const offer = typeof location !== "undefined" && new URLSearchParams(location.search).has("update");
+      return offer ? { version: "0.1.42", current_version: "0.1.0", notes: "Test build", date: new Date().toISOString() } : null;
+    },
+    async installUpdate(progress) {
+      for (let i = 0; i <= 10; i++) {
+        progress(i / 10);
+        await sleep(80);
+      }
+    },
+    async restartApp() {
+      location.reload();
+    },
+    async saveEmergencyKit(contents) {
+      // In a real browser a blob download works; the desktop webview needs the backend command.
+      if (typeof document !== "undefined" && typeof URL.createObjectURL === "function") {
+        const url = URL.createObjectURL(new Blob([contents], { type: "text/plain" }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "AIHubTerm Emergency Kit.txt";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+      return "~/Downloads/AIHubTerm Emergency Kit.txt";
     },
 
     async listConnections() {
@@ -691,16 +752,69 @@ export function createMockApi(): Api {
       return { done: false, status: "pending" };
     },
     async syncConfigureFolder(path) {
-      sync = { ...sync, config: { kind: "folder", path }, last_sync_ms: Date.now() };
+      sync = { ...sync, config: { kind: "folder", path }, last_sync_ms: null, last_report: null, last_error: null };
+      syncEvent();
     },
     async syncJoin() {
+      if (!sync.config) throw fail("invalid", "sync not configured");
       await sleep(300);
+      // Pretend only GitHub and the Dropbox preset already hold a vault.
+      if (sync.config.kind === "folder" && !sync.config.path.includes("Dropbox")) {
+        throw fail("not_found", "remote has no vault manifest");
+      }
+      vault.initialized = true;
+      vault.locked = true;
     },
     async syncNow() {
+      if (!sync.config) throw fail("invalid", "sync not configured");
+      sync = { ...sync, syncing: true };
+      syncEvent();
       await sleep(500);
       const report = { pulled: 2, pushed: 1, conflicts: 0, warnings: [] };
-      sync = { ...sync, last_sync_ms: Date.now(), last_report: report };
+      sync = { ...sync, syncing: false, last_sync_ms: Date.now(), last_report: report, last_error: null };
+      syncEvent();
       return report;
+    },
+    async syncSetAuto(enabled) {
+      sync = { ...sync, auto: enabled };
+      syncEvent();
+    },
+    async syncDisconnect() {
+      sync = { ...sync, config: null, last_sync_ms: null, last_report: null, last_error: null };
+      syncEvent();
+    },
+    async syncFolderPresets() {
+      const home = "/Users/dev";
+      return [
+        { drive: "icloud", label: "iCloud Drive", path: `${home}/Library/Mobile Documents/com~apple~CloudDocs/AIHubTerm`, has_vault: false },
+        { drive: "dropbox", label: "Dropbox", path: `${home}/Library/CloudStorage/Dropbox/AIHubTerm`, has_vault: true },
+      ];
+    },
+
+    async vaultSnapshots() {
+      return structuredClone([...snapshots].sort((a, b) => b.created_ms - a.created_ms));
+    },
+    async vaultSnapshotCreate() {
+      const created_ms = Date.now();
+      const snap = { name: snapName(created_ms), created_ms, size: 4200 };
+      snapshots = [...snapshots, snap].sort((a, b) => a.created_ms - b.created_ms).slice(-10);
+      return structuredClone(snap);
+    },
+    async vaultSnapshotRestore(name) {
+      if (!snapshots.some((s) => s.name === name)) throw fail("not_found", `snapshot ${name}`);
+      await sleep(300);
+      await this.vaultSnapshotCreate();
+    },
+    async vaultConflicts() {
+      return structuredClone(conflicts);
+    },
+    async vaultConflictRestore(fileId, recordedAtMs) {
+      if (!conflicts.some((c) => c.file_id === fileId && c.recorded_at_ms === recordedAtMs)) {
+        throw fail("not_found", `conflict ${fileId}@${recordedAtMs}`);
+      }
+    },
+    async vaultConflictsClear() {
+      conflicts = [];
     },
     async getSetting(key) {
       return (settingsKv.has(key) ? structuredClone(settingsKv.get(key)) : null) as never;

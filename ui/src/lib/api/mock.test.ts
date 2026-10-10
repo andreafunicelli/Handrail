@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createMockApi } from "./mock";
 import { b64ToStr, strToB64 } from "../util/b64";
 import { needsMremotengPassword } from "../util/importers";
-import type { AgentEvent } from "./types";
+import type { AgentEvent, SyncStatus } from "./types";
 
 const wait = (cond: () => boolean, ms = 5000) =>
   new Promise<void>((res, rej) => {
@@ -82,6 +82,54 @@ describe("mock api", () => {
     expect(imported).toBe(preview.connections.length - 1);
     expect((await api.listConnections()).length).toBe(before + imported);
     await expect(api.importApply(preview.preview_id, [])).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("reports the version and installs an update with progress", async () => {
+    const api = createMockApi();
+    expect(await api.appVersion()).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(await api.checkForUpdate()).toBeNull();
+    const seen: (number | null)[] = [];
+    await api.installUpdate((p) => seen.push(p));
+    expect(seen[0]).toBe(0);
+    expect(seen[seen.length - 1]).toBe(1);
+  });
+
+  it("syncs with status events, auto-sync and disconnect", async () => {
+    const api = createMockApi();
+    const seen: SyncStatus[] = [];
+    await api.on("sync://status", (s) => seen.push(s));
+    expect((await api.syncStatus()).auto).toBe(true);
+    await expect(api.syncNow()).rejects.toMatchObject({ kind: "invalid" });
+    const [p] = await api.syncFolderPresets();
+    await api.syncConfigureFolder(p.path);
+    const report = await api.syncNow();
+    expect(report.pushed).toBeGreaterThan(0);
+    expect(seen.map((s) => s.syncing)).toEqual([false, true, false]);
+    const st = await api.syncStatus();
+    expect(st.config).toEqual({ kind: "folder", path: p.path });
+    expect(st.last_sync_ms).toBeTruthy();
+    await api.syncSetAuto(false);
+    expect((await api.syncStatus()).auto).toBe(false);
+    await api.syncDisconnect();
+    const off = await api.syncStatus();
+    expect(off.config).toBeNull();
+    expect(off.auto).toBe(false);
+  });
+
+  it("lists, takes and restores snapshots; restores and clears conflicts", async () => {
+    const api = createMockApi();
+    const before = await api.vaultSnapshots();
+    expect(before.length).toBeGreaterThan(0);
+    expect(before[0].created_ms).toBeGreaterThanOrEqual(before[before.length - 1].created_ms);
+    const snap = await api.vaultSnapshotCreate();
+    expect((await api.vaultSnapshots())[0].name).toBe(snap.name);
+    await api.vaultSnapshotRestore(before[0].name);
+    await expect(api.vaultSnapshotRestore("nope.snap")).rejects.toMatchObject({ kind: "not_found" });
+    const [c] = await api.vaultConflicts();
+    await api.vaultConflictRestore(c.file_id, c.recorded_at_ms);
+    await expect(api.vaultConflictRestore(c.file_id, c.recorded_at_ms + 1)).rejects.toMatchObject({ kind: "not_found" });
+    await api.vaultConflictsClear();
+    expect(await api.vaultConflicts()).toEqual([]);
   });
 
   it("previews a file import and asks for an mRemoteNG password", async () => {

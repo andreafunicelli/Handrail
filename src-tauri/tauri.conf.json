@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AIHubTerm",
-  "version": "0.1.0",
   "identifier": "dev.aihubterm.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -20,11 +19,34 @@
         "decorations": true
       }
     ],
-    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost" }
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENDRTI2MTQ3NUNCNEYyNkMKUldSczhyUmNSMkhpekFteWFxYnFzeGtzcHRuSEc1WWpUTUFoKzhwOXBaRGVxVit1eDFqUjVYekUK",
+      "endpoints": [
+        "https://github.com/andreafunicelli/aihubterm-releases/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

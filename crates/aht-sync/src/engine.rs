@@ -112,7 +112,11 @@ async fn round(
             continue;
         }
         let bytes = backend.get(&entry.path).await?;
-        let outcome = match vault.merge_remote(&entry.path, &bytes) {
+        // Unchanged here since the last sync: a newer remote version is a plain pull.
+        let local_in_sync = before
+            .get(&entry.path)
+            .is_some_and(|sha| state.pushed_sha.get(&entry.path) == Some(sha));
+        let outcome = match vault.merge_remote_tracked(&entry.path, &bytes, local_in_sync) {
             Ok(o) => o,
             Err(VaultError::Corrupt(why)) => {
                 report
@@ -259,6 +263,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clean_pull_of_a_newer_edit_is_not_a_conflict() {
+        let remote = tempfile::tempdir().unwrap();
+        let be = FolderBackend::new(remote.path());
+        let (mut a, sk) = device_a();
+        a.vault.put(&setting("k", 1)).unwrap();
+        sync(&mut a, &be).await;
+        let mut b = device_b(&be, &sk).await;
+        sync(&mut b, &be).await;
+        assert_eq!(val(&b, "k"), Some(1));
+
+        a.vault.put(&setting("k", 2)).unwrap();
+        sync(&mut a, &be).await;
+        let rb = sync(&mut b, &be).await;
+        assert_eq!((rb.pulled, rb.conflicts), (1, 0));
+        assert_eq!(val(&b, "k"), Some(2));
+        assert!(
+            b.vault.conflict_history().unwrap().is_empty(),
+            "B never edited k: nothing to bring back"
+        );
+    }
+
+    #[tokio::test]
     async fn concurrent_edit_is_lww_with_conflict_history() {
         let remote = tempfile::tempdir().unwrap();
         let be = FolderBackend::new(remote.path());
@@ -280,6 +306,8 @@ mod tests {
         let ra = sync(&mut a, &be).await;
         assert_eq!(val(&a, "k"), Some(3));
         assert_eq!(ra.pulled, 1);
+        // A's 2 had already been synced; losing to B's newer 3 is an ordinary pull on A.
+        assert!(a.vault.conflict_history().unwrap().is_empty());
         assert_eq!(sync(&mut b, &be).await, SyncReport::default());
         assert_eq!(sync(&mut a, &be).await, SyncReport::default());
     }

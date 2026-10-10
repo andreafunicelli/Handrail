@@ -1,3 +1,4 @@
+mod autosync;
 mod cmd_misc;
 mod cmd_vault;
 mod state;
@@ -5,13 +6,25 @@ mod terminal;
 
 use tauri::Manager;
 
+/// The single source of the version is the workspace `Cargo.toml` (`[workspace.package]`);
+/// release builds stamp it to `<major>.<minor>.<build number>`.
 #[tauri::command(rename_all = "snake_case")]
 fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Relaunch after the updater installed a new version (macOS, Linux; the Windows installer
+/// closes and restarts the app itself).
+#[tauri::command(rename_all = "snake_case")]
+fn restart_app(app: tauri::AppHandle) {
+    app.restart()
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    builder
         .setup(|app| {
             // AIHUBTERM_DATA_DIR isolates test runs from the user's real vault.
             let dir = match std::env::var_os("AIHUBTERM_DATA_DIR") {
@@ -21,14 +34,17 @@ pub fn run() {
             let state = state::AppState::new(dir).map_err(|e| e.to_string())?;
             state.terminal.attach(app.handle().clone());
             app.manage(state);
+            autosync::spawn(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             app_version,
+            restart_app,
             cmd_vault::vault_status,
             cmd_vault::vault_create,
             cmd_vault::vault_unlock,
             cmd_vault::vault_lock,
+            cmd_vault::save_emergency_kit,
             cmd_vault::list_connections,
             cmd_vault::save_connection,
             cmd_vault::delete_connection,
@@ -45,6 +61,12 @@ pub fn run() {
             cmd_vault::delete_harness_profile,
             cmd_vault::get_setting,
             cmd_vault::set_setting,
+            cmd_vault::vault_snapshots,
+            cmd_vault::vault_snapshot_create,
+            cmd_vault::vault_snapshot_restore,
+            cmd_vault::vault_conflicts,
+            cmd_vault::vault_conflict_restore,
+            cmd_vault::vault_conflicts_clear,
             cmd_misc::import_detect,
             cmd_misc::import_preview,
             cmd_misc::import_apply,
@@ -57,6 +79,9 @@ pub fn run() {
             cmd_misc::sync_configure_folder,
             cmd_misc::sync_join,
             cmd_misc::sync_now,
+            cmd_misc::sync_set_auto,
+            cmd_misc::sync_disconnect,
+            cmd_misc::sync_folder_presets,
             terminal::approval_decide,
             terminal::host_key_decision,
             terminal::open_session,

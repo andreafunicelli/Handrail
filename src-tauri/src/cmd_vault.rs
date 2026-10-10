@@ -3,10 +3,14 @@
 use crate::state::{err, AppState};
 use aht_core::model::{Connection, Group, HarnessProfile, Provider, Secret, SecretKind};
 use aht_core::{Error, Result, SecretId};
-use aht_vault::{KdfParams, SecretKey, Setting, Vault, VaultItem, VaultStatus};
+use aht_vault::{
+    ConflictRecord, KdfParams, SecretKey, Setting, SnapshotInfo, Vault, VaultItem, VaultStatus,
+};
 use serde::Serialize;
 use serde_json::Value;
-use tauri::State;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Manager, State};
 
 #[derive(Serialize)]
 pub struct CreatedVault {
@@ -41,6 +45,57 @@ pub async fn vault_create(state: State<'_, AppState>, password: String) -> Resul
     Ok(CreatedVault {
         secret_key: key.reveal().to_string(),
     })
+}
+
+/// Write the Emergency Kit to the Downloads folder (home if there is none) and return its path.
+/// The webview cannot save `blob:` downloads itself. Never overwrites: "… (2).txt" and so on.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn save_emergency_kit(app: AppHandle, contents: String) -> Result<String> {
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(err)?;
+    let path = tokio::task::spawn_blocking(move || {
+        save_new_file(&dir, "AIHubTerm Emergency Kit", "txt", contents.as_bytes())
+    })
+    .await
+    .map_err(err)??;
+    Ok(path.display().to_string())
+}
+
+/// Create `<dir>/<stem>.<ext>`, or `<stem> (2).<ext>`... if taken. Owner-only on Unix: the file
+/// holds the Secret Key.
+fn save_new_file(dir: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    for n in 1..=100 {
+        let name = if n == 1 {
+            format!("{stem}.{ext}")
+        } else {
+            format!("{stem} ({n}).{ext}")
+        };
+        let path = dir.join(name);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        match opts.open(&path) {
+            Ok(mut f) => {
+                f.write_all(bytes)?;
+                f.sync_all()?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other(format!(
+        "too many files named {stem} in {}",
+        dir.display()
+    )))
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -272,6 +327,112 @@ pub async fn set_setting(state: State<'_, AppState>, key: String, value: Value) 
     put(&state, &Setting { key, value }).await
 }
 
+// ---------- snapshots & conflict history ----------
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn vault_snapshots(state: State<'_, AppState>) -> Result<Vec<SnapshotInfo>> {
+    let mut list = state
+        .vault
+        .lock()
+        .await
+        .list_snapshots()
+        .map_err(Error::from)?;
+    list.reverse(); // newest first
+    Ok(list)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn vault_snapshot_create(state: State<'_, AppState>) -> Result<SnapshotInfo> {
+    state.vault.lock().await.snapshot().map_err(Error::from)
+}
+
+/// Roll back to a snapshot. A safety snapshot of the current state is taken first, and the
+/// rollback is written as fresh edits so it wins on the next sync.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn vault_snapshot_restore(state: State<'_, AppState>, name: String) -> Result<()> {
+    state
+        .vault
+        .lock()
+        .await
+        .restore_snapshot(&name)
+        .map_err(Error::from)
+}
+
+/// A version that lost a sync merge, without its payload: secrets never reach the UI.
+#[derive(Serialize)]
+pub struct ConflictView {
+    file_id: String,
+    recorded_at_ms: u64,
+    item_type: String,
+    /// Name of the item as the losing version had it (connection name, secret label...).
+    label: String,
+    /// When the losing version was written, and on which device.
+    loser_ms: u64,
+    loser_device: String,
+    loser_deleted: bool,
+    /// When the version that won was written.
+    winner_ms: u64,
+}
+
+fn conflict_view(r: ConflictRecord) -> ConflictView {
+    let p = &r.loser.payload;
+    let field = |k: &str| p.get(k).and_then(|v| v.as_str()).map(str::to_owned);
+    let label = match r.loser.item_type.as_str() {
+        "secret" => field("label"),
+        "setting" => field("key"),
+        _ => field("name"),
+    }
+    .filter(|l| !l.is_empty())
+    .unwrap_or_else(|| r.loser.id.clone());
+    ConflictView {
+        file_id: r.file_id,
+        recorded_at_ms: r.recorded_at_ms,
+        item_type: r.loser.item_type,
+        label,
+        loser_ms: r.loser.updated_at.wall_ms,
+        loser_device: r.loser.device_id.to_string(),
+        loser_deleted: r.loser.deleted,
+        winner_ms: r.winner.wall_ms,
+    }
+}
+
+/// Versions discarded by last-writer-wins merges on this device, newest first.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn vault_conflicts(state: State<'_, AppState>) -> Result<Vec<ConflictView>> {
+    let history = state
+        .vault
+        .lock()
+        .await
+        .conflict_history()
+        .map_err(Error::from)?;
+    Ok(history.into_iter().rev().map(conflict_view).collect())
+}
+
+/// Bring a discarded version back as a fresh edit; it then syncs to the other devices.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn vault_conflict_restore(
+    state: State<'_, AppState>,
+    file_id: String,
+    recorded_at_ms: u64,
+) -> Result<()> {
+    state
+        .vault
+        .lock()
+        .await
+        .restore_conflict(&file_id, recorded_at_ms)
+        .map_err(Error::from)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn vault_conflicts_clear(state: State<'_, AppState>) -> Result<()> {
+    state
+        .vault
+        .lock()
+        .await
+        .clear_conflict_history()
+        .map_err(Error::from)
+}
+
 /// Look up a secret's plaintext for internal use (SSH auth, provider keys). Never exposed via IPC.
 pub async fn secret_value(state: &AppState, id: SecretId) -> Result<String> {
     state
@@ -282,4 +443,27 @@ pub async fn secret_value(state: &AppState, id: SecretId) -> Result<String> {
         .map_err(Error::from)?
         .map(|s| s.value)
         .ok_or_else(|| Error::NotFound(format!("secret {id}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_new_file_never_overwrites() {
+        let dir = std::env::temp_dir().join(format!("aht-kit-{}", uuid::Uuid::new_v4()));
+        let a = save_new_file(&dir, "Kit", "txt", b"one").unwrap();
+        let b = save_new_file(&dir, "Kit", "txt", b"two").unwrap();
+        assert_eq!(a, dir.join("Kit.txt"));
+        assert_eq!(b, dir.join("Kit (2).txt"));
+        assert_eq!(std::fs::read(&a).unwrap(), b"one");
+        assert_eq!(std::fs::read(&b).unwrap(), b"two");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&a).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
