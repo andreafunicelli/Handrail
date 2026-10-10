@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import type { Api } from "./api";
 import type { ApprovalSettings } from "./types";
 import { errorMessage } from "./errors";
@@ -9,6 +10,8 @@ export const DEFAULT_APPROVALS: ApprovalSettings = { default_mode: "confirm_all"
 
 /** Thin invoke/listen wrapper. Command names and argument keys follow docs/ipc-contract.md exactly. */
 export function createTauriApi(): Api {
+  /** The update found by the last `checkForUpdate`, installed by `installUpdate`. */
+  let pendingUpdate: Update | null = null;
   return {
     backend: "tauri",
     vaultStatus: () => invoke("vault_status"),
@@ -74,6 +77,33 @@ export function createTauriApi(): Api {
     syncJoin: () => invoke("sync_join"),
     syncNow: () => invoke("sync_now"),
     saveEmergencyKit: (contents) => invoke("save_emergency_kit", { contents }),
+
+    appVersion: () => invoke("app_version"),
+    checkForUpdate: async () => {
+      pendingUpdate = await check();
+      if (!pendingUpdate) return null;
+      return {
+        version: pendingUpdate.version,
+        current_version: pendingUpdate.currentVersion,
+        notes: pendingUpdate.body ?? null,
+        date: pendingUpdate.date ?? null,
+      };
+    },
+    installUpdate: async (progress) => {
+      if (!pendingUpdate) throw { kind: "invalid", message: "no update to install; check again" };
+      let total = 0;
+      let done = 0;
+      await pendingUpdate.downloadAndInstall((ev) => {
+        if (ev.event === "Started") {
+          total = ev.data.contentLength ?? 0;
+          progress(total ? 0 : null);
+        } else if (ev.event === "Progress") {
+          done += ev.data.chunkLength;
+          progress(total ? Math.min(1, done / total) : null);
+        } else progress(1);
+      });
+    },
+    restartApp: () => invoke("restart_app"),
     syncSetAuto: (enabled) => invoke("sync_set_auto", { enabled }),
     syncDisconnect: () => invoke("sync_disconnect"),
     syncFolderPresets: () => invoke("sync_folder_presets"),

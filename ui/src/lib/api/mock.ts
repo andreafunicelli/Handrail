@@ -453,6 +453,24 @@ export function createMockApi(): Api {
     async vaultLock() {
       vault.locked = true;
     },
+    async appVersion() {
+      return "0.1.0";
+    },
+    async checkForUpdate() {
+      await sleep(400);
+      // `?update` in the URL simulates a published update.
+      const offer = typeof location !== "undefined" && new URLSearchParams(location.search).has("update");
+      return offer ? { version: "0.1.42", current_version: "0.1.0", notes: "Test build", date: new Date().toISOString() } : null;
+    },
+    async installUpdate(progress) {
+      for (let i = 0; i <= 10; i++) {
+        progress(i / 10);
+        await sleep(80);
+      }
+    },
+    async restartApp() {
+      location.reload();
+    },
     async saveEmergencyKit(contents) {
       // In a real browser a blob download works; the desktop webview needs the backend command.
       if (typeof document !== "undefined" && typeof URL.createObjectURL === "function") {

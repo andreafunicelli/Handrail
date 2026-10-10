@@ -265,6 +265,14 @@ export interface SyncStatus {
   last_error?: string | null;
 }
 
+/** A newer release found by the updater. */
+export interface UpdateInfo {
+  version: string;
+  current_version: string;
+  notes?: string | null;
+  date?: string | null;
+}
+
 export type CloudDrive = "icloud" | "dropbox" | "onedrive" | "google_drive";
 
 /** A cloud-drive folder found on this device (`sync_folder_presets`). */

@@ -84,6 +84,16 @@ describe("mock api", () => {
     await expect(api.importApply(preview.preview_id, [])).rejects.toMatchObject({ kind: "not_found" });
   });
 
+  it("reports the version and installs an update with progress", async () => {
+    const api = createMockApi();
+    expect(await api.appVersion()).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(await api.checkForUpdate()).toBeNull();
+    const seen: (number | null)[] = [];
+    await api.installUpdate((p) => seen.push(p));
+    expect(seen[0]).toBe(0);
+    expect(seen[seen.length - 1]).toBe(1);
+  });
+
   it("syncs with status events, auto-sync and disconnect", async () => {
     const api = createMockApi();
     const seen: SyncStatus[] = [];

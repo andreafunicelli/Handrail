@@ -74,6 +74,12 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 - `vault_conflict_restore({ file_id, recorded_at_ms })` (re-applies the discarded version as a new edit),
   `vault_conflicts_clear()`
 
+## App & updates
+- `app_version() -> string` (workspace `Cargo.toml` version; release builds stamp `<major>.<minor>.<build>`)
+- `restart_app()` (after an installed update on macOS/Linux)
+- Updates use `@tauri-apps/plugin-updater` (`updater:default` capability) against
+  `https://github.com/andreafunicelli/aihubterm-releases/releases/latest/download/latest.json`.
+
 ## Misc
 - `get_setting({ key }) -> any|null`, `set_setting({ key, value })`, `list_secrets() -> { id, kind, label }[]`
 - Errors reject with `{ kind, message }` (aht-core `Error`); `vault_unlock` rejects

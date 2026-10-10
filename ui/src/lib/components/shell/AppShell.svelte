@@ -13,6 +13,7 @@
   import Resizer from "../common/Resizer.svelte";
   import Modal from "../common/Modal.svelte";
   import Icon from "../icons/Icon.svelte";
+  import UpdateBanner from "./UpdateBanner.svelte";
   import { t } from "../../i18n";
   import { leaves } from "../../util/layout";
   import { agent } from "../../stores/agent.svelte";
@@ -22,6 +23,7 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { ui } from "../../stores/ui.svelte";
   import { vault } from "../../stores/vault.svelte";
+  import { updates } from "../../stores/updates.svelte";
 
   let wsName = $state("");
 
@@ -34,6 +36,7 @@
 
   onMount(() => {
     void Promise.all([connections.load(), sessions.init(), agent.init()]).catch(toasts.error);
+    updates.start();
 
     const mq = matchMedia("(max-width: 819px)");
     const sync = () => {
@@ -108,6 +111,7 @@
   {/if}
 
   <main class="main">
+    <UpdateBanner />
     <TabStrip />
     <div class="panes">
       {#if sessions.activeTab}

@@ -27,6 +27,7 @@ import type {
   ConflictView,
   FolderPreset,
   SnapshotInfo,
+  UpdateInfo,
   SyncReport,
   SyncStatus,
   VaultStatus,
@@ -118,6 +119,15 @@ export interface Api {
   vaultConflicts(): Promise<ConflictView[]>;
   vaultConflictRestore(fileId: string, recordedAtMs: number): Promise<void>;
   vaultConflictsClear(): Promise<void>;
+
+  // app & updates
+  appVersion(): Promise<string>;
+  /** Asks the release endpoint for a newer version; `null` when up to date. */
+  checkForUpdate(): Promise<UpdateInfo | null>;
+  /** Downloads and installs the update found by the last check. `progress` gets 0..1, or null
+   *  while the size is unknown. On Windows the installer then closes and restarts the app. */
+  installUpdate(progress: (fraction: number | null) => void): Promise<void>;
+  restartApp(): Promise<void>;
 
   // misc
   getSetting<T = unknown>(key: string): Promise<T | null>;

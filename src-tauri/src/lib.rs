@@ -6,13 +6,25 @@ mod terminal;
 
 use tauri::Manager;
 
+/// The single source of the version is the workspace `Cargo.toml` (`[workspace.package]`);
+/// release builds stamp it to `<major>.<minor>.<build number>`.
 #[tauri::command(rename_all = "snake_case")]
 fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Relaunch after the updater installed a new version (macOS, Linux; the Windows installer
+/// closes and restarts the app itself).
+#[tauri::command(rename_all = "snake_case")]
+fn restart_app(app: tauri::AppHandle) {
+    app.restart()
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    builder
         .setup(|app| {
             // AIHUBTERM_DATA_DIR isolates test runs from the user's real vault.
             let dir = match std::env::var_os("AIHUBTERM_DATA_DIR") {
@@ -27,6 +39,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_version,
+            restart_app,
             cmd_vault::vault_status,
             cmd_vault::vault_create,
             cmd_vault::vault_unlock,
