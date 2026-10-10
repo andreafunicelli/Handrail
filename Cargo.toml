@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+rust-version = "1.85"
+
+[workspace.dependencies]
+aht-core = { path = "crates/aht-core" }
+aht-vault = { path = "crates/aht-vault" }
+aht-ssh = { path = "crates/aht-ssh" }
+aht-term = { path = "crates/aht-term" }
+aht-mcp = { path = "crates/aht-mcp" }
+aht-harness = { path = "crates/aht-harness" }
+aht-providers = { path = "crates/aht-providers" }
+aht-agent = { path = "crates/aht-agent" }
+aht-sync = { path = "crates/aht-sync" }
+aht-import = { path = "crates/aht-import" }
+
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

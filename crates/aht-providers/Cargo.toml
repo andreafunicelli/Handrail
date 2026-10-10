@@ -1,0 +1,8 @@
+[package]
+name = "aht-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aht-core.workspace = true

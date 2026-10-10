@@ -1,0 +1,7 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0c0e;
+  --text: #e6e7ea;
+  font-family: system-ui, sans-serif;
+}
+html, body, #app { height: 100%; margin: 0; background: var(--bg); color: var(--text); }

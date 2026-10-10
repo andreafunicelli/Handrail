@@ -1,0 +1,20 @@
+[package]
+name = "aihubterm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "aihubterm_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+aht-core.workspace = true
