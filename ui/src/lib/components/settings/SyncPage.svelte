@@ -3,7 +3,8 @@
   import Icon from "../icons/Icon.svelte";
   import { t, type MessageKey } from "../../i18n";
   import { api } from "../../api";
-  import type { ConflictView, FolderPreset, GithubDeviceStart, SnapshotInfo, SyncStatus } from "../../api/types";
+  import type { ConflictView, FolderPreset, SnapshotInfo, SyncStatus } from "../../api/types";
+  import GithubConnect from "./GithubConnect.svelte";
   import { connections } from "../../stores/connections.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { formatBytes, relativeTime } from "../../util/time";
@@ -12,7 +13,6 @@
   let presets = $state<FolderPreset[]>([]);
   let snapshots = $state<SnapshotInfo[]>([]);
   let conflicts = $state<ConflictView[]>([]);
-  let device = $state<GithubDeviceStart | null>(null);
   let folder = $state("");
   let busy = $state(false);
   /** Shows the "where to sync" choices while a target is already configured. */
@@ -21,7 +21,6 @@
   let armed = $state<string | null>(null);
   /** Re-renders relative times. */
   let now = $state(Date.now());
-  let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let armTimer: ReturnType<typeof setTimeout> | null = null;
   let unlisten: (() => void) | null = null;
   const clock = setInterval(() => (now = Date.now()), 30_000);
@@ -63,7 +62,6 @@
   onDestroy(() => {
     unlisten?.();
     clearInterval(clock);
-    if (pollTimer) clearTimeout(pollTimer);
     if (armTimer) clearTimeout(armTimer);
   });
 
@@ -105,32 +103,10 @@
     if (folder.trim()) void useFolderPath(folder.trim());
   }
 
-  async function startGithub() {
-    try {
-      device = await api.syncGithubStart();
-      poll(device.interval);
-    } catch (e) {
-      toasts.error(e);
-    }
-  }
-  function poll(interval: number) {
-    pollTimer = setTimeout(async () => {
-      try {
-        const r = await api.syncGithubPoll();
-        if (r.done || r.status === "ok") {
-          device = null;
-          changing = false;
-          toasts.success(t("sync.connected"));
-          await loadStatus();
-        } else if (r.status === "expired" || r.status === "denied") {
-          device = null;
-          toasts.error(t(r.status === "expired" ? "sync.githubExpired" : "sync.githubDenied"));
-        } else poll(r.status === "slow_down" ? interval + 5 : interval);
-      } catch (e) {
-        device = null;
-        toasts.error(e);
-      }
-    }, Math.max(1, interval) * 1000);
+  async function githubConnected() {
+    changing = false;
+    toasts.success(t("sync.connected"));
+    await loadStatus();
   }
 
   const syncNow = () => run(() => api.syncNow());
@@ -241,16 +217,7 @@
   {/if}
 
   <h3>{t("sync.github")}</h3>
-  {#if device}
-    <div class="device">
-      <span class="hint">{t("sync.githubCode")}</span>
-      <a class="mono uri" href={device.verification_uri} target="_blank" rel="noreferrer noopener">{device.verification_uri}</a>
-      <div class="code mono">{device.user_code}</div>
-      <span class="hint waiting">{t("sync.githubWaiting")}</span>
-    </div>
-  {:else}
-    <button class="btn" onclick={startGithub} disabled={busy}><Icon name="link" size={14} />{t("sync.githubConnect")}</button>
-  {/if}
+  <GithubConnect onconnected={githubConnected} disabled={busy} />
 
   <h3>{t("sync.folder")}</h3>
   <p class="hint sub">{t("sync.folderHint")}</p>
@@ -352,27 +319,6 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-  }
-  .device {
-    display: grid;
-    justify-items: start;
-    gap: 6px;
-    padding: 16px;
-    border-radius: var(--r-lg);
-    border: 1px dashed var(--border-strong);
-  }
-  .uri {
-    color: var(--accent-text);
-    font-size: 12px;
-  }
-  .code {
-    font-size: 22px;
-    letter-spacing: 0.12em;
-    color: var(--text);
-    user-select: all;
-  }
-  .waiting {
-    animation: pulse 1.6s var(--ease) infinite;
   }
   .sub {
     margin: -4px 0 10px;

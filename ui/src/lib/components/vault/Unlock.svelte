@@ -6,7 +6,7 @@
 
   let password = $state("");
   let secretKey = $state("");
-  let newDevice = $state(vault.status.needs_secret_key ?? false);
+  let newDevice = $state(vault.joined || (vault.status.needs_secret_key ?? false));
   let busy = $state(false);
   let error = $state<string | null>(null);
 

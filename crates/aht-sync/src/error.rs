@@ -44,6 +44,7 @@ impl From<SyncError> for aht_core::Error {
         match e {
             SyncError::Auth(s) => E::Auth(s),
             SyncError::NotFound(s) => E::NotFound(s),
+            SyncError::NoRemoteVault => E::NotFound(e.to_string()),
             SyncError::Http(_) | SyncError::RateLimited { .. } => E::Network(e.to_string()),
             SyncError::Io(io) => E::Io(io.to_string()),
             SyncError::Vault(aht_vault::VaultError::Locked) => E::VaultLocked,

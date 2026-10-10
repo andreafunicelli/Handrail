@@ -58,7 +58,8 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 - `sync_configure_github_start() -> { device_code, user_code, verification_uri, interval, expires_in }`
 - `sync_configure_github_poll() -> { done, status: "pending"|"slow_down"|"expired"|"denied"|"ok", repo? }`
   (poll every `interval` s; creates private repo `aihubterm-vault`)
-- `sync_configure_folder({ path })`, `sync_join()` (new device: pull manifest, then unlock with Secret Key),
+- `sync_configure_folder({ path })`, `sync_join()` (new device: pull manifest, then unlock with Secret Key;
+  rejects `{ kind: "not_found" }` when the target holds no vault yet),
   `sync_now() -> { pulled, pushed, conflicts, warnings }`
 
 ## Snapshots & conflict history

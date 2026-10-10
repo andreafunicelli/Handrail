@@ -23,6 +23,11 @@ pub fn client_id() -> String {
         .unwrap_or_else(|| AIHUBTERM_GITHUB_CLIENT_ID.to_string())
 }
 
+/// False while the build still carries the placeholder and no env override is set.
+pub fn is_configured(client_id: &str) -> bool {
+    !client_id.trim().is_empty() && client_id != AIHUBTERM_GITHUB_CLIENT_ID
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceCode {
     pub device_code: String,
@@ -210,5 +215,12 @@ mod tests {
         if std::env::var("AIHUBTERM_GITHUB_CLIENT_ID").is_err() {
             assert_eq!(client_id(), AIHUBTERM_GITHUB_CLIENT_ID);
         }
+    }
+
+    #[test]
+    fn placeholder_is_not_configured() {
+        assert!(!is_configured(AIHUBTERM_GITHUB_CLIENT_ID));
+        assert!(!is_configured("  "));
+        assert!(is_configured("Ov23liExample0000000"));
     }
 }

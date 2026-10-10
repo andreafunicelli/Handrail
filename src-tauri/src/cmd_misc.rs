@@ -337,7 +337,15 @@ pub async fn sync_folder_presets(app: AppHandle) -> Result<Vec<aht_sync::presets
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sync_configure_github_start(state: State<'_, AppState>) -> Result<DeviceCode> {
-    let code = github_device_flow::start(&github_device_flow::client_id(), "repo")
+    let client_id = github_device_flow::client_id();
+    if !github_device_flow::is_configured(&client_id) {
+        return Err(Error::Invalid(
+            "GitHub sync is not set up in this build: no OAuth client ID \
+             (set AIHUBTERM_GITHUB_CLIENT_ID)"
+                .into(),
+        ));
+    }
+    let code = github_device_flow::start(&client_id, "repo")
         .await
         .map_err(Error::from)?;
     *state.github_device.lock().await = Some(code.clone());

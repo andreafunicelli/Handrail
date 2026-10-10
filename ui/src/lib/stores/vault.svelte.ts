@@ -1,17 +1,24 @@
 import { api } from "../api";
 import type { VaultStatus } from "../api/types";
 
-export type VaultPhase = "loading" | "create" | "kit" | "unlock" | "ready";
+export type VaultPhase = "loading" | "create" | "join" | "kit" | "unlock" | "ready";
 
 class Vault {
   phase = $state<VaultPhase>("loading");
   status = $state<VaultStatus>({ initialized: false, locked: true });
   /** Shown once on the Emergency Kit screen, then dropped from memory. */
   secretKey = $state<string | null>(null);
+  /** This device just joined a synced vault: unlocking needs the Secret Key. */
+  joined = $state(false);
 
   async refresh() {
     this.status = await api.vaultStatus();
     this.phase = !this.status.initialized ? "create" : this.status.locked ? "unlock" : "ready";
+  }
+  /** After `sync_join` downloaded the manifest of a vault created on another device. */
+  async afterJoin() {
+    this.joined = true;
+    await this.refresh();
   }
   async create(password: string) {
     const { secret_key } = await api.vaultCreate(password);
@@ -24,6 +31,7 @@ class Vault {
   }
   async unlock(password: string, secretKey?: string) {
     await api.vaultUnlock(password, secretKey);
+    this.joined = false;
     this.phase = "ready";
   }
   async lock() {

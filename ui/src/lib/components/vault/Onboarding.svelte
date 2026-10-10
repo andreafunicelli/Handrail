@@ -98,10 +98,20 @@
         {busy ? t("vault.creating") : t("vault.create.submit")}
       </button>
     </form>
+    <button type="button" class="link join" onclick={() => (vault.phase = "join")}>{t("vault.create.join")}</button>
   {/if}
 </VaultFrame>
 
 <style>
+  .link.join {
+    display: block;
+    margin: 18px auto 0;
+    color: var(--muted);
+    font-size: var(--fs-meta);
+  }
+  .link.join:hover {
+    color: var(--text);
+  }
   .form {
     display: grid;
     gap: 14px;

@@ -726,7 +726,14 @@ export function createMockApi(): Api {
       syncEvent();
     },
     async syncJoin() {
+      if (!sync.config) throw fail("invalid", "sync not configured");
       await sleep(300);
+      // Pretend only GitHub and the Dropbox preset already hold a vault.
+      if (sync.config.kind === "folder" && !sync.config.path.includes("Dropbox")) {
+        throw fail("not_found", "remote has no vault manifest");
+      }
+      vault.initialized = true;
+      vault.locked = true;
     },
     async syncNow() {
       if (!sync.config) throw fail("invalid", "sync not configured");
