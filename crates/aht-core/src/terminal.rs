@@ -30,7 +30,7 @@ impl Actor {
     pub fn may_access(&self, session: SessionId) -> bool {
         self.session_scope
             .as_ref()
-            .map_or(true, |s| s.contains(&session))
+            .is_none_or(|s| s.contains(&session))
     }
 }
 
