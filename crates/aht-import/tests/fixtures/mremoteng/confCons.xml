@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Connections Name="Connections" Export="False" EncryptionEngine="AES" BlockCipherMode="GCM" KdfIterations="1000" FullFileEncryption="False" Protected="8LmIO3+MWBY0zTmfjfOEdCGxhTAwnlohb1veTGNZFt6lAYvY2UOzWyjVzkx6V93smpbP0ZOuexN15u7rvwJEjawC" ConfVersion="2.6">
+  <Node Name="top ssh" Type="Connection" Descr="" Username="topuser" Domain="" Password="" Hostname="top.example.test" Protocol="SSH2" PuttySession="Default Settings" Port="22" />
+  <Node Name="Prod" Type="Container" Expanded="True" Username="prodadmin" Password="" Hostname="" Protocol="RDP" Port="3389">
+    <Node Name="EU" Type="Container" Expanded="True" Username="" Password="" Hostname="" Protocol="RDP" Port="3389" InheritUsername="True" InheritPassword="True">
+      <Node Name="web1" Type="Connection" Username="ignored" Password="" Hostname="web1.example.test" Protocol="SSH2" Port="2222" InheritUsername="True" />
+      <Node Name="rdp1" Type="Connection" Username="x" Password="" Hostname="rdp1.example.test" Protocol="RDP" Port="3389" />
+    </Node>
+  </Node>
+  <Node Name="Empty" Type="Container" Username="" Password="" Hostname="" Protocol="RDP" Port="3389" />
+  <Node Name="legacy ssh1" Type="Connection" Username="old" Password="" Hostname="ssh1.example.test" Protocol="SSH1" Port="22" />
+  <Node Name="telnet1" Type="Connection" Username="" Password="" Hostname="t.example.test" Protocol="Telnet" Port="23" />
+</Connections>
