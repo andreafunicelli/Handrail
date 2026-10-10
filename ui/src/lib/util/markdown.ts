@@ -51,6 +51,7 @@ export function renderMarkdown(md: string): string {
       const code: string[] = [];
       i++;
       while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) code.push(lines[i++]);
+      while (code.length && !code[code.length - 1].trim()) code.pop();
       out.push(`<pre class="md-code"><code>${escapeHtml(code.join("\n"))}</code></pre>`);
       continue;
     }
