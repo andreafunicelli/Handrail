@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","session_id":"s2"}
+{"type":"system","subtype":"api_retry","attempt":1}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"thinking","thinking":"Need to list files."},{"type":"text","text":"Listing."},{"type":"tool_use","id":"toolu_9","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_9","content":"permission denied","is_error":true}]}}
+{"type":"future_event_type","x":1}
+not json at all
+{"type":"result","subtype":"error_max_turns","is_error":true,"usage":{"input_tokens":5,"output_tokens":2}}
