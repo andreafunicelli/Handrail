@@ -71,6 +71,7 @@ const POSIX_INFO: &str = concat!(
 const BASH_HOOK: &str = concat!(
     r#" printf '\033]1337;AhtBegin=%s\007' NONCE; "#,
     r#"__aht_pc() { local ec=$?; if [ -n "$__aht_ran" ]; then printf '\033]133;D;%s\007' "$ec"; fi; __aht_ran=; "#,
+    r#"printf '\033]1337;AhtKV=ctx=%s\007' NONCE; "#,
     r#"printf '\033]7;file://%s%s\007' "$HOSTNAME" "$PWD"; return $ec; }; "#,
     r#"case ";$PROMPT_COMMAND;" in *";__aht_pc;"*) ;; *) PROMPT_COMMAND="__aht_pc${PROMPT_COMMAND:+;$PROMPT_COMMAND}";; esac; "#,
     r#"case "$PS1" in *'133;A'*) ;; *) PS1='\[\033]133;A\007\]'"$PS1"'\[\033]133;B\007\]';; esac; "#,
@@ -85,6 +86,7 @@ const BASH_HOOK: &str = concat!(
 const ZSH_HOOK: &str = concat!(
     r#" printf '\033]1337;AhtBegin=%s\007' NONCE; "#,
     r#"__aht_precmd() { local ec=$?; if [ -n "$__aht_ran" ]; then printf '\033]133;D;%s\007' "$ec"; fi; __aht_ran=; "#,
+    r#"printf '\033]1337;AhtKV=ctx=%s\007' NONCE; "#,
     r#"printf '\033]133;A\007'; printf '\033]7;file://%s%s\007' "$HOST" "$PWD"; return $ec; }; "#,
     r#"__aht_preexec() { __aht_ran=1; printf '\033]133;C\007'; }; "#,
     r#"precmd_functions=(__aht_precmd ${precmd_functions:#__aht_precmd}); "#,
@@ -97,7 +99,7 @@ const ZSH_HOOK: &str = concat!(
 
 const FISH_HOOK: &str = concat!(
     r#" printf '\e]1337;AhtBegin=%s\a' NONCE; "#,
-    r#"function __aht_a --on-event fish_prompt; printf '\e]133;A\a'; printf '\e]7;file://%s%s\a' $hostname $PWD; end; "#,
+    r#"function __aht_a --on-event fish_prompt; printf '\e]1337;AhtKV=ctx=%s\a' NONCE; printf '\e]133;A\a'; printf '\e]7;file://%s%s\a' $hostname $PWD; end; "#,
     r#"function __aht_c --on-event fish_preexec; printf '\e]133;C\a'; end; "#,
     r#"function __aht_d --on-event fish_postexec; printf '\e]133;D;%s\a' $status; end; "#,
     r#"if not functions -q __aht_orig_prompt; functions -c fish_prompt __aht_orig_prompt; "#,
@@ -117,7 +119,7 @@ const PWSH_HOOK: &str = concat!(
     r#"if (-not $global:__ahtOrigPrompt) { $global:__ahtOrigPrompt = $function:prompt }; "#,
     r#"function global:prompt { $ok=$?; $ec=$global:LASTEXITCODE; $s=$global:__ahtE; $b=$global:__ahtB; $p=''; "#,
     r#"if ($global:__ahtRan) { $code = if ($ok) {0} elseif ($ec) {$ec} else {1}; $p += "$s]133;D;$code$b" }; "#,
-    r#"$global:__ahtRan=$false; $p += "$s]133;A$b$s]7;file://$env:COMPUTERNAME/$($PWD.ProviderPath -replace '\\','/')$b"; "#,
+    r#"$global:__ahtRan=$false; $p += "$s]1337;AhtKV=ctx=NONCE$b$s]133;A$b$s]7;file://$env:COMPUTERNAME/$($PWD.ProviderPath -replace '\\','/')$b"; "#,
     r#"$p += (& $global:__ahtOrigPrompt); $global:LASTEXITCODE=$ec; $p + "$s]133;B$b" }; "#,
     r#"if (Get-Module PSReadLine) { Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock { $global:__ahtRan=$true; "#,
     r#"[Console]::Write("$([char]27)]133;C$([char]7)"); [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine() } }; "#,

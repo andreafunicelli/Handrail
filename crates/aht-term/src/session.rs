@@ -167,6 +167,19 @@ struct Capture {
     done: bool,
 }
 
+/// A hooked shell in the nesting stack (outer login shell first, then e.g. `sudo su -`).
+#[derive(Clone, Debug)]
+struct ShellCtx {
+    /// Injection nonce the shell tags its prompts with; `None` if it has no integration.
+    nonce: Option<String>,
+    shell: Option<ShellKind>,
+    shell_name: Option<String>,
+    user: Option<String>,
+    host: Option<String>,
+    os: Option<String>,
+    learned_prompt: Option<String>,
+}
+
 struct Inner {
     tracker: Tracker,
     filter: UiFilter,
@@ -183,6 +196,12 @@ struct Inner {
     recent: VecDeque<String>,
     audit: Vec<AuditEntry>,
     policy: Policy,
+    /// Hooked shells, outermost first.
+    ctx_stack: Vec<ShellCtx>,
+    /// The running user command switches into another shell (`sudo su -`, `ssh`, ...).
+    nest_candidate: bool,
+    /// The current probe/injection targets a nested shell.
+    nesting: bool,
 }
 
 const RECENT_LINES: usize = 2000;
@@ -209,6 +228,30 @@ fn password_re() -> &'static Regex {
     RE.get_or_init(|| {
         Regex::new(
             r"(?i:[Pp]assword( for [^:]+)?:\s*$)|(?i:passphrase.*:\s*$)|\[sudo\]|Verification code:|(?i:password:\s*$)",
+        )
+        .unwrap()
+    })
+}
+
+/// User commands that start another interactive shell inside this one.
+fn shell_switch_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            // Command position: line start, after a separator, or after the prompt character.
+            r"(?x)(?:^|[;&|]\s*|[$\#>%]\s+)(?:
+                sudo\s+(?:-[A-Za-z]*[is][A-Za-z]*(?:\s|$)|su\b|-u\s+\S+\s+-[A-Za-z]*[is])
+              | su(?:\s|$)
+              | doas\s+(?:-s|su\b)
+              | ssh\s+\S
+              | (?:docker|podman|nerdctl)\s+(?:exec|run)\s.*-\w*t
+              | kubectl\s+exec\s
+              | (?:lxc|incus)\s+(?:exec|shell)\s
+              | machinectl\s+shell
+              | vagrant\s+ssh
+              | (?:ba|z|fi|k|da)?sh(?:\s+-\S+)*\s*$
+              | (?:pwsh|powershell)(?:\.exe)?\s*$
+            )",
         )
         .unwrap()
     })
@@ -314,7 +357,7 @@ impl Inner {
                 let nonce = new_nonce();
                 match hooks::hook_for(kind, &nonce) {
                     Some(mut hook) => {
-                        if sh.cfg.clear_after_inject {
+                        if sh.cfg.clear_after_inject && !self.nesting {
                             hook.push_str(hooks::clear_suffix(kind));
                         }
                         self.filter.hide_until(Some(nonce.clone()));
@@ -373,7 +416,15 @@ impl Inner {
                 if self.hidden() {
                     return;
                 }
-                let line_nonempty = !self.tracker.current_line().trim().is_empty();
+                let cur = self.tracker.current_line();
+                let line_nonempty = !cur.trim().is_empty();
+                let typed = if line_nonempty {
+                    cur
+                } else {
+                    self.recent.back().cloned().unwrap_or_default()
+                };
+                self.nest_candidate =
+                    !self.active_capture() && shell_switch_re().is_match(typed.trim_end());
                 let agent = match self.capture.as_mut() {
                     Some(c) if !c.done && c.full && !c.saw_c => {
                         c.saw_c = true;
@@ -414,6 +465,7 @@ impl Inner {
                         self.cap_finish(sh, code);
                     }
                 }
+                self.nest_candidate = false;
                 if self.info.state == SessionState::AgentRunning {
                     self.set_state(sh, SessionState::Busy);
                 }
@@ -449,6 +501,8 @@ impl Inner {
                     if *nonce == n {
                         self.filter.release();
                         self.init = Init::Done;
+                        self.nesting = false;
+                        self.push_ctx(Some(n.clone()));
                         self.set_integration(sh, IntegrationMode::Full);
                         self.set_state(sh, SessionState::Idle);
                         self.info_changed(sh);
@@ -465,6 +519,11 @@ impl Inner {
                     "user" => self.info.user = v,
                     "host" => self.info.host = v,
                     "shell" => self.info.shell = v,
+                    "ctx" => {
+                        if let Some(n) = v {
+                            self.on_ctx(sh, &n);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -482,7 +541,13 @@ impl Inner {
             self.learned_prompt = Some(cur);
         }
         self.init = Init::Done;
-        if self.info.integration != IntegrationMode::Full {
+        if self.nesting {
+            // Nested shell we could not hook: command boundaries come from prompt heuristics
+            // until the user exits back to a hooked shell.
+            self.nesting = false;
+            self.push_ctx(None);
+            self.set_integration(sh, IntegrationMode::Limited);
+        } else if self.info.integration != IntegrationMode::Full {
             self.set_integration(sh, IntegrationMode::Limited);
         }
         self.set_state(sh, SessionState::Idle);
@@ -535,6 +600,20 @@ impl Inner {
                 }
             }
             Init::Done => {
+                if self.nested_prompt_ready(sh, quiet) {
+                    let cur = self.tracker.current_line();
+                    self.nest_candidate = false;
+                    self.nesting = true;
+                    self.learned_prompt = Some(cur);
+                    self.filter.hide_until(None);
+                    self.init = Init::Probing {
+                        deadline: now + sh.cfg.detect_timeout,
+                    };
+                    let mut w = hooks::PROBE.as_bytes().to_vec();
+                    w.push(b'\r');
+                    writes.push(w);
+                    return;
+                }
                 if self.info.integration == IntegrationMode::Limited
                     && quiet >= sh.cfg.quiescence
                     && !self.tracker.in_alt_screen()
@@ -553,6 +632,65 @@ impl Inner {
                 }
             }
         }
+    }
+
+    /// A user command that switches shells is sitting at a fresh, quiet prompt.
+    fn nested_prompt_ready(&self, sh: &Shared, quiet: Duration) -> bool {
+        if !(self.nest_candidate && sh.cfg.inject) {
+            return false;
+        }
+        if self.info.state != SessionState::Busy
+            || self.active_capture()
+            || self.user_dirty
+            || self.tracker.in_alt_screen()
+            || quiet < sh.cfg.probe_quiescence
+        {
+            return false;
+        }
+        let cur = self.tracker.current_line();
+        let l = cur.trim_end();
+        !l.is_empty()
+            && l.len() <= 300
+            && l.ends_with(['$', '#', '>', '%'])
+            && !password_re().is_match(l)
+    }
+
+    fn push_ctx(&mut self, nonce: Option<String>) {
+        self.ctx_stack.push(ShellCtx {
+            nonce,
+            shell: self.shell,
+            shell_name: self.info.shell.clone(),
+            user: self.info.user.clone(),
+            host: self.info.host.clone(),
+            os: self.info.os.clone(),
+            learned_prompt: self.learned_prompt.clone(),
+        });
+    }
+
+    /// A hooked shell printed its prompt tag. If it is an outer shell, the user left the nested
+    /// ones: drop them and restore that shell's details.
+    fn on_ctx(&mut self, sh: &Shared, nonce: &str) {
+        let Some(pos) = self
+            .ctx_stack
+            .iter()
+            .rposition(|c| c.nonce.as_deref() == Some(nonce))
+        else {
+            return;
+        };
+        if pos + 1 == self.ctx_stack.len() {
+            return;
+        }
+        self.ctx_stack.truncate(pos + 1);
+        let c = self.ctx_stack[pos].clone();
+        self.shell = c.shell;
+        self.info.shell = c.shell_name;
+        self.info.user = c.user;
+        self.info.host = c.host;
+        self.info.os = c.os;
+        self.learned_prompt = c.learned_prompt;
+        self.nest_candidate = false;
+        self.set_integration(sh, IntegrationMode::Full);
+        self.info_changed(sh);
     }
 
     fn after_chunk(&mut self) {
@@ -608,6 +746,9 @@ impl TermSession {
             recent: VecDeque::new(),
             audit: Vec::new(),
             policy: cfg.policy.clone(),
+            ctx_stack: Vec::new(),
+            nest_candidate: false,
+            nesting: false,
         };
         let store = cfg.output_store.clone().unwrap_or_default();
         let shared = Arc::new(Shared {
@@ -895,7 +1036,18 @@ impl TermSession {
                     ))
                 }
                 SessionState::Idle if g.init == Init::Done => {}
-                _ => return Err(Error::Busy("the terminal is not at a shell prompt".into())),
+                _ => {
+                    let screen = g.tracker.current_line();
+                    let screen = screen.trim();
+                    return Err(Error::Busy(if screen.is_empty() {
+                        "a command started by the user is still running in the terminal".into()
+                    } else {
+                        format!(
+                            "a command started by the user is still running in the terminal; \
+the last line on screen is {screen:?}. Ask the user before interrupting it."
+                        )
+                    }));
+                }
             }
             let id = self.s.store.create();
             let full = g.info.integration == IntegrationMode::Full;
@@ -1081,6 +1233,50 @@ async fn reader_task(sh: Arc<Shared>, mut rx: mpsc::Receiver<TransportEvent>) {
             if let Err(e) = sh.transport.write(&w).await {
                 tracing::warn!("aht-term: transport write failed: {e}");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_switch_re;
+
+    #[test]
+    fn detects_shell_switching_commands() {
+        let yes = [
+            "almonit@box:~$ sudo su -",
+            "almonit@box:~$ sudo su",
+            "almonit@box:~$ sudo -i",
+            "almonit@box:~$ sudo -s",
+            "almonit@box:~$ sudo -u postgres -i",
+            "$ su - deploy",
+            "$ su",
+            "$ ssh db-2",
+            "$ ssh -J bastion app@10.0.0.5",
+            "$ docker exec -it web bash",
+            "$ kubectl exec -it pod-1 -- sh",
+            "$ bash",
+            "$ zsh -l",
+            "$ bash -i",
+            r"PS C:\> pwsh",
+            "sudo su -",
+        ];
+        for l in yes {
+            assert!(shell_switch_re().is_match(l), "should match: {l}");
+        }
+        let no = [
+            "$ sudo apt update",
+            "$ sudo -l",
+            "$ sudo --preserve-env make",
+            "$ ssh-keygen -t ed25519",
+            "$ bash script.sh",
+            "$ cat bash.txt",
+            "$ docker ps",
+            "$ echo su",
+            "$ systemctl status ssh",
+        ];
+        for l in no {
+            assert!(!shell_switch_re().is_match(l), "should not match: {l}");
         }
     }
 }

@@ -263,3 +263,67 @@ async fn real_pwsh_hook_marks_and_exit_codes() {
     assert_eq!(r.exit_code, Some(4), "{r:?}");
     let _ = s.close().await;
 }
+
+async fn wait_idle_full(s: &TermSession) {
+    for _ in 0..200 {
+        if s.state() == SessionState::Idle && s.integration() == IntegrationMode::Full {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// The user switches into a nested shell (like `sudo su -` on a server); the agent must follow
+/// into it, and back out again after `exit`.
+#[tokio::test(flavor = "multi_thread")]
+async fn real_bash_nested_shell_is_followed() {
+    if !on_path("bash") {
+        eprintln!("bash not on PATH; skipping");
+        return;
+    }
+    let (s, ui) = start("bash", &["--norc", "-i"]).await;
+    assert_eq!(
+        s.integration(),
+        IntegrationMode::Full,
+        "hook did not install"
+    );
+    let ap = TestApprover::approve();
+    let outer = s
+        .run_command(&actor(), req("echo lvl=$SHLVL"), &ap)
+        .await
+        .unwrap();
+    let outer_lvl: u32 = outer
+        .output
+        .trim()
+        .trim_start_matches("lvl=")
+        .parse()
+        .unwrap();
+
+    // The user (not the agent) starts a nested shell.
+    s.write_user(b"bash --norc -i\r").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_idle_full(&s).await;
+    assert_eq!(s.state(), SessionState::Idle, "nested shell not detected");
+    let inner = s
+        .run_command(&actor(), req("echo lvl=$SHLVL"), &ap)
+        .await
+        .unwrap();
+    assert_eq!(inner.state, CommandState::Completed, "{inner:?}");
+    assert_eq!(inner.output.trim(), format!("lvl={}", outer_lvl + 1));
+    assert_eq!(inner.exit_code, Some(0));
+
+    // Back to the outer shell.
+    s.write_user(b"exit\r").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_idle_full(&s).await;
+    let back = s
+        .run_command(&actor(), req("echo lvl=$SHLVL"), &ap)
+        .await
+        .unwrap();
+    assert_eq!(back.output.trim(), format!("lvl={outer_lvl}"), "{back:?}");
+    assert_eq!(s.info().shell.as_deref(), Some("bash"));
+
+    let shown = String::from_utf8_lossy(&ui.lock().unwrap()).to_string();
+    assert!(!shown.contains("AHTPROBE"), "probe leaked to the UI");
+    assert!(!shown.contains("__aht_pc"), "hook leaked to the UI");
+}
