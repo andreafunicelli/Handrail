@@ -32,6 +32,7 @@ pub struct AppState {
     /// Import previews kept server-side so secrets never round-trip through the UI.
     pub import_previews: Mutex<HashMap<String, aht_import::ImportBundle>>,
     pub github_device: Mutex<Option<aht_sync::github_device_flow::DeviceCode>>,
+    pub pending_github_token: Mutex<Option<String>>,
     pub terminal: crate::terminal::TerminalHub,
 }
 
@@ -45,6 +46,7 @@ impl AppState {
             vault: Arc::new(Mutex::new(vault)),
             import_previews: Mutex::new(HashMap::new()),
             github_device: Mutex::new(None),
+            pending_github_token: Mutex::new(None),
             terminal: crate::terminal::TerminalHub::default(),
             paths,
         })
@@ -55,7 +57,9 @@ fn default_keystore(paths: &Paths) -> Arc<dyn SecretKeyStore> {
     // The OS keychain holds the Secret Key so returning users only type their master password.
     // Linux desktops without a secret service fall back to a file in the app data dir.
     if std::env::var_os("AIHUBTERM_FILE_KEYSTORE").is_some() {
-        return Arc::new(aht_vault::FileSecretKeyStore::new(paths.data_dir.join("keys")));
+        return Arc::new(aht_vault::FileSecretKeyStore::new(
+            paths.data_dir.join("keys"),
+        ));
     }
     Arc::new(aht_vault::OsKeychainStore::new("dev.aihubterm.app"))
 }

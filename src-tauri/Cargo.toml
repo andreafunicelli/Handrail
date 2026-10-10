@@ -18,3 +18,15 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 aht-core.workspace = true
+aht-ssh.workspace = true
+aht-term.workspace = true
+aht-mcp.workspace = true
+aht-agent.workspace = true
+aht-providers.workspace = true
+aht-harness.workspace = true
+aht-sync.workspace = true
+aht-import.workspace = true
+aht-vault.workspace = true
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+base64 = "0.23.1"
+uuid.workspace = true

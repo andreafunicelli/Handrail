@@ -21,7 +21,9 @@ pub async fn vault_status(state: State<'_, AppState>) -> Result<VaultStatus> {
 #[tauri::command]
 pub async fn vault_create(state: State<'_, AppState>, password: String) -> Result<CreatedVault> {
     if password.chars().count() < 10 {
-        return Err(Error::Invalid("master password must be at least 10 characters".into()));
+        return Err(Error::Invalid(
+            "master password must be at least 10 characters".into(),
+        ));
     }
     let dir = state.paths.vault_dir.clone();
     let (vault, key) =
@@ -36,7 +38,9 @@ pub async fn vault_create(state: State<'_, AppState>, password: String) -> Resul
         }
     }
     *state.vault.lock().await = vault;
-    Ok(CreatedVault { secret_key: key.reveal().to_string() })
+    Ok(CreatedVault {
+        secret_key: key.reveal().to_string(),
+    })
 }
 
 #[tauri::command]
@@ -47,7 +51,10 @@ pub async fn vault_unlock(
 ) -> Result<()> {
     let vault = state.vault.clone();
     let mut guard = vault.lock_owned().await;
-    let vault_id = guard.vault_id().map(str::to_owned).ok_or(Error::NotFound("vault".into()))?;
+    let vault_id = guard
+        .vault_id()
+        .map(str::to_owned)
+        .ok_or(Error::NotFound("vault".into()))?;
     let typed = secret_key.as_deref().filter(|s| !s.trim().is_empty());
     let key = match typed {
         Some(s) => SecretKey::parse(s).map_err(Error::from)?,
@@ -84,7 +91,13 @@ async fn put<T: VaultItem>(state: &AppState, item: &T) -> Result<()> {
 }
 
 async fn delete<T: VaultItem>(state: &AppState, id: &str) -> Result<()> {
-    state.vault.lock().await.delete::<T>(id).map(|_| ()).map_err(Error::from)
+    state
+        .vault
+        .lock()
+        .await
+        .delete::<T>(id)
+        .map(|_| ())
+        .map_err(Error::from)
 }
 
 #[tauri::command]
@@ -125,7 +138,10 @@ pub async fn delete_group(state: State<'_, AppState>, id: String) -> Result<()> 
     let Some(target) = groups.iter().find(|g| g.id.to_string() == id).cloned() else {
         return Ok(());
     };
-    for mut g in groups.into_iter().filter(|g| g.parent_id == Some(target.id)) {
+    for mut g in groups
+        .into_iter()
+        .filter(|g| g.parent_id == Some(target.id))
+    {
         g.parent_id = target.parent_id;
         vault.put(&g).map_err(Error::from)?;
     }
@@ -157,7 +173,11 @@ pub async fn list_secrets(state: State<'_, AppState>) -> Result<Vec<SecretMeta>>
     Ok(list::<Secret>(&state)
         .await?
         .into_iter()
-        .map(|s| SecretMeta { id: s.id, kind: s.kind, label: s.label })
+        .map(|s| SecretMeta {
+            id: s.id,
+            kind: s.kind,
+            label: s.label,
+        })
         .collect())
 }
 
@@ -192,10 +212,15 @@ pub async fn delete_provider(state: State<'_, AppState>, id: String) -> Result<(
     let mut vault = state.vault.lock().await;
     if let Some(p) = vault.get::<Provider>(&id).map_err(Error::from)? {
         if let Some(key) = p.api_key {
-            vault.delete::<Secret>(&key.to_string()).map_err(Error::from)?;
+            vault
+                .delete::<Secret>(&key.to_string())
+                .map_err(Error::from)?;
         }
     }
-    vault.delete::<Provider>(&id).map(|_| ()).map_err(Error::from)
+    vault
+        .delete::<Provider>(&id)
+        .map(|_| ())
+        .map_err(Error::from)
 }
 
 #[tauri::command]
@@ -220,7 +245,10 @@ pub async fn delete_harness_profile(state: State<'_, AppState>, id: String) -> R
 #[tauri::command]
 pub async fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<Value>> {
     let vault = state.vault.lock().await;
-    Ok(vault.get::<Setting>(&key).map_err(Error::from)?.map(|s| s.value))
+    Ok(vault
+        .get::<Setting>(&key)
+        .map_err(Error::from)?
+        .map(|s| s.value))
 }
 
 #[tauri::command]
