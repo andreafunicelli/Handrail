@@ -1007,9 +1007,12 @@ async fn reader_task(sh: Arc<Shared>, mut rx: mpsc::Receiver<TransportEvent>) {
                     if !ui.is_empty() {
                         let _ = sh.ui_tx.send(ui);
                     }
-                    let events = g.tracker.feed(&d);
-                    for ev in events {
-                        g.handle(&sh, ev, &mut writes);
+                    // Byte-at-a-time so each event is handled while the line model reflects
+                    // exactly the output before it (e.g. the partial line at `D`).
+                    for b in &d {
+                        for ev in g.tracker.feed(std::slice::from_ref(b)) {
+                            g.handle(&sh, ev, &mut writes);
+                        }
                     }
                     g.after_chunk();
                 }

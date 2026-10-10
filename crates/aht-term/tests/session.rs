@@ -507,3 +507,36 @@ async fn user_typing_during_injection_is_queued() {
     );
     assert!(s.recent_lines(10).iter().any(|l| l == "typed"));
 }
+
+/// Output and marks arriving in one big chunk (as ConPTY does): the partial line at `D` must
+/// not include the prompt that follows it in the same chunk.
+#[tokio::test(start_paused = true)]
+async fn whole_chunk_delivery() {
+    let (sh, rx) = FakeShell::with_chunk(Kind::Bash, usize::MAX);
+    let s = TermSession::spawn(
+        Arc::new(FakeHandle(sh.clone())),
+        rx,
+        TermConfig {
+            policy: auto(),
+            ..Default::default()
+        },
+    );
+    for _ in 0..100 {
+        if s.integration() == IntegrationMode::Full && s.state() == SessionState::Idle {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let ap = TestApprover::approve();
+    let r = s
+        .run_command(&actor(), req("printf 'tail'"), &ap)
+        .await
+        .unwrap();
+    assert_eq!(r.output, "tail");
+    let r = s.run_command(&actor(), req("echo one"), &ap).await.unwrap();
+    assert_eq!(
+        r.output,
+        "one
+"
+    );
+}

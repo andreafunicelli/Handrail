@@ -46,6 +46,14 @@ pub struct FakeShell {
 
 impl FakeShell {
     pub fn new(kind: Kind) -> (Arc<FakeShell>, mpsc::Receiver<TransportEvent>) {
+        Self::with_chunk(kind, 7)
+    }
+
+    /// `chunk` = max bytes per emitted `Data` event.
+    pub fn with_chunk(
+        kind: Kind,
+        chunk: usize,
+    ) -> (Arc<FakeShell>, mpsc::Receiver<TransportEvent>) {
         let (tx, rx) = mpsc::channel(100_000);
         let sh = Arc::new(FakeShell {
             st: Mutex::new(St {
@@ -59,7 +67,7 @@ impl FakeShell {
                 written: Vec::new(),
             }),
             tx,
-            chunk: 7,
+            chunk,
         });
         // Login banner + first prompt.
         let s2 = sh.clone();
