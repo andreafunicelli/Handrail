@@ -40,7 +40,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_UPDATER_PUBLIC_KEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENDRTI2MTQ3NUNCNEYyNkMKUldSczhyUmNSMkhpekFteWFxYnFzeGtzcHRuSEc1WWpUTUFoKzhwOXBaRGVxVit1eDFqUjVYekUK",
       "endpoints": [
         "https://github.com/andreafunicelli/aihubterm-releases/releases/latest/download/latest.json"
       ],
