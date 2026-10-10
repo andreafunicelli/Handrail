@@ -401,6 +401,9 @@ button:disabled {
 .term-host .xterm {
   height: 100%;
 }
+.term-host .xterm .xterm-viewport {
+  background-color: transparent !important;
+}
 .term-host .xterm-screen {
   overflow: visible;
 }

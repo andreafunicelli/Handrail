@@ -22,7 +22,8 @@
 
   onMount(() => {
     const restore = document.activeElement as HTMLElement | null;
-    const first = box.querySelector<HTMLElement>("[data-autofocus], input, textarea, select, button:not([disabled])");
+    const first =
+      box.querySelector<HTMLElement>("[data-autofocus]") ?? box.querySelector<HTMLElement>("input, textarea, select, button:not([disabled])");
     first?.focus();
     return () => restore?.focus?.();
   });

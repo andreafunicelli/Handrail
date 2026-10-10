@@ -25,6 +25,13 @@
 
   let wsName = $state("");
 
+  // Ignore the synthetic click that follows the tap which opened a drawer (touch "ghost click").
+  let openedAt = 0;
+  $effect(() => {
+    if (ui.sidebarDrawer || ui.aiDrawer) openedAt = performance.now();
+  });
+  const settled = () => performance.now() - openedAt > 350;
+
   onMount(() => {
     void Promise.all([connections.load(), sessions.init(), agent.init()]).catch(toasts.error);
 
@@ -133,16 +140,16 @@
 
 {#if ui.narrow}
   {#if ui.sidebarDrawer}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="scrim" onmousedown={() => (ui.sidebarDrawer = false)}></div>
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+    <div class="scrim" onclick={() => settled() && (ui.sidebarDrawer = false)}></div>
     <div class="drawer left" role="dialog" aria-label={t("rail.connections")} tabindex="-1" onkeydown={(e) => e.key === "Escape" && (ui.sidebarDrawer = false)}>
       <IconRail />
       <div class="side">{@render sideContent()}</div>
     </div>
   {/if}
   {#if ui.aiDrawer}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="scrim" onmousedown={() => (ui.aiDrawer = false)}></div>
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+    <div class="scrim" onclick={() => settled() && (ui.aiDrawer = false)}></div>
     <div class="drawer right" role="dialog" aria-label={t("ai.title")} tabindex="-1"><AiSidebar /></div>
   {/if}
 {/if}

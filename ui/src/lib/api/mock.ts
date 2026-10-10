@@ -182,7 +182,8 @@ function runFake(sh: Shell, cmd: string): string {
 function prompt(sh: Shell): string {
   if (sh.native) return "";
   if (sh.local) return `${C.path}PS C:\\Users\\dev>${C.reset} `;
-  return `${C.user}${sh.info.user}@${sh.info.host?.split(".")[0]}${C.reset}:${C.path}${sh.cwd}${C.reset}$ `;
+  const host = /^[\d.]+$/.test(sh.info.host ?? "") ? sh.info.title : sh.info.host?.split(".")[0];
+  return `${C.user}${sh.info.user}@${host}${C.reset}:${C.path}${sh.cwd}${C.reset}$ `;
 }
 
 // ---------- mock API ----------

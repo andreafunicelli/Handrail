@@ -56,6 +56,9 @@ export class TermHost {
     if (this.opened) return;
     this.term.open(this.el);
     this.opened = true;
+    for (const m of this.marks) this.decorate(m);
+    // Touch devices use the DOM renderer: WebGL rendered blank under mobile emulation in testing.
+    if (typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches) return;
     import("@xterm/addon-webgl")
       .then(({ WebglAddon }) => {
         try {
@@ -71,7 +74,6 @@ export class TermHost {
         }
       })
       .catch(() => {});
-    for (const m of this.marks) this.decorate(m);
   }
 
   write(bytes: Uint8Array) {
@@ -155,3 +157,5 @@ class TermRegistry {
 }
 
 export const terminals = new TermRegistry();
+
+if (import.meta.env.DEV && typeof window !== "undefined") (window as unknown as { __ahtTerminals: TermRegistry }).__ahtTerminals = terminals;

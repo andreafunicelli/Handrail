@@ -5,7 +5,7 @@ const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
   root: "ui",
-  plugins: [svelte()],
+  plugins: [svelte({ configFile: "../svelte.config.js" })],
   clearScreen: false,
   build: {
     outDir: "dist",

@@ -46,7 +46,7 @@
     {/if}
 
     <section>
-      <h2>{t("start.recent")}</h2>
+      <h2>{recent.length || !fallback.length ? t("start.recent") : t("rail.connections")}</h2>
       {#if recent.length || fallback.length}
         <div class="cards">{#each recent.length ? recent : fallback as c (c.id)}{@render card(c)}{/each}</div>
       {:else}

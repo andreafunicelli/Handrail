@@ -49,12 +49,23 @@
           last = { cols, rows };
           void api.sessionResize(sessionId, cols, rows).catch(() => {});
         }
+        host.term.refresh(0, rows - 1);
       });
     };
     const ro = new ResizeObserver(fit);
     ro.observe(box);
     fit();
+    // Re-render when the device pixel ratio changes (moving between monitors, zoom).
+    let dprQuery = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+    const onDpr = () => {
+      fit();
+      dprQuery.removeEventListener("change", onDpr);
+      dprQuery = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+      dprQuery.addEventListener("change", onDpr);
+    };
+    dprQuery.addEventListener("change", onDpr);
     return () => {
+      dprQuery.removeEventListener("change", onDpr);
       ro.disconnect();
       cancelAnimationFrame(raf);
       host.el.remove(); // keep the xterm instance alive in the registry

@@ -203,6 +203,7 @@
     style:--depth={depth}
     title="{c.user}@{c.host}:{c.port}"
     ondblclick={() => connect(c)}
+    onclick={() => ui.narrow && connect(c)}
     onkeydown={(e) => rowKey(e, c)}
     oncontextmenu={(e) => connMenu(e, c)}
     ondragstart={(e) => dragStart(e, "c", c.id)}
