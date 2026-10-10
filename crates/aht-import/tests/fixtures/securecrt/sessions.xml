@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<VanDyke version="3.0">
+	<key name="Global">
+		<dword name="Alt Selects Menu">1</dword>
+	</key>
+	<key name="Sessions">
+		<key name="Default">
+			<string name="Protocol Name">SSH2</string>
+			<string name="Hostname"/>
+		</key>
+		<key name="alpha">
+			<string name="Protocol Name">SSH2</string>
+			<string name="Hostname">alpha.example.test</string>
+			<string name="Username">ops</string>
+			<dword name="[SSH2] Port">22</dword>
+			<string name="Password V2">02:00aabbccdd</string>
+			<string name="Firewall Name">Session:jumper</string>
+		</key>
+		<key name="Lab">
+			<key name="__FolderData__">
+				<string name="Comment">folder</string>
+			</key>
+			<key name="DC1">
+				<key name="beta">
+					<string name="Protocol Name">SSH2</string>
+					<string name="Hostname">beta.example.test</string>
+					<string name="Username">root</string>
+					<dword name="[SSH2] Port">000008AE</dword>
+					<string name="Firewall Name">None</string>
+				</key>
+				<key name="old telnet">
+					<string name="Protocol Name">Telnet</string>
+					<string name="Hostname">telnet.example.test</string>
+				</key>
+			</key>
+			<key name="rdp">
+				<string name="Protocol Name">RDP</string>
+				<string name="Hostname">rdp.example.test</string>
+			</key>
+			<key name="gamma">
+				<string name="Protocol Name">SSH2</string>
+				<string name="Hostname">gamma.example.test</string>
+				<string name="Username">kate</string>
+				<dword name="[SSH2] Port">2022</dword>
+				<string name="Identity Filename V2">{{DIR}}/id_crt</string>
+			</key>
+		</key>
+	</key>
+</VanDyke>

@@ -1,0 +1,4 @@
+HostName=unix.example.test
+PortNumber=2022
+Protocol=ssh
+UserName=dave
