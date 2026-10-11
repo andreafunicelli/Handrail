@@ -123,10 +123,10 @@ Design spec: [`docs/superpowers/specs/2026-10-10-aihubterm-design.md`](docs/supe
 ### Installers and updates
 
 The **Release** workflow (`.github/workflows/release.yml`) builds a universal macOS `.dmg` and Windows `.exe`/`.msi` installers:
-- On every push to `main`, it publishes them as a GitHub Release named `v<major>.<minor>.<build number>`.
+- On every push to `main`, it publishes them as a GitHub Release named `v<major>.<minor>.<patch>`, the patch one past the last release of that major.minor (publishing runs go one at a time, so two never take the same number).
 - On pull requests, it attaches them as workflow artifacts.
 
-The version lives only in the workspace `Cargo.toml`, and CI stamps the build number into it.
+The major.minor lives only in the workspace `Cargo.toml` (currently 1.0); CI stamps the full version into it. Changing it there (e.g. to 1.1) restarts the patch at 0.
 
 Updates need two things:
 1. **An updater key pair** from `npx tauri signer generate`.
@@ -146,7 +146,7 @@ Existing installs carry over:
 
 ## Status
 
-Pre-release (v0.1). Before a public release:
+Version 1.x, released from `main`. Before a public release:
 - choose a license;
 - set up code signing and notarization;
 - confirm with Anthropic and OpenAI that the subscription integration complies with their terms.
