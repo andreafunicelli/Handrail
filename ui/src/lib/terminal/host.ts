@@ -45,12 +45,12 @@ export class TermHost {
       macOptionIsMeta: true,
     });
     this.term.loadAddon(this.fit);
-    this.term.onData((d) => void api.sessionWrite(this.sessionId, strToB64(d)).catch(() => {}));
+    this.term.onData((d) => terminals.input(this.sessionId, strToB64(d)));
     this.term.onBinary((d) => {
       const bytes = Uint8Array.from(d, (c) => c.charCodeAt(0) & 0xff);
       let s = "";
       bytes.forEach((b) => (s += String.fromCharCode(b)));
-      void api.sessionWrite(this.sessionId, btoa(s)).catch(() => {});
+      terminals.input(this.sessionId, btoa(s));
     });
   }
 
@@ -143,9 +143,18 @@ export class TermHost {
   }
 }
 
+/** Sends what the user typed in a terminal (base64). */
+export type InputRouter = (sessionId: string, dataB64: string) => void;
+
+const writeTo: InputRouter = (sessionId, dataB64) => void api.sessionWrite(sessionId, dataB64).catch(() => {});
+
 class TermRegistry {
   private hosts = new Map<string, TermHost>();
   opts = { fontSize: 13, theme: {} as ITheme };
+  /** Where typing goes: its own session, unless the sessions store mirrors it (typing in all panes). */
+  input: InputRouter = writeTo;
+  /** Write typed input to one session. */
+  readonly write: InputRouter = writeTo;
 
   get(sessionId: string): TermHost {
     let h = this.hosts.get(sessionId);

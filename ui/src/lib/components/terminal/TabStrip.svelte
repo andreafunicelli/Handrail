@@ -24,6 +24,9 @@
         { label: t("tabs.splitRight"), icon: "splitRight", action: () => splitWith(tab, "row") },
         { label: t("tabs.splitDown"), icon: "splitDown", action: () => splitWith(tab, "col") },
         ...(multi ? [{ label: t("tabs.closePane"), icon: "x" as const, action: () => sessions.closePane(tab.id, tab.activeLeaf) }] : []),
+        ...(sessions.broadcast[tab.id] || sessions.broadcastTargets(tab.id).length > 1
+          ? [{ label: t("tabs.broadcast"), checked: !!sessions.broadcast[tab.id], action: () => sessions.toggleBroadcast(tab.id) }]
+          : []),
         "sep",
         { label: t("tabs.close"), icon: "x", shortcut: `${mod}⇧W`, action: () => sessions.closeTab(tab.id) },
       ],
@@ -107,6 +110,7 @@
       >
         <span class="dot {info?.state ?? ''}"></span>
         <span class="title">{sessions.tabTitle(tab)}</span>
+        {#if sessions.broadcasting(tab.id)}<span class="bcast" title={t("tabs.broadcastOn")}>⇶</span>{/if}
         <button
           class="close"
           tabindex="-1"
@@ -144,6 +148,10 @@
 {#if menu}<ContextMenu {...menu} onclose={() => (menu = null)} />{/if}
 
 <style>
+  .bcast {
+    color: var(--warn);
+    font-size: 12px;
+  }
   .bar {
     display: flex;
     align-items: stretch;
