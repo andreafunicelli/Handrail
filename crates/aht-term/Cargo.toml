@@ -8,7 +8,6 @@ publish.workspace = true
 [dependencies]
 aht-core.workspace = true
 async-trait.workspace = true
-chrono.workspace = true
 regex = "1"
 serde.workspace = true
 serde_json.workspace = true

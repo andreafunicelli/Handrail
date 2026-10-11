@@ -4,14 +4,13 @@ use crate::hooks::{self, ShellKind};
 use crate::parser::{TrackEvent, Tracker, UiFilter, CLEAR_LINE};
 use crate::policy::Policy;
 use crate::store::{excerpt, OutputStore};
-use aht_core::agent::{ApprovalDecision, ApprovalRequest, RiskClass};
+use aht_core::agent::{ApprovalDecision, ApprovalRequest};
 use aht_core::terminal::{
     Actor, CommandResult, CommandState, ControlKey, IntegrationMode, OutputChunk,
     RunCommandRequest, SessionInfo, SessionState, Transport, TransportEvent,
 };
 use aht_core::{ApprovalId, ConnectionId, Error, OutputId, Result, SessionId};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -69,33 +68,7 @@ impl Default for TermConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum AuditDecision {
-    /// Policy allowed it without asking.
-    AutoApproved,
-    Approved,
-    ApprovedEdited {
-        original: String,
-    },
-    Denied {
-        message: Option<String>,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct AuditEntry {
-    pub at: DateTime<Utc>,
-    pub actor_id: String,
-    pub actor_label: String,
-    pub command: String,
-    pub risk: RiskClass,
-    pub decision: AuditDecision,
-    pub exit_code: Option<i32>,
-    pub state: CommandState,
-}
-
-/// Session events for subscribers (UI decorations, status bar, audit view).
+/// Session events for subscribers (UI decorations, status bar).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionEvent {
@@ -119,9 +92,6 @@ pub enum SessionEvent {
         output_id: OutputId,
         state: CommandState,
         exit_code: Option<i32>,
-    },
-    Audit {
-        entry: AuditEntry,
     },
 }
 
@@ -191,7 +161,6 @@ struct Inner {
     pending_user: Vec<u8>,
     capture: Option<Capture>,
     recent: VecDeque<String>,
-    audit: Vec<AuditEntry>,
     policy: Policy,
     /// Hooked shells, outermost first.
     ctx_stack: Vec<ShellCtx>,
@@ -741,7 +710,6 @@ impl TermSession {
             pending_user: Vec::new(),
             capture: None,
             recent: VecDeque::new(),
-            audit: Vec::new(),
             policy: cfg.policy.clone(),
             ctx_stack: Vec::new(),
             nest_candidate: false,
@@ -785,10 +753,6 @@ impl TermSession {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<SessionEvent> {
         self.s.ev_tx.subscribe()
-    }
-
-    pub fn audit_log(&self) -> Vec<AuditEntry> {
-        self.s.inner.lock().unwrap().audit.clone()
     }
 
     /// Last `n` ANSI-stripped output lines.
@@ -881,25 +845,6 @@ impl TermSession {
             .flat_map(|k| k.bytes().iter().copied())
             .collect();
         self.s.transport.write(&bytes).await?;
-        let names: Vec<String> = keys
-            .iter()
-            .map(|k| {
-                serde_json::to_value(k)
-                    .ok()
-                    .and_then(|v| v.as_str().map(str::to_string))
-                    .unwrap_or_default()
-            })
-            .collect();
-        self.audit(AuditEntry {
-            at: Utc::now(),
-            actor_id: actor.id.clone(),
-            actor_label: actor.label.clone(),
-            command: format!("[keys] {}", names.join(" ")),
-            risk: RiskClass::Write,
-            decision: AuditDecision::AutoApproved,
-            exit_code: None,
-            state: CommandState::Completed,
-        });
         Ok(())
     }
 
@@ -918,11 +863,6 @@ impl TermSession {
             return Err(Error::Denied("session outside the actor's scope".into()));
         }
         Ok(())
-    }
-
-    fn audit(&self, entry: AuditEntry) {
-        self.s.inner.lock().unwrap().audit.push(entry.clone());
-        let _ = self.s.ev_tx.send(SessionEvent::Audit { entry });
     }
 
     /// Wait until `cond` holds or `deadline` passes. Returns whether it held.
@@ -958,7 +898,7 @@ impl TermSession {
 
         let policy = self.policy();
         let verdict = policy.evaluate(&original);
-        let (command, decision) = if verdict.needs_approval {
+        let command = if verdict.needs_approval {
             let ar = ApprovalRequest {
                 approval_id: ApprovalId::new(),
                 session_id: self.id(),
@@ -969,30 +909,13 @@ impl TermSession {
                 policy_note: verdict.note.clone(),
             };
             match approver.request(ar).await {
-                ApprovalDecision::Approve => (original.clone(), AuditDecision::Approved),
+                ApprovalDecision::Approve => original.clone(),
                 ApprovalDecision::ApproveEdited { command } => {
                     let command = command.trim().to_string();
                     validate_command(&command)?;
-                    (
-                        command,
-                        AuditDecision::ApprovedEdited {
-                            original: original.clone(),
-                        },
-                    )
+                    command
                 }
                 ApprovalDecision::Deny { message } => {
-                    self.audit(AuditEntry {
-                        at: Utc::now(),
-                        actor_id: actor.id.clone(),
-                        actor_label: actor.label.clone(),
-                        command: original.clone(),
-                        risk: verdict.risk,
-                        decision: AuditDecision::Denied {
-                            message: message.clone(),
-                        },
-                        exit_code: None,
-                        state: CommandState::Denied,
-                    });
                     return Ok(CommandResult {
                         state: CommandState::Denied,
                         exit_code: None,
@@ -1006,7 +929,7 @@ impl TermSession {
                 }
             }
         } else {
-            (original.clone(), AuditDecision::AutoApproved)
+            original.clone()
         };
 
         // Wait for the shell to be at a prompt.
@@ -1134,16 +1057,6 @@ the last line on screen is {screen:?}. Ask the user before interrupting it."
         }
         let (output, truncated) =
             excerpt(&text, self.s.cfg.excerpt_bytes, self.s.cfg.excerpt_bytes);
-        self.audit(AuditEntry {
-            at: Utc::now(),
-            actor_id: actor.id.clone(),
-            actor_label: actor.label.clone(),
-            command: command.clone(),
-            risk: verdict.risk,
-            decision,
-            exit_code,
-            state,
-        });
         let _ = self.s.ev_tx.send(SessionEvent::AgentDone {
             output_id,
             state,

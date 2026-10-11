@@ -6,5 +6,5 @@ pub mod session;
 pub mod store;
 
 pub use policy::{classify, Policy, PolicyVerdict};
-pub use session::{Approver, AuditDecision, AuditEntry, SessionEvent, TermConfig, TermSession};
+pub use session::{Approver, SessionEvent, TermConfig, TermSession};
 pub use store::OutputStore;

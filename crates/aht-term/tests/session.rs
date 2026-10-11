@@ -6,7 +6,7 @@ use aht_core::terminal::{
     Actor, CommandState, ControlKey, IntegrationMode, RunCommandRequest, SessionState,
 };
 use aht_core::Error;
-use aht_term::{AuditDecision, Policy, SessionEvent, TermConfig, TermSession};
+use aht_term::{Policy, SessionEvent, TermConfig, TermSession};
 use common::{FakeHandle, FakeShell, Kind, TestApprover};
 use regex::Regex;
 use std::sync::Arc;
@@ -147,11 +147,6 @@ async fn full_mode_run_and_exit_codes() {
         }
     }
     assert_eq!(marks, 5);
-    let audit = c.s.audit_log();
-    assert_eq!(audit.len(), 5);
-    assert_eq!(audit[1].exit_code, Some(1));
-    assert_eq!(audit[0].decision, AuditDecision::AutoApproved);
-    assert_eq!(audit[0].actor_id, "test:agent");
 }
 
 #[tokio::test(start_paused = true)]
@@ -416,13 +411,6 @@ async fn deny_list_denied_and_edited() {
     assert_eq!(r.state, CommandState::Completed);
     assert_eq!(r.command, "echo safe");
     assert_eq!(r.output, "safe\n");
-    let audit = c.s.audit_log();
-    assert!(matches!(audit[0].decision, AuditDecision::Denied { .. }));
-    assert_eq!(audit[0].state, CommandState::Denied);
-    assert!(matches!(
-        &audit[1].decision,
-        AuditDecision::ApprovedEdited { original } if original == "echo danger again"
-    ));
 }
 
 #[tokio::test(start_paused = true)]
@@ -463,8 +451,6 @@ async fn send_keys_interrupts_timed_out_command() {
     );
     let r2 = c.s.run_command(&actor(), req("false"), &ap).await.unwrap();
     assert_eq!(r2.exit_code, Some(1));
-    let log = c.s.audit_log();
-    assert!(log.iter().any(|e| e.command == "[keys] ctrl_c"));
 }
 
 #[tokio::test(start_paused = true)]

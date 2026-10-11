@@ -246,7 +246,6 @@ async fn register(
                         },
                     );
                 }
-                Ok(SessionEvent::Audit { .. }) => {}
                 Ok(_) => {
                     let _ = a.emit("session://state", t.info());
                 }
