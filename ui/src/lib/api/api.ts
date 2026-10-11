@@ -79,7 +79,6 @@ export interface Api {
   sessionWrite(sessionId: string, dataB64: string): Promise<void>;
   sessionResize(sessionId: string, cols: number, rows: number): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
-  listSessions(): Promise<SessionInfo[]>;
   hostKeyDecision(requestId: string, accept: boolean): Promise<void>;
 
   // approvals
@@ -138,8 +137,6 @@ export interface Api {
   openUrl(url: string): Promise<void>;
 
   // misc
-  getSetting<T = unknown>(key: string): Promise<T | null>;
-  setSetting(key: string, value: unknown): Promise<void>;
 
   on<E extends EventName>(event: E, cb: (payload: EventMap[E]) => void): Promise<Unlisten>;
 }

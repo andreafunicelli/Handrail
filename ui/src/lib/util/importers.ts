@@ -19,9 +19,6 @@ export function toolLabel(tool: string): string {
   return (LABELS as Record<string, string>)[tool] ?? tool;
 }
 
-export function isImportTool(s: string): s is ImportTool {
-  return (IMPORT_TOOLS as readonly string[]).includes(s);
-}
 
 /**
  * mRemoteNG files protected with a custom master password fail with an `auth` error; the UI

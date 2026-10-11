@@ -25,47 +25,37 @@
     shield: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6Z",
     send: "M5 12h13M13 6l6 6-6 6",
     stop: "M7 7h10v10H7z",
-    more: "M6 12h.01M12 12h.01M18 12h.01",
     edit: "M4 20h4L19 9l-4-4L4 16ZM13.5 6.5l4 4",
     trash: "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13",
     pin: "M9 4h6l-1 5 3 3v2H7v-2l3-3ZM12 14v6",
     play: "M7 5v14l11-7Z",
     clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 7v5l3 2",
     bolt: "M13 3 5 14h6l-1 7 8-11h-6Z",
-    command: "M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3Z",
     layout: "M4 5h16v14H4zM10 5v14M10 12h10",
-    sidebar: "M4 5h16v14H4zM15 5v14",
     menu: "M4 7h16M4 12h16M4 17h16",
     jump: "M7 17 17 7M9 7h8v8",
-    cpu: "M7 7h10v10H7zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4",
     cloud: "M7 18a4 4 0 0 1-.6-8A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9Z",
     palette: "M12 3a9 9 0 1 0 0 18c1 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.8.7-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-4.1-4-7.8-9-7.8ZM7.5 11.5h.01M10 7.5h.01M14.5 7.5h.01",
     info: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 11v5M12 8h.01",
     import: "M12 3v12M7 10l5 5 5-5M4 15v4h16v-4",
-    grip: "M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01",
     refresh: "M20 11a8 8 0 0 0-14.7-4.3L4 8M4 4v4h4M4 13a8 8 0 0 0 14.7 4.3L20 16M20 20v-4h-4",
-    user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21a8 8 0 0 1 16 0",
-    bot: "M6 9h12v10H6zM12 5v4M9 13h.01M15 13h.01M9.5 16.5h5",
     link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
-    eye: "M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7ZM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
   } as const;
   export type IconName = keyof typeof P;
-  export const ICONS = P;
 </script>
 
 <script lang="ts">
-  let { name, size = 16, stroke = 1.5, class: cls = "" }: { name: IconName; size?: number; stroke?: number; class?: string } = $props();
+  let { name, size = 16 }: { name: IconName; size?: number } = $props();
 </script>
 
 <svg
-  class={cls}
   width={size}
   height={size}
   viewBox="0 0 24 24"
   fill="none"
   stroke="currentColor"
-  stroke-width={stroke}
+  stroke-width="1.5"
   stroke-linecap="round"
   stroke-linejoin="round"
   aria-hidden="true"
-  focusable="false"><path d={ICONS[name]} /></svg>
+  focusable="false"><path d={P[name]} /></svg>

@@ -158,4 +158,3 @@ class TermRegistry {
 
 export const terminals = new TermRegistry();
 
-if (import.meta.env.DEV && typeof window !== "undefined") (window as unknown as { __ahtTerminals: TermRegistry }).__ahtTerminals = terminals;
