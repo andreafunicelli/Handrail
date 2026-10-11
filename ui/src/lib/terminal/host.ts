@@ -21,9 +21,12 @@ export class TermHost {
   opened = false;
   marks: AgentMark[] = [];
   private webgl: { dispose(): void } | null = null;
+  /** Output received before the view opened (handed over when a reconnect adopts this host). */
+  private early: Uint8Array[] = [];
 
   constructor(
-    readonly sessionId: string,
+    /** Changes when a reconnect moves this terminal to the new session. */
+    public sessionId: string,
     opts: { fontSize: number; theme: ITheme },
   ) {
     this.el = document.createElement("div");
@@ -42,12 +45,12 @@ export class TermHost {
       macOptionIsMeta: true,
     });
     this.term.loadAddon(this.fit);
-    this.term.onData((d) => void api.sessionWrite(sessionId, strToB64(d)).catch(() => {}));
+    this.term.onData((d) => void api.sessionWrite(this.sessionId, strToB64(d)).catch(() => {}));
     this.term.onBinary((d) => {
       const bytes = Uint8Array.from(d, (c) => c.charCodeAt(0) & 0xff);
       let s = "";
       bytes.forEach((b) => (s += String.fromCharCode(b)));
-      void api.sessionWrite(sessionId, btoa(s)).catch(() => {});
+      void api.sessionWrite(this.sessionId, btoa(s)).catch(() => {});
     });
   }
 
@@ -56,6 +59,7 @@ export class TermHost {
     if (this.opened) return;
     this.term.open(this.el);
     this.opened = true;
+    this.early = [];
     for (const m of this.marks) this.decorate(m);
     // Touch devices use the DOM renderer: WebGL rendered blank under mobile emulation in testing.
     if (typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches) return;
@@ -77,7 +81,15 @@ export class TermHost {
   }
 
   write(bytes: Uint8Array) {
+    if (!this.opened) this.early.push(bytes);
     this.term.write(bytes);
+  }
+
+  /** Output that arrived before the view opened. */
+  takeEarly(): Uint8Array[] {
+    const e = this.early;
+    this.early = [];
+    return e;
   }
 
   /** Mark the current cursor line as agent-run (✦ in the gutter + overview ruler tick). */
@@ -145,6 +157,22 @@ class TermRegistry {
   }
   peek(sessionId: string) {
     return this.hosts.get(sessionId);
+  }
+  /**
+   * Move the terminal of `from` (screen and scrollback) to session `to`. Output of `to` that
+   * arrived first (it can beat the open call's reply) is replayed into it.
+   */
+  rekey(from: string, to: string) {
+    const h = this.hosts.get(from);
+    if (!h) return;
+    const early = this.hosts.get(to);
+    this.hosts.delete(from);
+    h.sessionId = to;
+    this.hosts.set(to, h);
+    if (early && early !== h) {
+      for (const b of early.takeEarly()) h.write(b);
+      early.dispose();
+    }
   }
   dispose(sessionId: string) {
     this.hosts.get(sessionId)?.dispose();

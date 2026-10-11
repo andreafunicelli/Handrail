@@ -18,6 +18,9 @@ import {
 import { load, save } from "../util/storage";
 import { terminals } from "../terminal/host";
 import { connections } from "./connections.svelte";
+import { agent } from "./agent.svelte";
+import { RECONNECT_ATTEMPTS, reconnectDelay, retryable, shouldAutoReconnect } from "../util/reconnect";
+import { t } from "../i18n";
 import { s3 } from "./s3.svelte";
 
 export interface Tab {
@@ -35,6 +38,18 @@ export interface Workspace {
 
 const COLS = 120;
 const ROWS = 32;
+
+/** A dropped SSH session logging in again in the background, keyed by the old session id. */
+export interface Reconnect {
+  /** Attempts made so far. */
+  attempt: number;
+  /** When the next attempt starts (ms epoch); null while one runs. */
+  nextAt: number | null;
+  /** Why the connection dropped, then why the last attempt failed. */
+  error: string | null;
+  /** False once it gave up or was stopped. */
+  running: boolean;
+}
 
 /** A pane whose SSH connection is still logging in. Its layout leaf holds `pending:<ref>`. */
 export interface PendingConnection {
@@ -69,6 +84,9 @@ export class Sessions {
   activeTabId = $state<string | null>(null);
   hostKeys = $state<HostKeyEvent[]>([]);
   pending = $state<Record<string, PendingConnection>>({});
+  reconnects = $state<Record<string, Reconnect>>({});
+  /** Cuts the wait before a reconnect attempt short. */
+  private wakers = new Map<string, () => void>();
   /** Label of the last agent that typed into each session (for the "Agent running" banner). */
   lastActor = $state<Record<string, string>>({});
   workspaces = $state<Workspace[]>(load("workspaces", []));
@@ -90,9 +108,13 @@ export class Sessions {
     this.started = true;
     await api.on("session://data", (e) => terminals.get(e.session_id).write(b64ToBytes(e.data_b64)));
     await api.on("session://state", (info) => {
-      if (this.infos[info.session_id] || this.tabs.some((t) => findLeafBySession(t.layout, info.session_id)))
-        this.infos[info.session_id] = info;
+      if (!this.infos[info.session_id] && !this.tabs.some((t) => findLeafBySession(t.layout, info.session_id))) return;
+      this.infos[info.session_id] = info;
+      const auth = info.connection_id ? connections.byId.get(info.connection_id)?.auth.type : undefined;
+      if (shouldAutoReconnect(info, auth) && !this.reconnects[info.session_id]) void this.autoReconnect(info.session_id, false);
     });
+    // Back online (wake from sleep, Wi-Fi again): try at once instead of waiting out the backoff.
+    if (typeof window !== "undefined") window.addEventListener("online", () => this.wakers.forEach((wake) => wake()));
     await api.on("session://agent_mark", (e) => {
       terminals.get(e.session_id).mark(e.command, e.actor_label);
       this.lastActor[e.session_id] = e.actor_label;
@@ -156,10 +178,94 @@ export class Sessions {
     }));
   }
 
-  /** Replace a disconnected session in place with a fresh one for the same connection. */
+  /**
+   * Log a dropped SSH session in again, keeping its terminal: retries with backoff while the
+   * network is the problem, stops on a login or host key error (or a login prompt).
+   */
+  private async autoReconnect(sessionId: string, now: boolean) {
+    const connectionId = this.infos[sessionId]?.connection_id;
+    if (!connectionId) return;
+    this.reconnects[sessionId] = { attempt: 0, nextAt: null, error: this.infos[sessionId].ended?.error ?? null, running: true };
+    for (let n = 0; n < RECONNECT_ATTEMPTS; n++) {
+      // Automatic: a first pause lets a flapping network settle. Manual: try right away.
+      const wait = reconnectDelay(now ? n : n + 1);
+      let r = this.reconnects[sessionId];
+      if (!r?.running) return;
+      if (wait) {
+        r.nextAt = Date.now() + wait;
+        await this.pause(sessionId, wait);
+      }
+      r = this.reconnects[sessionId];
+      if (!r?.running) return;
+      r.nextAt = null;
+      r.attempt = n + 1;
+      const term = terminals.peek(sessionId)?.term;
+      try {
+        // A ref no pane knows: a login prompt is declined, so this never asks the user.
+        const next = await api.openSession(connectionId, term?.cols ?? COLS, term?.rows ?? ROWS, uuid());
+        if (!this.reconnects[sessionId]?.running || !this.infos[sessionId]) {
+          void api.closeSession(next.session_id).catch(() => {});
+          return;
+        }
+        this.adopt(sessionId, next);
+        return;
+      } catch (e) {
+        const cur = this.reconnects[sessionId];
+        if (!cur) return;
+        cur.error = errorMessage(e);
+        if (!retryable(e)) break;
+      }
+    }
+    const r = this.reconnects[sessionId];
+    if (r) Object.assign(r, { running: false, nextAt: null });
+  }
+
+  private pause(sessionId: string, ms: number) {
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.wakers.delete(sessionId);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      this.wakers.set(sessionId, done);
+    });
+  }
+
+  /** Move the terminal of dropped session `old` (and its file browser) to the new session. */
+  private adopt(old: string, next: SessionInfo) {
+    terminals.peek(old)?.write(new TextEncoder().encode(`\r\n\x1b[2m── ${t("term.reconnectedLine")} ──\x1b[0m\r\n`));
+    terminals.rekey(old, next.session_id);
+    this.infos[next.session_id] = next;
+    this.swapSession(old, next.session_id);
+    this.swapSession(FILES + old, FILES + next.session_id);
+    agent.moveSession(old, next.session_id);
+    if (this.lastActor[old]) this.lastActor[next.session_id] = this.lastActor[old];
+    delete this.lastActor[old];
+    delete this.reconnects[old];
+    void api.closeSession(old).catch(() => {});
+    delete this.infos[old];
+  }
+
+  /** Try now: skips the wait, or starts again after giving up. */
+  reconnectNow(sessionId: string) {
+    if (this.reconnects[sessionId]?.running) this.wakers.get(sessionId)?.();
+    else void this.autoReconnect(sessionId, true);
+  }
+
+  stopReconnect(sessionId: string) {
+    const r = this.reconnects[sessionId];
+    if (r) Object.assign(r, { running: false, nextAt: null });
+    this.wakers.get(sessionId)?.();
+  }
+
+  /** Replace a disconnected session with a fresh one for the same connection. */
   async reconnect(sessionId: string) {
     const old = this.infos[sessionId];
     if (!old) return;
+    const auth = old.connection_id ? connections.byId.get(old.connection_id)?.auth.type : undefined;
+    // Saved credentials: log in again in place, keeping the terminal. Otherwise the login pane asks.
+    if (auth && auth !== "prompt") return this.reconnectNow(sessionId);
     if (old.connection_id) {
       const ref = uuid();
       this.swapSession(sessionId, PENDING + ref);
@@ -263,6 +369,8 @@ export class Sessions {
       if (p?.prompt) void api.answerAuthPrompt(p.prompt.request_id, null);
       return;
     }
+    this.stopReconnect(sessionId);
+    delete this.reconnects[sessionId];
     void api.closeSession(sessionId).catch(() => {});
     terminals.dispose(sessionId);
     delete this.infos[sessionId];

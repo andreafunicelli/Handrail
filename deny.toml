@@ -14,7 +14,7 @@ ignore = [
     # Marvin attack: RSA private-key operations are not constant-time. russh uses `rsa` to sign
     # the client's SSH authentication with a user's RSA key, locally, once per login; the
     # attack needs many timed decryptions observed by the attacker. No patched rsa release.
-    { id = "RUSTSEC-2023-0071", reason = "russh client-side RSA signing only; no patched rsa release (RustCrypto/RSA#626)" },
+    { id = "RUSTSEC-2023-0071", reason = "Marvin timing attack; russh uses rsa only for client-side signing during login (a few operations per connection). No patched rsa release (RustCrypto/RSA#626); RSA key login must stay supported. Re-check when rsa ships a fix." },
 ]
 
 [licenses]

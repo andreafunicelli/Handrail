@@ -92,6 +92,11 @@ impl FakeShell {
             .try_send(TransportEvent::Closed { exit_status: None });
     }
 
+    /// Deliver a raw transport event (how a real connection reports its end).
+    pub fn event(&self, ev: TransportEvent) {
+        let _ = self.tx.try_send(ev);
+    }
+
     /// Emit output split into small chunks to exercise split-sequence parsing.
     fn emit(&self, data: &[u8]) {
         for c in data.chunks(self.chunk) {

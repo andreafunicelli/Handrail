@@ -75,6 +75,7 @@ pub fn session() -> SessionInfo {
         integration: IntegrationMode::Full,
         state: SessionState::Idle,
         approval_mode: ApprovalMode::ConfirmAll,
+        ended: None,
     }
 }
 

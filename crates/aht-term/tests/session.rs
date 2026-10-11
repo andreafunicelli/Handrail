@@ -3,7 +3,8 @@ mod common;
 use aht_core::agent::{ApprovalDecision, RiskClass};
 use aht_core::model::{ApprovalMode, Environment};
 use aht_core::terminal::{
-    Actor, CommandState, ControlKey, IntegrationMode, RunCommandRequest, SessionState,
+    Actor, CommandState, ControlKey, IntegrationMode, RunCommandRequest, SessionEnd, SessionState,
+    TransportEvent,
 };
 use aht_core::Error;
 use aht_term::{Policy, SessionEvent, TermConfig, TermSession};
@@ -431,6 +432,38 @@ async fn disconnect_interrupts() {
     assert_eq!(c.s.state(), SessionState::Disconnected);
     let ap = TestApprover::approve();
     assert!(c.s.run_command(&actor(), req("ls"), &ap).await.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn records_how_the_session_ended() {
+    // A lost connection reports an error (then a close): the error is what counts.
+    let c = start(Kind::Bash, auto()).await;
+    c.sh.event(TransportEvent::Error("Connection reset by peer".into()));
+    c.sh.event(TransportEvent::Closed { exit_status: None });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(c.s.state(), SessionState::Disconnected);
+    assert_eq!(
+        c.s.info().ended,
+        Some(SessionEnd {
+            exit_status: None,
+            error: Some("Connection reset by peer".into()),
+        })
+    );
+
+    // `exit` in the shell: a clean end with the exit status.
+    let c = start(Kind::Bash, auto()).await;
+    assert_eq!(c.s.info().ended, None);
+    c.sh.event(TransportEvent::Closed {
+        exit_status: Some(0),
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        c.s.info().ended,
+        Some(SessionEnd {
+            exit_status: Some(0),
+            error: None,
+        })
+    );
 }
 
 #[tokio::test(start_paused = true)]

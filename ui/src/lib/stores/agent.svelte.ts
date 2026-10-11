@@ -167,6 +167,19 @@ class Agent {
     }
   }
 
+  /** A reconnect replaced session `from` with `to`: the conversation and brain choice follow. */
+  moveSession(from: string, to: string) {
+    const chat = this.chats[from];
+    if (chat) {
+      this.chats[to] = { ...chat, runId: null };
+      delete this.chats[from];
+    }
+    if (this.brainBySession[from]) {
+      this.brainBySession[to] = this.brainBySession[from];
+      delete this.brainBySession[from];
+    }
+  }
+
   clear(sessionId: string) {
     if (this.chats[sessionId]?.runId) return;
     delete this.chats[sessionId];

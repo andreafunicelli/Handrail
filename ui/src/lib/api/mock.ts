@@ -323,6 +323,12 @@ export function createMockApi(): Api {
     listeners.get(event)?.forEach((cb) => cb(payload));
   }
   const write = (sid: string, s: string) => emit("session://data", { session_id: sid, data_b64: strToB64(s) });
+  /** Hosts rebooting in the demo ("sudo reboot"): unreachable until the time given. */
+  const downUntil = new Map<string, number>();
+  const endSession = (sh: Shell, ended: NonNullable<SessionInfo["ended"]>) => {
+    sh.info = { ...sh.info, state: "disconnected", ended };
+    emit("session://state", sh.info);
+  };
   const setState = (sh: Shell, state: SessionInfo["state"]) => {
     sh.info = { ...sh.info, state };
     emit("session://state", sh.info);
@@ -604,6 +610,7 @@ export function createMockApi(): Api {
       const c = db.connections.find((x) => x.id === connection_id);
       if (!c) throw fail("not_found", "Connection not found.");
       await sleep(250);
+      if ((downUntil.get(c.host) ?? 0) > Date.now()) throw fail("network", `connect to ${c.host}:${c.port}: Connection refused`);
       if (c.auth.type === "prompt") {
         if (!prompt_ref) throw fail("auth", `${c.name} has no saved password or key, so only you can log in to it`);
         // Like the real login: three tries; an empty password is "wrong".
@@ -652,6 +659,19 @@ export function createMockApi(): Api {
           write(session_id, "\r\n");
           const line = sh.line;
           sh.line = "";
+          if (!sh.local && line.trim() === "exit") {
+            write(session_id, "logout\r\n");
+            endSession(sh, { exit_status: 0, error: null });
+            return;
+          }
+          if (!sh.local && line.trim() === "sudo reboot") {
+            // The connection drops and the host is unreachable for a few seconds.
+            write(session_id, `\r\nBroadcast message from root@${sh.info.host}: The system will reboot now!\r\n`);
+            downUntil.set(sh.info.host ?? "", Date.now() + 4000);
+            await sleep(300);
+            endSession(sh, { exit_status: null, error: "Connection reset by peer" });
+            return;
+          }
           await execLine(sh, line);
         } else if (ch === "\x7f" || ch === "\b") {
           if (sh.line) {
