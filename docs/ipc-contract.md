@@ -34,6 +34,17 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 - Event `approval://requested` `ApprovalRequest`; answer `approval_decide({ approval_id, decision })`
 - `set_approval_mode({ session_id, mode })`
 
+## Files (SFTP)
+SFTP runs on the SSH connection of an open SSH session (no second login); local sessions refuse.
+- `sftp_home({ session_id }) -> string`, `sftp_list({ session_id, path }) -> FileEntry[]`
+  (`{ name, path, kind: "dir"|"file"|"symlink"|"other", size, modified, permissions }`, folders first)
+- `sftp_mkdir({ session_id, path })`, `sftp_rename({ session_id, from, to })`,
+  `sftp_remove({ session_id, path, is_dir })` (empty folders only)
+- `sftp_download({ session_id, path, transfer_id }) -> local path` (into Downloads, never
+  overwrites), `sftp_upload({ session_id, local_path, dir, transfer_id }) -> remote path`
+- Event `sftp://progress` `{ transfer_id, done, total }` (at most ten a second, plus the last)
+- Upload paths come from the native file dialog (`tauri-plugin-dialog`, `dialog:allow-open` only).
+
 ## Snippets
 - `list_snippets()`, `save_snippet({ snippet })` (name and command required), `delete_snippet({ id })`.
   Vault item type `snippet` `{ id, name, command, description, tags }`; `{{name}}` placeholders are

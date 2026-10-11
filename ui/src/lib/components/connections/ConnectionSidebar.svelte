@@ -321,7 +321,6 @@
   <div class="kinds" role="tablist">
     <button role="tab" aria-selected="true" class="kind on">SSH</button>
     <button role="tab" aria-selected="false" class="kind" disabled>MySQL <span class="pill">{t("sidebar.soon")}</span></button>
-    <button role="tab" aria-selected="false" class="kind" disabled>SFTP <span class="pill">{t("sidebar.soon")}</span></button>
   </div>
 
   <div

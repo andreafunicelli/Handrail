@@ -1,6 +1,7 @@
 mod autosync;
 mod cmd_misc;
 mod cmd_vault;
+mod sftp;
 mod state;
 mod terminal;
 
@@ -78,7 +79,7 @@ fn migrate_legacy_data_dir(dir: &std::path::Path) {
 }
 
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
@@ -149,6 +150,13 @@ pub fn run() {
             terminal::approval_decide,
             terminal::host_key_decision,
             terminal::auth_prompt_answer,
+            sftp::sftp_home,
+            sftp::sftp_list,
+            sftp::sftp_mkdir,
+            sftp::sftp_rename,
+            sftp::sftp_remove,
+            sftp::sftp_download,
+            sftp::sftp_upload,
             terminal::open_session,
             terminal::open_local_session,
             terminal::session_write,

@@ -6,6 +6,7 @@ pub mod client;
 pub mod known_hosts;
 pub mod local;
 pub mod reconnect;
+pub mod sftp;
 pub mod verify;
 
 pub use auth::{AuthMaterial, KeyboardInteractiveHandler, KiPrompt};
@@ -13,6 +14,7 @@ pub use client::{connect_shell, ExecOutput, JumpHop, SshConnection, SshParams, S
 pub use known_hosts::{fingerprint, HostKeyStatus, KnownHosts};
 pub use local::{default_local_shells, spawn_local, DiscoveredShell, LocalPty, LocalShellSpec};
 pub use reconnect::{reconnect, retry_with_backoff, ReconnectPolicy};
+pub use sftp::{EntryKind, RemoteEntry, Sftp};
 pub use verify::{
     HostKeyDecision, HostKeyPrompt, HostKeyVerifier, PromptingVerifier, StrictVerifier,
 };

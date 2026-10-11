@@ -89,6 +89,19 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # A real OpenSSH server for aht-ssh/tests/real_sftp.rs (skipped where these vars are unset).
+      - name: Start sshd for the SFTP test (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y openssh-server
+          ssh-keygen -t ed25519 -N "" -q -f "$RUNNER_TEMP/handrail_key"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh && chmod go-w ~
+          cat "$RUNNER_TEMP/handrail_key.pub" >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          sudo systemctl start ssh || sudo service ssh start
+          echo "HANDRAIL_SSH_TEST=$(whoami)@127.0.0.1:22" >> "$GITHUB_ENV"
+          echo "HANDRAIL_SSH_TEST_KEY=$RUNNER_TEMP/handrail_key" >> "$GITHUB_ENV"
+
       - name: Test
         run: cargo test --workspace
 

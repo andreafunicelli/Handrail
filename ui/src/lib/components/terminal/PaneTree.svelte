@@ -2,10 +2,11 @@
   import PaneTree from "./PaneTree.svelte";
   import TerminalView from "./TerminalView.svelte";
   import ConnectingPane from "./ConnectingPane.svelte";
+  import FileBrowser from "../files/FileBrowser.svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import type { LayoutNode, SplitDir } from "../../util/layout";
-  import { isPending, pendingRef, sessions } from "../../stores/sessions.svelte";
+  import { filesSession, isFiles, isPending, pendingRef, sessions } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
 
   let { node, tabId, multi = false }: { node: LayoutNode; tabId: string; multi?: boolean } = $props();
@@ -103,14 +104,16 @@
       <div class="pane-head">
         <span class="dot {info?.state ?? ''}"></span>
         <span class="env-tick env-{info?.env ?? 'none'}"></span>
-        <span class="ptitle">{info?.title ?? sessions.pending[pendingRef(node.sessionId)]?.label ?? "…"}</span>
+        <span class="ptitle">{sessions.paneTitle(node.sessionId)}</span>
         <button class="icon-btn" title={t("tabs.closePane")} aria-label={t("tabs.closePane")} onclick={() => sessions.closePane(tabId, node.id)}>
           <Icon name="x" size={12} />
         </button>
       </div>
     {/if}
     <div class="pane-body">
-      {#if isPending(node.sessionId)}
+      {#if isFiles(node.sessionId)}
+        <FileBrowser sessionId={filesSession(node.sessionId)} />
+      {:else if isPending(node.sessionId)}
         <ConnectingPane ref={pendingRef(node.sessionId)} {focused} onclose={() => sessions.closePane(tabId, node.id)} />
       {:else}
         <TerminalView sessionId={node.sessionId} {focused} />

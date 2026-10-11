@@ -51,6 +51,13 @@ const PENDING = "pending:";
 export const isPending = (sessionId: string) => sessionId.startsWith(PENDING);
 export const pendingRef = (sessionId: string) => sessionId.slice(PENDING.length);
 
+/** A file-browser pane holds `files:<ssh session id>` in its layout leaf. */
+const FILES = "files:";
+export const isFiles = (leafSession: string) => leafSession.startsWith(FILES);
+export const filesSession = (leafSession: string) => leafSession.slice(FILES.length);
+/** Whether a leaf shows a live terminal (not a connecting pane or a file browser). */
+const isTerminal = (leafSession: string) => !isPending(leafSession) && !isFiles(leafSession);
+
 export class Sessions {
   infos = $state<Record<string, SessionInfo>>({});
   tabs = $state<Tab[]>([]);
@@ -66,7 +73,7 @@ export class Sessions {
     const tab = this.activeTab;
     if (!tab) return null;
     const id = (findLeaf(tab.layout, tab.activeLeaf) ?? leaves(tab.layout)[0])?.sessionId ?? null;
-    return id && !isPending(id) ? id : null;
+    return id && isTerminal(id) ? id : null;
   });
   activeSession = $derived(this.activeSessionId ? (this.infos[this.activeSessionId] ?? null) : null);
 
@@ -215,7 +222,25 @@ export class Sessions {
     }
   }
 
+  /** Open the file browser for an SSH session, split to the right of its terminal. */
+  openFiles(sessionId: string) {
+    const leafId = FILES + sessionId;
+    for (const t of this.tabs) {
+      const existing = findLeafBySession(t.layout, leafId);
+      if (existing) return this.focus(t.id, existing.id);
+    }
+    for (const t of this.tabs) {
+      const term = findLeafBySession(t.layout, sessionId);
+      if (!term) continue;
+      const node = leaf(leafId);
+      this.updateTab(t.id, (tab) => ({ ...tab, layout: splitLeaf(tab.layout, term.id, node, "row"), activeLeaf: node.id }));
+      this.activeTabId = t.id;
+      return;
+    }
+  }
+
   private dropSession(sessionId: string) {
+    if (isFiles(sessionId)) return;
     if (isPending(sessionId)) {
       const ref = pendingRef(sessionId);
       const p = this.pending[ref];
@@ -283,8 +308,15 @@ export class Sessions {
   tabTitle(tab: Tab): string {
     const ls = leaves(tab.layout);
     const id = (findLeaf(tab.layout, tab.activeLeaf) ?? ls[0]).sessionId;
-    const title = this.infos[id]?.title ?? (isPending(id) ? this.pending[pendingRef(id)]?.label : null) ?? "…";
+    const title = this.paneTitle(id);
     return ls.length > 1 ? `${title} +${ls.length - 1}` : title;
+  }
+
+  /** Title of the pane holding `leafSession`. */
+  paneTitle(leafSession: string): string {
+    if (isPending(leafSession)) return this.pending[pendingRef(leafSession)]?.label ?? "…";
+    if (isFiles(leafSession)) return `Files · ${this.infos[filesSession(leafSession)]?.title ?? "…"}`;
+    return this.infos[leafSession]?.title ?? "…";
   }
 
   tabInfo(tab: Tab): SessionInfo | null {
@@ -294,9 +326,14 @@ export class Sessions {
 
   // ---- workspaces ----
   saveWorkspace(name: string) {
-    const tabs = this.tabs.map((t) =>
-      mapLeaves(t.layout, (l) => ({ ...l, sessionId: this.infos[l.sessionId]?.connection_id ?? "local" })),
-    );
+    // File browsers are not saved; a pane still logging in is saved as its connection.
+    const connOf = (id: string) =>
+      (isPending(id) ? this.pending[pendingRef(id)]?.connectionId : this.infos[id]?.connection_id) ?? "local";
+    const tabs = this.tabs.flatMap((t) => {
+      let layout: LayoutNode | null = t.layout;
+      for (const l of leaves(t.layout)) if (layout && isFiles(l.sessionId)) layout = removeLeaf(layout, l.id);
+      return layout ? [mapLeaves(layout, (l) => ({ ...l, sessionId: connOf(l.sessionId) }))] : [];
+    });
     const ws: Workspace = { id: uuid(), name, tabs: $state.snapshot(tabs) as LayoutNode[] };
     this.workspaces = [...this.workspaces.filter((w) => w.name !== name), ws];
     save("workspaces", this.workspaces);

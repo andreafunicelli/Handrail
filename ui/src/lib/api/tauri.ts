@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { Api } from "./api";
 import type { ApprovalSettings } from "./types";
 import { errorMessage } from "./errors";
@@ -43,6 +44,17 @@ export function createTauriApi(): Api {
       (await invoke<ApprovalSettings | null>("get_setting", { key: APPROVALS_KEY })) ?? DEFAULT_APPROVALS,
     saveApprovalSettings: (settings) => invoke("set_setting", { key: APPROVALS_KEY, value: settings }),
 
+    sftpHome: (session_id) => invoke("sftp_home", { session_id }),
+    sftpList: (session_id, path) => invoke("sftp_list", { session_id, path }),
+    sftpMkdir: (session_id, path) => invoke("sftp_mkdir", { session_id, path }),
+    sftpRename: (session_id, from, to) => invoke("sftp_rename", { session_id, from, to }),
+    sftpRemove: (session_id, path, is_dir) => invoke("sftp_remove", { session_id, path, is_dir }),
+    sftpDownload: (session_id, path, transfer_id) => invoke("sftp_download", { session_id, path, transfer_id }),
+    sftpUpload: (session_id, local_path, dir, transfer_id) => invoke("sftp_upload", { session_id, local_path, dir, transfer_id }),
+    async pickFiles() {
+      const picked = await openDialog({ multiple: true, directory: false });
+      return picked == null ? [] : Array.isArray(picked) ? picked : [picked];
+    },
     listSnippets: () => invoke("list_snippets"),
     saveSnippet: (snippet) => invoke("save_snippet", { snippet }),
     deleteSnippet: (id) => invoke("delete_snippet", { id }),

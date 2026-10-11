@@ -235,6 +235,40 @@ export function createMockApi(): Api {
   ];
   const syncEvent = () => emit("sync://status", structuredClone(sync));
   const authPrompts = new Map<string, (answers: string[] | null) => void>();
+  // ---- fake remote file system (one for all SSH sessions) ----
+  type FsNode = { kind: "dir" | "file"; size: number; modified: number; permissions: number };
+  const files = new Map<string, FsNode>();
+  const parentOf = (p: string) => p.replace(/\/[^/]+$/, "") || "/";
+  const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
+  function seedFiles(home: string) {
+    if (files.has(home)) return;
+    const now = Math.floor(Date.now() / 1000);
+    const dir = (p: string, age = 3600) => files.set(p, { kind: "dir", size: 4096, modified: now - age, permissions: 0o40755 });
+    const file = (p: string, size: number, age = 7200, mode = 0o100644) => files.set(p, { kind: "file", size, modified: now - age, permissions: mode });
+    for (const p of ["/", "/home", home]) dir(p, 86400 * 30);
+    dir(`${home}/app`);
+    dir(`${home}/logs`, 600);
+    file(`${home}/.bashrc`, 3771, 86400 * 90);
+    file(`${home}/deploy.sh`, 1290, 86400, 0o100755);
+    file(`${home}/app/docker-compose.yml`, 2048);
+    file(`${home}/app/.env`, 412, 86400 * 3, 0o100600);
+    file(`${home}/logs/app.log`, 18_400_000, 60);
+    file(`${home}/logs/app.log.1.gz`, 2_100_000, 86400);
+  }
+  function sshShell(session_id: string) {
+    const sh = shells.get(session_id);
+    if (!sh) throw fail("not_found", `session ${session_id}`);
+    if (sh.local) throw fail("invalid", "files are only available for SSH sessions");
+    const home = `/home/${sh.info.user}`;
+    seedFiles(home);
+    return { sh, home };
+  }
+  async function transfer(transfer_id: string, total: number) {
+    for (let i = 0; i <= 10; i++) {
+      emit("sftp://progress", { transfer_id, done: Math.round((total * i) / 10), total });
+      await sleep(60);
+    }
+  }
   const fail = (kind: string, message: string) => Object.assign(new Error(message), { kind, message });
   let githubPolls = 0;
 
@@ -612,6 +646,61 @@ export function createMockApi(): Api {
     },
     async saveApprovalSettings(s) {
       approvalSettings = structuredClone(s);
+    },
+
+    async sftpHome(session_id) {
+      return sshShell(session_id).home;
+    },
+    async sftpList(session_id, path) {
+      sshShell(session_id);
+      const node = files.get(path);
+      if (!node) throw fail("not_found", `No such file: ${path}`);
+      if (node.kind !== "dir") throw fail("invalid", `${path} is not a folder`);
+      return [...files.entries()]
+        .filter(([p]) => p !== path && parentOf(p) === path)
+        .map(([p, n]) => ({ name: baseName(p), path: p, kind: n.kind, size: n.size, modified: n.modified, permissions: n.permissions }))
+        .sort((a, b) => Number(b.kind === "dir") - Number(a.kind === "dir") || a.name.localeCompare(b.name));
+    },
+    async sftpMkdir(session_id, path) {
+      sshShell(session_id);
+      if (files.has(path)) throw fail("other", "SFTP: already exists");
+      if (files.get(parentOf(path))?.kind !== "dir") throw fail("not_found", "No such file");
+      files.set(path, { kind: "dir", size: 4096, modified: Math.floor(Date.now() / 1000), permissions: 0o40755 });
+    },
+    async sftpRename(session_id, from, to) {
+      sshShell(session_id);
+      if (!files.has(from)) throw fail("not_found", "No such file");
+      if (files.has(to)) throw fail("other", "SFTP: already exists");
+      for (const [p, n] of [...files.entries()])
+        if (p === from || p.startsWith(from + "/")) {
+          files.delete(p);
+          files.set(to + p.slice(from.length), n);
+        }
+    },
+    async sftpRemove(session_id, path, is_dir) {
+      sshShell(session_id);
+      const n = files.get(path);
+      if (!n) throw fail("not_found", "No such file");
+      if (is_dir && [...files.keys()].some((p) => parentOf(p) === path && p !== path)) throw fail("other", "SFTP: Failure (folder not empty)");
+      files.delete(path);
+    },
+    async sftpDownload(session_id, path, transfer_id) {
+      sshShell(session_id);
+      const n = files.get(path);
+      if (!n || n.kind !== "file") throw fail("not_found", "No such file");
+      await transfer(transfer_id, n.size);
+      return `~/Downloads/${baseName(path)}`;
+    },
+    async sftpUpload(session_id, localPath, dir, transfer_id) {
+      sshShell(session_id);
+      const size = 250_000 + Math.floor(Math.random() * 4_000_000);
+      await transfer(transfer_id, size);
+      const remote = `${dir === "/" ? "" : dir}/${baseName(localPath)}`;
+      files.set(remote, { kind: "file", size, modified: Math.floor(Date.now() / 1000), permissions: 0o100644 });
+      return remote;
+    },
+    async pickFiles() {
+      return ["/Users/dev/Desktop/report.pdf"];
     },
 
     async listSnippets() {

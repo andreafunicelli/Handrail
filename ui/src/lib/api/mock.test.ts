@@ -110,6 +110,27 @@ describe("mock api", () => {
     expect(await api.listSnippets()).toEqual(before);
   });
 
+  it("browses, transfers and edits files over SFTP", async () => {
+    const api = createMockApi();
+    const conn = (await api.listConnections()).find((c) => c.auth.type !== "prompt")!;
+    const s = await api.openSession(conn.id, 80, 24);
+    const home = await api.sftpHome(s.session_id);
+    expect((await api.sftpList(s.session_id, home)).map((e) => e.name)).toContain("logs");
+    const seen: number[] = [];
+    await api.on("sftp://progress", (p) => seen.push(p.done));
+    const remote = await api.sftpUpload(s.session_id, "/tmp/x.bin", home, "t1");
+    expect(remote).toBe(`${home}/x.bin`);
+    expect(seen.at(-1)).toBeGreaterThan(0);
+    await api.sftpMkdir(s.session_id, `${home}/dir`);
+    await api.sftpRename(s.session_id, remote, `${home}/dir/y.bin`);
+    await expect(api.sftpRemove(s.session_id, `${home}/dir`, true)).rejects.toBeTruthy();
+    await api.sftpRemove(s.session_id, `${home}/dir/y.bin`, false);
+    await api.sftpRemove(s.session_id, `${home}/dir`, true);
+    await expect(api.sftpList(s.session_id, `${home}/dir`)).rejects.toMatchObject({ kind: "not_found" });
+    const local = await api.openLocalSession(null, 80, 24);
+    await expect(api.sftpHome(local.session_id)).rejects.toMatchObject({ kind: "invalid" });
+  });
+
   it("opens only https links", async () => {
     const api = createMockApi();
     await expect(api.openUrl("javascript:alert(1)")).rejects.toThrow();

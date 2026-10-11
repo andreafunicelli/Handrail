@@ -66,6 +66,8 @@
           },
         });
       }
+    if (sid && sessions.activeSession?.connection_id)
+      out.push({ id: "files", label: t("files.open.tooltip"), hint: sessions.activeSession.title, icon: "folder", group: "actions", run: () => sessions.openFiles(sid) });
     if (sid)
       for (const sn of snippets.sorted)
         out.push({ id: "sn:" + sn.id, label: t("palette.snippet", { name: sn.name }), hint: sn.command, icon: "snippet", group: "actions", run: () => snippets.use(sn, true) });

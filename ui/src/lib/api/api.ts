@@ -1,4 +1,6 @@
 import type {
+  FileEntry,
+  TransferProgress,
   Snippet,
   AgentEventEnvelope,
   AgentMarkEvent,
@@ -43,6 +45,7 @@ export interface EventMap {
   "session://agent_mark": AgentMarkEvent;
   "session://host_key": HostKeyEvent;
   "session://auth_prompt": AuthPromptEvent;
+  "sftp://progress": TransferProgress;
   "approval://requested": ApprovalRequest;
   "agent://event": AgentEventEnvelope;
   "sync://status": SyncStatus;
@@ -89,6 +92,19 @@ export interface Api {
   saveApprovalSettings(settings: ApprovalSettings): Promise<void>;
 
   // providers / harnesses / agent
+  // files (SFTP on an SSH session's connection)
+  sftpHome(sessionId: string): Promise<string>;
+  sftpList(sessionId: string, path: string): Promise<FileEntry[]>;
+  sftpMkdir(sessionId: string, path: string): Promise<void>;
+  sftpRename(sessionId: string, from: string, to: string): Promise<void>;
+  sftpRemove(sessionId: string, path: string, isDir: boolean): Promise<void>;
+  /** Download into the Downloads folder; resolves with the local path. Progress: "sftp://progress". */
+  sftpDownload(sessionId: string, path: string, transferId: string): Promise<string>;
+  /** Upload a local file into `dir`; resolves with the remote path. */
+  sftpUpload(sessionId: string, localPath: string, dir: string, transferId: string): Promise<string>;
+  /** Native file picker; empty when cancelled. */
+  pickFiles(): Promise<string[]>;
+
   listSnippets(): Promise<Snippet[]>;
   saveSnippet(snippet: Snippet): Promise<Snippet>;
   deleteSnippet(id: string): Promise<void>;

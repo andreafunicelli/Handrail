@@ -9,6 +9,7 @@ import { joinArgs, splitArgs } from "./args";
 import { formatBytes, relativeTime } from "./time";
 import { syncChangedVault } from "../stores/vaultData";
 import type { SyncStatus } from "../api/types";
+import { joinPath, modeString, parentDir, validName } from "./files";
 import { SUGGESTED_SNIPPETS, fillPlaceholders, placeholders, snippetInput } from "./snippets";
 
 describe("fuzzy", () => {
@@ -206,5 +207,25 @@ describe("snippets", () => {
   it("suggests unique names", () => {
     const names = SUGGESTED_SNIPPETS.map((s) => s.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+describe("files", () => {
+  it("formats modes like ls -l", () => {
+    expect(modeString(0o40755)).toBe("drwxr-xr-x");
+    expect(modeString(0o100600)).toBe("-rw-------");
+    expect(modeString(0o120777)).toBe("lrwxrwxrwx");
+    expect(modeString(null)).toBe("");
+  });
+  it("walks paths", () => {
+    expect(parentDir("/home/me/logs")).toBe("/home/me");
+    expect(parentDir("/home")).toBe("/");
+    expect(parentDir("/")).toBe("/");
+    expect(joinPath("/", "etc")).toBe("/etc");
+    expect(joinPath("/home/me", "a")).toBe("/home/me/a");
+  });
+  it("accepts only single path segments as names", () => {
+    expect(validName("notes.txt")).toBe(true);
+    for (const bad of ["", " ", ".", "..", "a/b"]) expect(validName(bad)).toBe(false);
   });
 });

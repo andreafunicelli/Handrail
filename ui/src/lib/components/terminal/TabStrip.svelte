@@ -122,6 +122,9 @@
     </button>
   </div>
   <div class="tools">
+    {#if sessions.activeSession?.connection_id}
+      <button class="icon-btn" title={t("files.open.tooltip")} aria-label={t("files.open.tooltip")} onclick={() => sessions.openFiles(sessions.activeSessionId!)}><Icon name="folder" /></button>
+    {/if}
     {#if sessions.activeTab}
       <button class="icon-btn" title={t("tabs.splitRight")} aria-label={t("tabs.splitRight")} onclick={() => splitWith(sessions.activeTab!, "row")}><Icon name="splitRight" /></button>
       <button class="icon-btn" title={t("tabs.splitDown")} aria-label={t("tabs.splitDown")} onclick={() => splitWith(sessions.activeTab!, "col")}><Icon name="splitDown" /></button>

@@ -195,6 +195,23 @@ export interface HostKeyEvent {
 }
 /** The server asks something while logging in (password, OTP) for a connection without saved
  *  credentials. Answer with `answerAuthPrompt`, one answer per prompt. */
+/** One entry of a remote folder (SFTP). */
+export interface FileEntry {
+  name: string;
+  path: string;
+  kind: "dir" | "file" | "symlink" | "other";
+  size: number;
+  /** Seconds since the Unix epoch. */
+  modified: number | null;
+  /** Unix mode bits (type and permissions). */
+  permissions: number | null;
+}
+export interface TransferProgress {
+  transfer_id: string;
+  done: number;
+  total: number;
+}
+
 /** A saved command; `{{name}}` placeholders are asked for when it runs. */
 export interface Snippet {
   id: Uuid;
