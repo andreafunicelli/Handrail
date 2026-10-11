@@ -19,12 +19,22 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
   `delete_connection({ id })`
 - `list_groups() -> Group[]`, `save_group({ group }) -> Group`, `delete_group({ id })`
 - `save_secret({ secret }) -> SecretId` (value never returned by any list command)
+- `list_secrets() -> { id, kind, label }[]` (no values), `update_secret({ id, label?, value? })`
+  (rename, or replace the value for every connection using it),
+  `delete_secret({ id })` (`invalid` while a connection, S3 account or provider uses it)
+- `Connection.tunnels`: `{ kind: "local"|"remote"|"dynamic", bind_host, bind_port, dest_host,
+  dest_port, enabled }[]` (ssh -L / -R / -D; `bind_port` 0 = any free port)
 
 ## Sessions
 - `open_session({ connection_id, cols, rows }) -> SessionInfo`
 - `open_local_session({ shell?, cols, rows }) -> SessionInfo`
 - `session_write({ session_id, data_b64 })`, `session_resize({ session_id, cols, rows })`,
   `close_session({ session_id })`, `list_sessions() -> SessionInfo[]`
+- Port forwards start in the background with each SSH session and stop with it:
+  `session_tunnels({ session_id }) -> { tunnel, port, error }[]` (neither port nor error: still
+  starting), then event `session://tunnels` `{ session_id, tunnels }` once they started or failed
+- `session_stats({ session_id }) -> { cpu, cores, mem_used, mem_total, disk_used, disk_total,
+  load1, uptime_s }` (from /proc on its own channel, ~0.5 s; null where the server has no value)
 - `SessionInfo.ended` (once `disconnected`): `{ exit_status, error }`. An exit status means the
   shell ended (e.g. `exit`); none means the connection was lost, and the UI then logs in again by
   itself (SSH with a saved password, key or agent; never on login or host key errors).
@@ -45,6 +55,10 @@ SFTP runs on the SSH connection of an open SSH session (no second login); local 
   `sftp_remove({ session_id, path, is_dir })` (empty folders only)
 - `sftp_download({ session_id, path, transfer_id }) -> local path` (into Downloads, never
   overwrites), `sftp_upload({ session_id, local_path, dir, transfer_id }) -> remote path`
+- `sftp_copy({ from_session, from_root?, path, to_session, to_root?, to_dir, overwrite,
+  transfer_id }) -> new path`: a file or folder from one session's server to another's (or the
+  same), streamed between the two SFTP connections; `busy`/`exists` when the name is taken and
+  not `overwrite` (files replaced, folders merged); permission bits kept
 - Event `transfer://progress` (SFTP and S3) `{ transfer_id, done, total }` (at most ten a second, plus the last)
 - Every `sftp_*` command takes `root?: bool`: use the session's root server, started by
   `sftp_sudo({ session_id, password? })` (sudo on its own channel: `sudo -n`, then the connection's
