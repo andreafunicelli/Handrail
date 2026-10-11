@@ -104,6 +104,8 @@ export interface Api {
   /** Start the session's root SFTP server through sudo (see `root` below). Rejects with
    *  `{ kind: "auth", message: "sudo_password_required" }` when the password must be typed. */
   sftpSudo(sessionId: string, password: string | null): Promise<void>;
+  /** The file browser left root mode (agent proposals stop using root). */
+  sftpRootOff(sessionId: string): Promise<void>;
   /** `root`: use the server started by `sftpSudo` instead of the login user's. */
   sftpHome(sessionId: string, root?: boolean): Promise<string>;
   sftpList(sessionId: string, path: string, root?: boolean): Promise<FileEntry[]>;

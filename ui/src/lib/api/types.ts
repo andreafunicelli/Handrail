@@ -221,6 +221,8 @@ export interface FileEntry {
 export interface FileStamp {
   size: number;
   modified: number | null;
+  /** SHA-256 of the contents: what the save's conflict check compares. */
+  hash?: string | null;
 }
 export interface TextFile {
   text: string;

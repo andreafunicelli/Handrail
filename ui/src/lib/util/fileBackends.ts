@@ -35,6 +35,8 @@ export interface FileBackend {
    * `sudo_password_required` when `password` is needed.
    */
   asRoot?(password: string | null): Promise<FileBackend>;
+  /** Leaving root mode (the root backend's counterpart of `asRoot`). */
+  leaveRoot?(): Promise<void>;
 }
 
 export function sftpBackend(sessionId: string, root = false): FileBackend {
@@ -59,6 +61,7 @@ export function sftpBackend(sessionId: string, root = false): FileBackend {
       await api.sftpSudo(sessionId, password);
       return sftpBackend(sessionId, true);
     },
+    leaveRoot: root ? () => api.sftpRootOff(sessionId) : undefined,
   };
 }
 

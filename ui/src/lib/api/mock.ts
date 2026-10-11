@@ -286,6 +286,10 @@ export function createMockApi(): Api {
   const pendingEdits = new Map<string, (r: { outcome: string; note: string | null }) => void>();
   /** Sessions whose root SFTP server runs (mock sudo password: anything but "wrong"). */
   const sudoed = new Set<string>();
+  /** Sessions whose file browser is in root mode (agent proposals use root). */
+  const rootActive = new Set<string>();
+  /** Stand-in for the SHA-256 the backend compares. */
+  const hashOf = (text: string) => `${text.length}:${[...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)}`;
   function sshShell(session_id: string, root = false, path = "", write = false) {
     const sh = shells.get(session_id);
     if (!sh) throw fail("not_found", `session ${session_id}`);
@@ -561,9 +565,9 @@ export function createMockApi(): Api {
         proposal_id,
         session_id,
         path,
-        root: sudoed.has(session_id),
+        root: rootActive.has(session_id),
         original,
-        stamp: { size: n.size, modified: n.modified },
+        stamp: { size: n.size, modified: n.modified, hash: hashOf(original) },
         proposed,
         reason: input.reason,
         actor_label: actor,
@@ -779,10 +783,15 @@ export function createMockApi(): Api {
     async sftpSudo(session_id, password) {
       sshShell(session_id);
       await sleep(200);
-      if (sudoed.has(session_id)) return;
-      if (password === null) throw fail("auth", "sudo_password_required");
-      if (password === "wrong") throw fail("auth", "wrong sudo password");
-      sudoed.add(session_id);
+      if (!sudoed.has(session_id)) {
+        if (password === null) throw fail("auth", "sudo_password_required");
+        if (password === "wrong") throw fail("auth", "wrong sudo password");
+        sudoed.add(session_id);
+      }
+      rootActive.add(session_id);
+    },
+    async sftpRootOff(session_id) {
+      rootActive.delete(session_id);
     },
     async sftpHome(session_id, root = false) {
       return sshShell(session_id, root).home;
@@ -844,14 +853,13 @@ export function createMockApi(): Api {
       if (n.kind !== "file") throw fail("invalid", `${path} is not a file`);
       if (/\.(gz|zip|tar|png|jpg|bin)$/.test(path)) throw fail("invalid", `${path} is a binary file`);
       const text = textOf(path);
-      return { text, stamp: { size: n.size, modified: n.modified } };
+      return { text, stamp: { size: n.size, modified: n.modified, hash: hashOf(text) } };
     },
     async sftpWriteText(session_id, path, text, expected, backup, root = false) {
       sshShell(session_id, root, path, true);
       await sleep(150);
       const n = files.get(path);
-      const current = n ? { size: n.size, modified: n.modified } : null;
-      if (JSON.stringify(current) !== JSON.stringify(expected)) throw fail("busy", "changed_on_server");
+      if ((n ? hashOf(textOf(path)) : null) !== (expected?.hash ?? null)) throw fail("busy", "changed_on_server");
       if (backup && n) {
         texts.set(`${path}.bak`, textOf(path));
         files.set(`${path}.bak`, { ...n });
@@ -860,7 +868,7 @@ export function createMockApi(): Api {
       const modified = Math.max(Math.floor(Date.now() / 1000), (n?.modified ?? 0) + 1);
       const node = { kind: "file" as const, size: new TextEncoder().encode(text).length, modified, permissions: n?.permissions ?? 0o100644 };
       files.set(path, node);
-      return { size: node.size, modified: node.modified };
+      return { size: node.size, modified: node.modified, hash: hashOf(text) };
     },
     async editProposalDecide(proposal_id, outcome, note) {
       pendingEdits.get(proposal_id)?.({ outcome, note });

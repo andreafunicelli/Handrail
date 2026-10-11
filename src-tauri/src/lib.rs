@@ -162,6 +162,7 @@ pub fn run() {
             sftp::sftp_download,
             sftp::sftp_upload,
             sftp::sftp_sudo,
+            sftp::sftp_root_off,
             sftp::sftp_read_text,
             sftp::sftp_write_text,
             terminal::edit_proposal_decide,

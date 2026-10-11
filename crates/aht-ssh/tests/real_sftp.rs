@@ -118,6 +118,14 @@ async fn real_sftp_round_trip() {
         sftp.read_all(&renamed, 1024).await.is_err(),
         "over the limit"
     );
+    // A backup takes the mode it is given, whatever the server's umask.
+    let bak = join(&remote_dir, "app.conf.bak");
+    sftp.write_all_mode(&bak, b"secret\n", Some(0o100600))
+        .await
+        .unwrap();
+    let mode = sftp.stamp(&bak).await.unwrap().permissions;
+    assert_eq!(mode.map(|p| p & 0o777), Some(0o600));
+    sftp.remove(&bak, false).await.unwrap();
     sftp.remove(&conf, false).await.unwrap();
 
     // A missing file is NotFound and leaves no partial local file.

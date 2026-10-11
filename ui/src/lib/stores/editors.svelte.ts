@@ -89,6 +89,9 @@ class Editors {
   async load(id: string) {
     const d = this.docs[id];
     if (!d?.fs.readText) return;
+    // An accepted proposal whose save failed is discarded by reloading: tell the agent now, or
+    // a later save of unrelated edits would report it as saved.
+    if (d.proposal?.accepted) this.answer(d, "rejected", "the user reloaded the file from the server instead of saving the change");
     d.loading = true;
     d.error = null;
     try {

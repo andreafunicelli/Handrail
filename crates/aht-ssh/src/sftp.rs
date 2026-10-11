@@ -7,7 +7,7 @@ use aht_core::{Error, Result};
 use russh::ChannelMsg;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::SftpSession;
-use russh_sftp::protocol::{FileType, StatusCode};
+use russh_sftp::protocol::{FileAttributes, FileType, StatusCode};
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -43,6 +43,8 @@ pub struct FileStamp {
     pub size: u64,
     /// Seconds since the Unix epoch.
     pub modified: Option<u32>,
+    /// Unix mode bits, when the server reports them.
+    pub permissions: Option<u32>,
 }
 
 /// An SFTP session on one SSH connection.
@@ -356,6 +358,7 @@ impl Sftp {
         Ok(FileStamp {
             size: m.size.unwrap_or(0),
             modified: m.mtime,
+            permissions: m.permissions,
         })
     }
 
@@ -393,7 +396,20 @@ impl Sftp {
     /// Replace the contents of `path` in place (created if missing). Writing into the existing
     /// file keeps its owner and permissions, unlike writing a copy and renaming it.
     pub async fn write_all(&self, path: &str, data: &[u8]) -> Result<()> {
+        self.write_all_mode(path, data, None).await
+    }
+
+    /// [`Self::write_all`], first giving the file the permission bits of `mode` (before any byte
+    /// is written), e.g. so a backup of a private file is not created world-readable.
+    pub async fn write_all_mode(&self, path: &str, data: &[u8], mode: Option<u32>) -> Result<()> {
         let mut f = self.session.create(path).await.map_err(sftp_err)?;
+        if let Some(mode) = mode {
+            let attrs = FileAttributes {
+                permissions: Some(mode & 0o7777),
+                ..FileAttributes::empty()
+            };
+            f.set_metadata(attrs).await.map_err(sftp_err)?;
+        }
         for chunk in data.chunks(CHUNK) {
             f.write_all(chunk).await.map_err(io_err)?;
         }

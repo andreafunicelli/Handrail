@@ -45,6 +45,7 @@ export function createTauriApi(): Api {
     saveApprovalSettings: (settings) => invoke("set_setting", { key: APPROVALS_KEY, value: settings }),
 
     sftpSudo: (session_id, password) => invoke("sftp_sudo", { session_id, password }),
+    sftpRootOff: (session_id) => invoke("sftp_root_off", { session_id }),
     sftpHome: (session_id, root = false) => invoke("sftp_home", { session_id, root }),
     sftpList: (session_id, path, root = false) => invoke("sftp_list", { session_id, path, root }),
     sftpMkdir: (session_id, path, root = false) => invoke("sftp_mkdir", { session_id, path, root }),

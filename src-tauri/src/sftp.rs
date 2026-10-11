@@ -9,6 +9,7 @@ use aht_core::{Error, Result, SessionId};
 use aht_ssh::sftp::SUDO_PASSWORD_REQUIRED;
 use aht_ssh::{EntryKind, FileStamp, RemoteEntry, Sftp};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -115,6 +116,7 @@ pub async fn sftp_sudo(
         .await
         .contains_key(&(session_id, true))
     {
+        set_root_active(&state, session_id, true);
         return Ok(());
     }
     let password = password.map(Zeroizing::new);
@@ -141,6 +143,25 @@ pub async fn sftp_sudo(
         .lock()
         .await
         .insert((session_id, true), Arc::new(s));
+    set_root_active(&state, session_id, true);
+    Ok(())
+}
+
+/// Whether the session's file browser is in root mode (agent proposals then use root).
+fn set_root_active(state: &AppState, session_id: SessionId, on: bool) {
+    let mut set = state.terminal.sftp_root_active.lock().unwrap();
+    if on {
+        set.insert(session_id);
+    } else {
+        set.remove(&session_id);
+    }
+}
+
+/// The file browser left root mode: agent proposals go back to the login user. The root client
+/// stays for editors opened as root.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sftp_root_off(state: State<'_, AppState>, session_id: SessionId) -> Result<()> {
+    set_root_active(&state, session_id, false);
     Ok(())
 }
 
@@ -235,18 +256,27 @@ const MAX_TEXT: u64 = 5 * 1024 * 1024;
 /// Error text for a file changed on the server since it was read.
 pub(crate) const CHANGED_ON_SERVER: &str = "changed_on_server";
 
-/// What a file looked like when read (size and mtime), sent back with the save.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// What a file looked like when read, sent back with the save. `hash` (SHA-256 of the contents)
+/// is what the conflict check compares: size and a seconds mtime miss a same-size rewrite
+/// within the same second.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stamp {
     size: u64,
     modified: Option<u32>,
+    #[serde(default)]
+    hash: Option<String>,
 }
 
-impl From<FileStamp> for Stamp {
-    fn from(s: FileStamp) -> Self {
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+impl Stamp {
+    fn of(s: FileStamp, contents: &[u8]) -> Self {
         Stamp {
             size: s.size,
             modified: s.modified,
+            hash: Some(sha256_hex(contents)),
         }
     }
 }
@@ -266,9 +296,13 @@ fn as_text(path: &str, bytes: Vec<u8>) -> Result<String> {
 }
 
 pub(crate) async fn read_text(s: &Sftp, path: &str) -> Result<TextFile> {
-    let stamp = s.stamp(path).await?.into();
-    let text = as_text(path, s.read_all(path, MAX_TEXT).await?)?;
-    Ok(TextFile { text, stamp })
+    let info = s.stamp(path).await?;
+    let bytes = s.read_all(path, MAX_TEXT).await?;
+    let stamp = Stamp::of(info, &bytes);
+    Ok(TextFile {
+        text: as_text(path, bytes)?,
+        stamp,
+    })
 }
 
 /// Open a text file for the editor.
@@ -296,16 +330,22 @@ pub async fn sftp_write_text(
     backup: bool,
 ) -> Result<Stamp> {
     let s = client(&state, session_id, root).await?;
-    let current: Option<Stamp> = s.stamp(&path).await.ok().map(Into::into);
-    if current != expected {
+    let current = match s.read_all(&path, MAX_TEXT).await {
+        Ok(bytes) => Some(bytes),
+        Err(Error::NotFound(_)) => None,
+        Err(e) => return Err(e),
+    };
+    // Compare contents: a missing file matches only a new one (`expected` None).
+    if current.as_deref().map(sha256_hex) != expected.and_then(|e| e.hash) {
         return Err(Error::Busy(CHANGED_ON_SERVER.into()));
     }
-    if backup && current.is_some() {
-        let old = s.read_all(&path, MAX_TEXT).await?;
-        s.write_all(&format!("{path}.bak"), &old).await?;
+    if let (true, Some(old)) = (backup, &current) {
+        // The backup keeps the original's permissions: a 0600 file must not become 0644.
+        let mode = s.stamp(&path).await?.permissions;
+        s.write_all_mode(&format!("{path}.bak"), old, mode).await?;
     }
     s.write_all(&path, text.as_bytes()).await?;
-    Ok(s.stamp(&path).await?.into())
+    Ok(Stamp::of(s.stamp(&path).await?, text.as_bytes()))
 }
 
 /// `dir/name`, or `dir/stem (2).ext`… when taken.

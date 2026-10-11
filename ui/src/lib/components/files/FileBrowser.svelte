@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import Modal from "../common/Modal.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
@@ -26,7 +26,10 @@
   // A reconnect hands over a new session: its root server has to be started again.
   $effect(() => {
     void base.key;
-    rootFs = null;
+    untrack(() => {
+      void rootFs?.leaveRoot?.().catch(() => {});
+      rootFs = null;
+    });
   });
 
   let path = $state("");
@@ -65,6 +68,7 @@
 
   async function toggleRoot() {
     if (rootFs) {
+      void rootFs.leaveRoot?.().catch(() => {});
       rootFs = null;
       return refresh();
     }
@@ -82,6 +86,9 @@
       toasts.error(e);
     }
   }
+
+  // Closing the browser leaves root mode too.
+  onDestroy(() => void rootFs?.leaveRoot?.().catch(() => {}));
 
   onMount(async () => {
     try {

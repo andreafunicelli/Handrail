@@ -89,6 +89,10 @@ pub struct TerminalHub {
     /// SFTP sessions opened on SSH sessions' connections (file browser), by session and
     /// whether the server runs as root (through sudo).
     pub(crate) sftp: Mutex<HashMap<(SessionId, bool), Arc<aht_ssh::Sftp>>>,
+    /// Sessions whose file browser is in root mode right now. The root client stays cached
+    /// after the toggle goes off (root editors still save through it), so agent proposals ask
+    /// this instead of whether a root client exists.
+    pub(crate) sftp_root_active: std::sync::Mutex<HashSet<SessionId>>,
 }
 
 impl TerminalHub {
@@ -727,6 +731,7 @@ pub async fn close_session(state: tauri::State<'_, AppState>, session_id: Sessio
     for sftp in sftps {
         sftp.close().await;
     }
+    hub.sftp_root_active.lock().unwrap().remove(&session_id);
     let pending: Vec<_> = {
         let mut map = hub.approvals.lock().unwrap();
         let ids: Vec<_> = map
@@ -1001,12 +1006,12 @@ async fn propose_edit(
         return Err(Error::Invalid("files over 1 MiB cannot be proposed".into()));
     }
     let state = app.state::<AppState>();
-    // Read (and later save) as root when the user's file browser runs as root.
+    // Read (and later save) as root while the user's file browser is in root mode.
     let root = hub(app)
-        .sftp
+        .sftp_root_active
         .lock()
-        .await
-        .contains_key(&(req.session_id, true));
+        .unwrap()
+        .contains(&req.session_id);
     let sftp = crate::sftp::client(&state, req.session_id, Some(root)).await?;
     let (original, stamp) = match crate::sftp::read_text(&sftp, &req.path).await {
         Ok(t) => (Some(t.text), Some(t.stamp)),
