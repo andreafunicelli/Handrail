@@ -56,7 +56,7 @@ dependencies = [
 
 [[package]]
 name = "aht-agent"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aht-core",
  "aht-providers",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "aht-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "aht-harness"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aht-core",
  "junction",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "aht-import"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "aht-mcp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aht-core",
  "async-trait",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "aht-providers"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aht-core",
  "async-trait",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "aht-s3"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aht-core",
  "futures",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "aht-ssh"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aht-core",
  "async-trait",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "aht-sync"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aht-core",
  "aht-vault",
@@ -205,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "aht-term"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aht-core",
  "async-trait",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "aht-vault"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aht-core",
  "argon2",
@@ -2328,7 +2328,7 @@ dependencies = [
 
 [[package]]
 name = "handrail"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aht-agent",
  "aht-core",
