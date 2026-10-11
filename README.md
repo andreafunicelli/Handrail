@@ -34,8 +34,8 @@
   - Or through any folder (Syncthing, a network share).
   - Only ciphertext leaves the device. Sync runs automatically after edits and every few minutes.
 - **Import** from `~/.ssh/config`, PuTTY, MobaXterm, mRemoteNG, WinSCP, SecureCRT and Tabby.
-- **Files over SFTP:** browse, upload, download, rename and delete on any SSH session, over the same login. Switch to **root** (through sudo) for system files.
-- **Editor with the agent:** edit text files on the server (as root too), with a changed-on-server check and a `.bak` of the original. Ask the agent about the file or a selection; its changes arrive as a diff you accept or reject.
+- **Files over SFTP:** browse, create, upload, download, rename and delete on any SSH session, over the same login (right-click a folder or the empty list for New file / New folder). Switch to **root** (through sudo) for system files.
+- **Code editor with the agent:** edit files on the server (as root too) in a VS Code–style editor: syntax highlighting for about 40 languages, minimap, indentation guides, multiple cursors, find and replace, go to line, word wrap, zoom, and a status bar for position, indentation, line endings and language. Saves check that the file didn't change on the server and keep a `.bak` of the original. Ask the agent about the file or a selection; its changes arrive as a diff you accept or reject.
 - **S3 buckets:** Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO or any S3-compatible store, in the same file browser. Keys stay in the vault.
 - **Snippets:** saved commands with `{{placeholders}}`, plus suggested read-only diagnostics (disk, memory, ports, logs, TLS expiry) to run or keep.
 - **Keyboard-first:** a command palette (Ctrl/⌘ K), split panes and tabs.

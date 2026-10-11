@@ -76,11 +76,15 @@ class Editors {
     return this.docs[id];
   }
 
-  /** Open `path` (or focus the doc already open); resolves with the doc id. */
-  async open(fs: FileBackend, path: string): Promise<string> {
+  /**
+   * Open `path` (or focus the doc already open); resolves with the doc id. `created`: the file
+   * was just created empty, so there is no original worth a `.bak`.
+   */
+  async open(fs: FileBackend, path: string, created = false): Promise<string> {
     const found = this.find(fs, path);
     if (found) return found;
     const d = this.create(fs, path);
+    d.backedUp = created;
     await this.load(d.id);
     return d.id;
   }

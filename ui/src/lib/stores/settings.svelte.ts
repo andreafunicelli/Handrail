@@ -12,6 +12,12 @@ interface Prefs {
   sidebarWidth: number;
   aiWidth: number;
   aiOpen: boolean;
+  /** File editor view options. */
+  editorWrap: boolean;
+  editorWhitespace: boolean;
+  editorMinimap: boolean;
+  editorGuides: boolean;
+  editorFontSize: number;
 }
 
 const DEFAULTS: Prefs = {
@@ -22,6 +28,11 @@ const DEFAULTS: Prefs = {
   sidebarWidth: 264,
   aiWidth: 380,
   aiOpen: true,
+  editorWrap: false,
+  editorWhitespace: false,
+  editorMinimap: true,
+  editorGuides: true,
+  editorFontSize: 13,
 };
 
 /** Local, per-device UI preferences (persisted to localStorage). */
@@ -33,6 +44,11 @@ class Settings {
   sidebarWidth = $state(DEFAULTS.sidebarWidth);
   aiWidth = $state(DEFAULTS.aiWidth);
   aiOpen = $state(DEFAULTS.aiOpen);
+  editorWrap = $state(DEFAULTS.editorWrap);
+  editorWhitespace = $state(DEFAULTS.editorWhitespace);
+  editorMinimap = $state(DEFAULTS.editorMinimap);
+  editorGuides = $state(DEFAULTS.editorGuides);
+  editorFontSize = $state(DEFAULTS.editorFontSize);
   systemDark = $state(true);
 
   resolvedTheme = $derived<"dark" | "light">(this.theme === "system" ? (this.systemDark ? "dark" : "light") : this.theme);
@@ -51,6 +67,11 @@ class Settings {
     this.sidebarWidth = p.sidebarWidth;
     this.aiWidth = p.aiWidth;
     this.aiOpen = p.aiOpen;
+    this.editorWrap = p.editorWrap;
+    this.editorWhitespace = p.editorWhitespace;
+    this.editorMinimap = p.editorMinimap;
+    this.editorGuides = p.editorGuides;
+    this.editorFontSize = p.editorFontSize;
     if (typeof window !== "undefined" && window.matchMedia) {
       const mq = window.matchMedia("(prefers-color-scheme: dark)");
       this.systemDark = mq.matches;
@@ -66,6 +87,11 @@ class Settings {
           sidebarWidth: this.sidebarWidth,
           aiWidth: this.aiWidth,
           aiOpen: this.aiOpen,
+          editorWrap: this.editorWrap,
+          editorWhitespace: this.editorWhitespace,
+          editorMinimap: this.editorMinimap,
+          editorGuides: this.editorGuides,
+          editorFontSize: this.editorFontSize,
         } satisfies Prefs);
       });
       $effect(() => {
@@ -75,6 +101,11 @@ class Settings {
         terminals.configure(this.fontSize, this.terminalTheme);
       });
     });
+  }
+
+  /** Editor text size, kept between 9 and 32 px; `0` resets it. */
+  zoomEditor(step: number) {
+    this.editorFontSize = step === 0 ? DEFAULTS.editorFontSize : Math.min(32, Math.max(9, this.editorFontSize + step));
   }
 }
 
