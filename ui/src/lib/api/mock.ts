@@ -43,7 +43,7 @@ function conn(p: Partial<Connection> & Pick<Connection, "name" | "host">): Conne
   };
 }
 
-export function seed() {
+function seed() {
   const prod = g("Production", 0);
   const prodEu = g("eu-west", 0, prod.id);
   const staging = g("Staging", 1);
@@ -114,9 +114,6 @@ const C = {
   user: "\x1b[38;2;124;156;255m",
   path: "\x1b[38;2;139;143;152m",
   dim: "\x1b[2m",
-  bold: "\x1b[1m",
-  green: "\x1b[38;2;126;201;150m",
-  amber: "\x1b[38;2;224;180;110m",
   reset: "\x1b[0m",
 };
 
@@ -125,7 +122,6 @@ interface Shell {
   local: boolean;
   line: string;
   cwd: string;
-  busy: boolean;
   native?: string;
 }
 
@@ -233,7 +229,6 @@ export function createMockApi(): Api {
     },
   ];
   const syncEvent = () => emit("sync://status", structuredClone(sync));
-  const settingsKv = new Map<string, unknown>();
   const authPrompts = new Map<string, (answers: string[] | null) => void>();
   const fail = (kind: string, message: string) => Object.assign(new Error(message), { kind, message });
   let githubPolls = 0;
@@ -263,7 +258,7 @@ export function createMockApi(): Api {
       approval_mode: approvalSettings.default_mode,
       ...p,
     };
-    const sh: Shell = { info, local, line: "", cwd: "~", busy: false };
+    const sh: Shell = { info, local, line: "", cwd: "~" };
     shells.set(info.session_id, sh);
     return sh;
   }
@@ -592,9 +587,6 @@ export function createMockApi(): Api {
     async closeSession(session_id) {
       shells.delete(session_id);
     },
-    async listSessions() {
-      return [...shells.values()].map((s) => s.info);
-    },
     async hostKeyDecision(request_id, accept) {
       pendingHostKeys.get(request_id)?.(accept);
       pendingHostKeys.delete(request_id);
@@ -615,7 +607,6 @@ export function createMockApi(): Api {
     },
     async saveApprovalSettings(s) {
       approvalSettings = structuredClone(s);
-      settingsKv.set("approvals", structuredClone(s));
     },
 
     async listProviders() {
@@ -846,12 +837,6 @@ export function createMockApi(): Api {
     },
     async vaultConflictsClear() {
       conflicts = [];
-    },
-    async getSetting(key) {
-      return (settingsKv.has(key) ? structuredClone(settingsKv.get(key)) : null) as never;
-    },
-    async setSetting(key, value) {
-      settingsKv.set(key, structuredClone(value));
     },
 
     async on(event, cb) {

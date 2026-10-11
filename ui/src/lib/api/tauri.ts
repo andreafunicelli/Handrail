@@ -34,7 +34,6 @@ export function createTauriApi(): Api {
     sessionWrite: (session_id, data_b64) => invoke("session_write", { session_id, data_b64 }),
     sessionResize: (session_id, cols, rows) => invoke("session_resize", { session_id, cols, rows }),
     closeSession: (session_id) => invoke("close_session", { session_id }),
-    listSessions: () => invoke("list_sessions"),
     hostKeyDecision: (request_id, accept) => invoke("host_key_decision", { request_id, accept }),
 
     approvalDecide: (approval_id, decision) => invoke("approval_decide", { approval_id, decision }),
@@ -116,8 +115,6 @@ export function createTauriApi(): Api {
     vaultConflicts: () => invoke("vault_conflicts"),
     vaultConflictRestore: (file_id, recorded_at_ms) => invoke("vault_conflict_restore", { file_id, recorded_at_ms }),
     vaultConflictsClear: () => invoke("vault_conflicts_clear"),
-    getSetting: (key) => invoke("get_setting", { key }),
-    setSetting: (key, value) => invoke("set_setting", { key, value }),
 
     on: async (event, cb) => {
       const un = await listen(event, (e) => cb(e.payload as never));

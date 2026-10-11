@@ -345,7 +345,7 @@ pub async fn sync_configure_github_start(state: State<'_, AppState>) -> Result<D
                 .into(),
         ));
     }
-    let code = github_device_flow::start(&client_id, "repo")
+    let code = github_device_flow::start(&client_id, github_device_flow::DEFAULT_SCOPE)
         .await
         .map_err(Error::from)?;
     *state.github_device.lock().await = Some(code.clone());

@@ -164,10 +164,6 @@ impl KnownHosts {
         self
     }
 
-    pub fn app_file(&self) -> &Path {
-        &self.app_file
-    }
-
     fn entries_for(&self, token: &str) -> Vec<Entry> {
         let app: Vec<Entry> = parse_file(&self.app_file)
             .into_iter()

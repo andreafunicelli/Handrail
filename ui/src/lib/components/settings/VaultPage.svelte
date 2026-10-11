@@ -1,7 +1,6 @@
 <script lang="ts">
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
-  import { api } from "../../api";
   import { settings } from "../../stores/settings.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { ui } from "../../stores/ui.svelte";
@@ -11,8 +10,6 @@
 
   async function setAutoLock(min: number) {
     settings.autoLock = min;
-    // Also stored in the core so it can lock while the window is hidden.
-    await api.setSetting("auto_lock_minutes", min).catch(toasts.error);
   }
   async function lock() {
     ui.settingsPage = null;

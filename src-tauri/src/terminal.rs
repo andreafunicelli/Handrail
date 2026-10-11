@@ -61,6 +61,9 @@ struct HarnessChat {
     run_id: Arc<std::sync::Mutex<String>>,
 }
 
+/// Answers to a login prompt; `None` when the user cancelled.
+type LoginAnswers = Option<Vec<Zeroizing<String>>>;
+
 type PendingApprovals = HashMap<ApprovalId, (SessionId, oneshot::Sender<ApprovalDecision>)>;
 
 #[derive(Default)]
@@ -72,7 +75,7 @@ pub struct TerminalHub {
     grants: std::sync::Mutex<HashMap<String, HashSet<SessionId>>>,
     host_keys: Mutex<HashMap<String, oneshot::Sender<bool>>>,
     /// Login prompts waiting for the user's answers (`None` = cancelled).
-    auth_prompts: Mutex<HashMap<String, oneshot::Sender<Option<Vec<Zeroizing<String>>>>>>,
+    auth_prompts: Mutex<HashMap<String, oneshot::Sender<LoginAnswers>>>,
     mcp: OnceCell<McpServer>,
     agents: Mutex<HashMap<String, Arc<Mutex<aht_agent::Agent>>>>,
     harness_chats: Mutex<HashMap<(SessionId, String), HarnessChat>>,
@@ -246,7 +249,6 @@ async fn register(
                         },
                     );
                 }
-                Ok(SessionEvent::Audit { .. }) => {}
                 Ok(_) => {
                     let _ = a.emit("session://state", t.info());
                 }
@@ -623,25 +625,6 @@ pub async fn open_session(
     prompt_ref: Option<String>,
 ) -> Result<SessionInfo> {
     open_ssh(&app, connection_id, cols, rows, prompt_ref).await
-}
-
-#[derive(Serialize)]
-pub struct LocalShell {
-    id: String,
-    label: String,
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn list_local_shells() -> Result<Vec<LocalShell>> {
-    Ok(tokio::task::spawn_blocking(aht_ssh::default_local_shells)
-        .await
-        .map_err(err)?
-        .into_iter()
-        .map(|s| LocalShell {
-            id: s.id,
-            label: s.label,
-        })
-        .collect())
 }
 
 #[tauri::command(rename_all = "snake_case")]

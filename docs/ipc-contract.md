@@ -83,6 +83,6 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
   `https://github.com/andreafunicelli/handrail-releases/releases/latest/download/latest.json`.
 
 ## Misc
-- `get_setting({ key }) -> any|null`, `set_setting({ key, value })`, `list_secrets() -> { id, kind, label }[]`
+- `get_setting({ key }) -> any|null`, `set_setting({ key, value })`
 - Errors reject with `{ kind, message }` (aht-core `Error`); `vault_unlock` rejects
   `{ kind: "auth", message: "secret_key_required" }` when this device needs the Secret Key.

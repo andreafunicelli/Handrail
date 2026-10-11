@@ -19,6 +19,5 @@ hex = "0.4"
 base64 = "0.23.1"
 
 [dev-dependencies]
-base64 = "0.23.1"
 tempfile = "3.27.0"
 wiremock = "0.6.5"

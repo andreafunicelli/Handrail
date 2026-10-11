@@ -47,6 +47,20 @@
       ? sessions.workspaces.map((w) => ({ label: w.name, icon: "layout" as const, action: () => sessions.openWorkspace(w.id).catch(toasts.error) }))
       : [{ label: t("tabs.noWorkspaces"), disabled: true, action: () => {} }];
     items.push("sep", { label: t("tabs.saveWorkspace"), icon: "plus", disabled: !sessions.tabs.length, action: () => (ui.saveWorkspaceOpen = true) });
+    if (sessions.workspaces.length) {
+      items.push(
+        "sep",
+        ...sessions.workspaces.map((w) => ({
+          label: t("tabs.deleteWorkspace", { name: w.name }),
+          icon: "trash" as const,
+          danger: true,
+          action: () => {
+            sessions.deleteWorkspace(w.id);
+            toasts.success(t("tabs.workspaceDeleted", { name: w.name }));
+          },
+        })),
+      );
+    }
     menu = { x: r.right - 200, y: r.bottom + 4, items };
   }
 

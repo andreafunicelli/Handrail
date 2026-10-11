@@ -16,6 +16,3 @@ pub use reconnect::{reconnect, retry_with_backoff, ReconnectPolicy};
 pub use verify::{
     HostKeyDecision, HostKeyPrompt, HostKeyVerifier, PromptingVerifier, StrictVerifier,
 };
-
-/// Re-exported so callers can name key types without depending on russh directly.
-pub use russh::keys::PublicKey;

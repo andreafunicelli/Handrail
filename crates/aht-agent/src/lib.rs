@@ -98,10 +98,6 @@ impl Agent {
         self.history.clear();
     }
 
-    pub fn config_mut(&mut self) -> &mut AgentConfig {
-        &mut self.cfg
-    }
-
     /// Run one user turn to completion: stream the model, execute tool calls, feed results back,
     /// repeat until the model answers without tools, `max_steps` is hit, or `cancel` fires.
     ///

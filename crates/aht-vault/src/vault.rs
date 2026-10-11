@@ -359,16 +359,8 @@ impl Vault {
         self.manifest.as_ref().map(|m| m.vault_id.as_str())
     }
 
-    pub fn manifest(&self) -> Option<&Manifest> {
-        self.manifest.as_ref()
-    }
-
     pub fn device_id(&self) -> DeviceId {
         self.clock.device()
-    }
-
-    pub fn dir(&self) -> &Path {
-        &self.dir
     }
 
     /// A counter that changes whenever item files are written, merged, removed or restored in
