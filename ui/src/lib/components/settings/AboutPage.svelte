@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Logo from "../brand/Logo.svelte";
   import { onMount } from "svelte";
   import { t } from "../../i18n";
   import { api } from "../../api";
@@ -22,7 +23,7 @@
 </script>
 
 <div class="about">
-  <div class="mark" aria-hidden="true">✦</div>
+  <div class="mark" aria-hidden="true"><Logo size={24} /></div>
   <div>
     <strong>{t("app.name")}</strong>
     <p class="intro">{t("about.body")}</p>
@@ -73,7 +74,7 @@
     height: 40px;
     border-radius: 10px;
     border: 1px solid var(--border-strong);
-    color: var(--accent);
+    color: var(--text);
     flex: none;
   }
   strong {

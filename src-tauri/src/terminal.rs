@@ -960,7 +960,7 @@ fn session_summary(info: &SessionInfo) -> String {
         s.push_str(&format!(", shell {sh}"));
     }
     s.push_str(&format!(
-        ", environment {:?}. Use session_id {} with the aihubterm tools (run_command, read_output, \
+        ", environment {:?}. Use session_id {} with the handrail tools (run_command, read_output, \
 send_keys). Commands are typed into the user's live terminal and may need their approval.",
         info.env, info.session_id
     ));

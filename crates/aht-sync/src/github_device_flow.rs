@@ -1,26 +1,26 @@
 //! GitHub OAuth device flow (RFC 8628): the app shows `user_code` + `verification_uri`, then
 //! polls until the user authorizes.
 //!
-//! Uses the registered "AIHubTerm" GitHub OAuth App (device flow enabled). Its client id is
+//! Uses the registered "Handrail" GitHub OAuth App (device flow enabled). Its client id is
 //! public configuration, not a secret, and the device flow needs no client secret. The
-//! `AIHUBTERM_GITHUB_CLIENT_ID` environment variable overrides it, e.g. for a fork's own app
+//! `HANDRAIL_GITHUB_CLIENT_ID` environment variable overrides it, e.g. for a fork's own app
 //! (see [`client_id`]).
 
 use crate::error::{Result, SyncError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Client id of the registered "AIHubTerm" OAuth App.
-pub const AIHUBTERM_GITHUB_CLIENT_ID: &str = "Ov23li7s0xtB6dHz5HgF";
+/// Client id of the registered "Handrail" OAuth App.
+pub const HANDRAIL_GITHUB_CLIENT_ID: &str = "Ov23li7s0xtB6dHz5HgF";
 pub const DEFAULT_BASE: &str = "https://github.com";
 pub const DEFAULT_SCOPE: &str = "repo";
 
-/// Client id from the `AIHUBTERM_GITHUB_CLIENT_ID` env var, else the compiled-in one.
+/// Client id from the `HANDRAIL_GITHUB_CLIENT_ID` env var, else the compiled-in one.
 pub fn client_id() -> String {
-    std::env::var("AIHUBTERM_GITHUB_CLIENT_ID")
+    std::env::var("HANDRAIL_GITHUB_CLIENT_ID")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| AIHUBTERM_GITHUB_CLIENT_ID.to_string())
+        .unwrap_or_else(|| HANDRAIL_GITHUB_CLIENT_ID.to_string())
 }
 
 /// False for an empty id or a leftover placeholder (e.g. a fork that has not registered its own
@@ -63,7 +63,7 @@ impl std::fmt::Debug for PollResult {
 }
 
 async fn post_form(base: &str, path: &str, form: &[(&str, &str)]) -> Result<Value> {
-    let client = reqwest::Client::builder().user_agent("AIHubTerm").build()?;
+    let client = reqwest::Client::builder().user_agent("Handrail").build()?;
     let resp = client
         .post(format!("{}{path}", base.trim_end_matches('/')))
         .header("Accept", "application/json")
@@ -214,10 +214,10 @@ mod tests {
     #[test]
     fn client_id_defaults_to_the_registered_app() {
         // Not asserting the env override here (process-global); just the fallback.
-        if std::env::var("AIHUBTERM_GITHUB_CLIENT_ID").is_err() {
-            assert_eq!(client_id(), AIHUBTERM_GITHUB_CLIENT_ID);
+        if std::env::var("HANDRAIL_GITHUB_CLIENT_ID").is_err() {
+            assert_eq!(client_id(), HANDRAIL_GITHUB_CLIENT_ID);
         }
-        assert!(is_configured(AIHUBTERM_GITHUB_CLIENT_ID));
+        assert!(is_configured(HANDRAIL_GITHUB_CLIENT_ID));
     }
 
     #[test]

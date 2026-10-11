@@ -1,12 +1,12 @@
 [package]
-name = "aihubterm"
+name = "handrail"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [lib]
-name = "aihubterm_lib"
+name = "handrail_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

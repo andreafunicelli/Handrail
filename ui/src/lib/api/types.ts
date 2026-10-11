@@ -279,7 +279,7 @@ export type CloudDrive = "icloud" | "dropbox" | "onedrive" | "google_drive";
 export interface FolderPreset {
   drive: CloudDrive;
   label: string;
-  /** `<drive>/AIHubTerm` */
+  /** `<drive>/Handrail` */
   path: string;
   /** Another device already syncs a vault there. */
   has_vault: boolean;

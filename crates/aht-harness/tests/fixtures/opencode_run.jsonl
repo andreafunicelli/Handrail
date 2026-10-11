@@ -1,6 +1,6 @@
 {"type":"step_start","timestamp":1760000000000,"sessionID":"ses_1","part":{"id":"prt_1","type":"step-start"}}
 {"type":"text","timestamp":1760000001000,"sessionID":"ses_1","part":{"id":"prt_2","type":"text","text":"Let me check the disk.","time":{"start":1,"end":2}}}
-{"type":"tool_use","timestamp":1760000002000,"sessionID":"ses_1","part":{"id":"prt_3","type":"tool","callID":"call_1","tool":"aihubterm_ssh_exec","state":{"status":"completed","input":{"command":"df -h"},"output":"/dev/sda1 50G 20G","title":"ssh_exec","time":{"start":1,"end":2}}}}
+{"type":"tool_use","timestamp":1760000002000,"sessionID":"ses_1","part":{"id":"prt_3","type":"tool","callID":"call_1","tool":"handrail_ssh_exec","state":{"status":"completed","input":{"command":"df -h"},"output":"/dev/sda1 50G 20G","title":"ssh_exec","time":{"start":1,"end":2}}}}
 {"type":"tool_use","timestamp":1760000003000,"sessionID":"ses_1","part":{"id":"prt_4","type":"tool","callID":"call_2","tool":"bash","state":{"status":"error","input":{"command":"ls"},"error":"tool disabled","time":{"start":1,"end":2}}}}
 {"type":"step_finish","timestamp":1760000004000,"sessionID":"ses_1","part":{"id":"prt_5","type":"step-finish","reason":"tool-calls","cost":0.001,"tokens":{"input":100,"output":10,"reasoning":0,"cache":{"read":50,"write":0}}}}
 {"type":"step_start","timestamp":1760000005000,"sessionID":"ses_1","part":{"id":"prt_6","type":"step-start"}}

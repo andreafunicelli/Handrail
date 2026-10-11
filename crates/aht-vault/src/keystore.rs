@@ -82,7 +82,7 @@ pub struct OsKeychainStore {
 
 #[cfg(feature = "os-keychain")]
 impl OsKeychainStore {
-    /// `service` namespaces entries, e.g. `"AIHubTerm"`.
+    /// `service` namespaces entries, e.g. `"Handrail"`.
     pub fn new(service: impl Into<String>) -> Self {
         Self {
             service: service.into(),
@@ -152,7 +152,7 @@ mod tests {
     #[test]
     #[ignore = "touches the real OS keychain"]
     fn os_keychain_round_trip() {
-        let store = OsKeychainStore::new("AIHubTerm-test");
+        let store = OsKeychainStore::new("Handrail-test");
         let id = crate::crypto::random_hex(8).unwrap();
         exercise(&store, &id);
     }

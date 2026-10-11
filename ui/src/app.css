@@ -1,4 +1,4 @@
-/* AIHubTerm design tokens — "quiet instrument". One accent, hairlines, no gradients.
+/* Handrail design tokens — "quiet instrument". One accent, hairlines, no gradients.
    Theme is applied as [data-theme] on <html> by the settings store (it resolves "system"
    via prefers-color-scheme and follows changes live). */
 :root {

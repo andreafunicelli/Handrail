@@ -1,5 +1,5 @@
 //! aht-harness: detect, configure, launch and supervise the user's own agent CLIs (Claude Code,
-//! Codex, OpenCode), wired to the local AIHubTerm MCP server.
+//! Codex, OpenCode), wired to the local Handrail MCP server.
 //!
 //! See `docs/superpowers/specs/2026-10-10-aihubterm-design.md` section 9. We never read harness
 //! credential files; login state comes only from the CLIs' own status commands.

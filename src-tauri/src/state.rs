@@ -59,12 +59,45 @@ impl AppState {
 fn default_keystore(paths: &Paths) -> Arc<dyn SecretKeyStore> {
     // The OS keychain holds the Secret Key so returning users only type their master password.
     // Linux desktops without a secret service fall back to a file in the app data dir.
-    if std::env::var_os("AIHUBTERM_FILE_KEYSTORE").is_some() {
+    if std::env::var_os("HANDRAIL_FILE_KEYSTORE").is_some() {
         return Arc::new(aht_vault::FileSecretKeyStore::new(
             paths.data_dir.join("keys"),
         ));
     }
-    Arc::new(aht_vault::OsKeychainStore::new("dev.aihubterm.app"))
+    Arc::new(LegacyFallbackStore {
+        current: aht_vault::OsKeychainStore::new("dev.handrail.desktop"),
+        legacy: aht_vault::OsKeychainStore::new("dev.aihubterm.app"),
+    })
+}
+
+/// Reads a Secret Key saved under the keychain service of builds released as "AIHubTerm" and
+/// copies it to the current one, so an upgraded install does not ask for the Secret Key again.
+struct LegacyFallbackStore<S> {
+    current: S,
+    legacy: S,
+}
+
+impl<S: SecretKeyStore> SecretKeyStore for LegacyFallbackStore<S> {
+    fn get(&self, vault_id: &str) -> aht_vault::Result<Option<aht_vault::SecretKey>> {
+        if let Some(k) = self.current.get(vault_id)? {
+            return Ok(Some(k));
+        }
+        let found = self.legacy.get(vault_id).ok().flatten();
+        if let Some(k) = &found {
+            // Best effort: on failure the legacy entry is simply read again next time.
+            let _ = self.current.set(vault_id, k);
+        }
+        Ok(found)
+    }
+
+    fn set(&self, vault_id: &str, key: &aht_vault::SecretKey) -> aht_vault::Result<()> {
+        self.current.set(vault_id, key)
+    }
+
+    fn delete(&self, vault_id: &str) -> aht_vault::Result<()> {
+        let _ = self.legacy.delete(vault_id);
+        self.current.delete(vault_id)
+    }
 }
 
 pub fn err(e: impl std::fmt::Display) -> Error {

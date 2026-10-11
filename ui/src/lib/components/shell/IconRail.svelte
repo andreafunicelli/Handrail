@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Logo from "../brand/Logo.svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import { ui } from "../../stores/ui.svelte";
@@ -7,7 +8,7 @@
 </script>
 
 <nav class="rail" aria-label="Main">
-  <div class="mark" aria-hidden="true">✦</div>
+  <div class="mark" aria-hidden="true"><Logo size={18} /></div>
   <button class="item" class:on={ui.rail === "connections"} aria-pressed={ui.rail === "connections"} title={t("rail.connections")} aria-label={t("rail.connections")} onclick={() => (ui.rail = "connections")}>
     <Icon name="server" size={18} />
   </button>
@@ -41,7 +42,7 @@
     width: 28px;
     height: 28px;
     margin-bottom: 10px;
-    color: var(--accent);
+    color: var(--text);
     font-size: 13px;
   }
   .item {

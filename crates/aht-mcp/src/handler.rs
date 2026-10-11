@@ -17,10 +17,10 @@ use serde_json::Value;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-pub(crate) const SERVER_NAME: &str = "aihubterm";
+pub(crate) const SERVER_NAME: &str = "handrail";
 
 pub(crate) const INSTRUCTIONS: &str = "\
-You are operating the user's LIVE terminal sessions in AIHubTerm (SSH servers and local shells). \
+You are operating the user's LIVE terminal sessions in Handrail (SSH servers and local shells). \
 Every command you run is typed into a real terminal the user is watching, on real machines.
 - Start with list_sessions (or list_connections + open_session) and session_info to learn the OS, shell and cwd.
 - run_command may require the user's approval first; the call waits until the user decides. \
@@ -102,7 +102,7 @@ fn error_result(text: String) -> CallToolResponse {
 impl ServerHandler for AhtHandler {
     fn get_info(&self) -> ServerConfig {
         let mut implementation = Implementation::new(SERVER_NAME, env!("CARGO_PKG_VERSION"));
-        implementation.title = Some("AIHubTerm terminals".into());
+        implementation.title = Some("Handrail terminals".into());
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(implementation)
             .with_instructions(INSTRUCTIONS)

@@ -57,7 +57,7 @@ pub async fn save_emergency_kit(app: AppHandle, contents: String) -> Result<Stri
         .or_else(|_| app.path().home_dir())
         .map_err(err)?;
     let path = tokio::task::spawn_blocking(move || {
-        save_new_file(&dir, "AIHubTerm Emergency Kit", "txt", contents.as_bytes())
+        save_new_file(&dir, "Handrail Emergency Kit", "txt", contents.as_bytes())
     })
     .await
     .map_err(err)??;

@@ -94,7 +94,7 @@
   <section>
     <h2>{t("vault.join.folder")}</h2>
     <form class="row" onsubmit={useCustom}>
-      <input class="input mono" bind:value={folder} placeholder="/Users/me/Sync/AIHubTerm" aria-label={t("sync.folderPath")} />
+      <input class="input mono" bind:value={folder} placeholder="/Users/me/Sync/Handrail" aria-label={t("sync.folderPath")} />
       <button class="btn" disabled={busy || !folder.trim()}>{t("sync.join")}</button>
     </form>
   </section>
