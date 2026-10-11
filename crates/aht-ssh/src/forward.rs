@@ -315,8 +315,10 @@ mod tests {
         assert_eq!(r.get("0.0.0.0", 8080), None);
         // The server rewrote the address, but only one forward uses the port.
         assert_eq!(r.get("127.0.0.1", 9090).unwrap().1, 5000);
+        // Dropping one forward leaves the other on the same port routed.
         r.remove("127.0.0.1", 8080);
-        assert_eq!(r.get("127.0.0.1", 8080), None);
         assert_eq!(r.get("10.0.0.5", 8080).unwrap().1, 4000);
+        r.remove("10.0.0.5", 8080);
+        assert_eq!(r.get("10.0.0.5", 8080), None);
     }
 }
