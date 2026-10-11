@@ -140,6 +140,8 @@ export const en = {
   "connecting.retry": "Try again",
   "connecting.close": "Close",
   "tabs.workspaceSaved": "Workspace “{name}” saved",
+  "tabs.deleteWorkspace": "Delete “{name}”",
+  "tabs.workspaceDeleted": "Workspace “{name}” deleted",
   "tabs.closePane": "Close pane",
 
   "state.connecting": "Connecting",
