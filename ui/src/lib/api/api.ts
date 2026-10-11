@@ -128,6 +128,8 @@ export interface Api {
    *  while the size is unknown. On Windows the installer then closes and restarts the app. */
   installUpdate(progress: (fraction: number | null) => void): Promise<void>;
   restartApp(): Promise<void>;
+  /** Opens an https link in the default browser (the webview ignores target="_blank"). */
+  openUrl(url: string): Promise<void>;
 
   // misc
   getSetting<T = unknown>(key: string): Promise<T | null>;

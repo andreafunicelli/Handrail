@@ -20,6 +20,43 @@ fn restart_app(app: tauri::AppHandle) {
     app.restart()
 }
 
+/// Open an `https` link in the default browser. The webview ignores `target="_blank"` links, so
+/// the UI sends external links here. Only plain https URLs are accepted; the URL goes to the OS
+/// opener as a single argument, never through a shell.
+#[tauri::command(rename_all = "snake_case")]
+fn open_url(url: String) -> aht_core::Result<()> {
+    let url = external_url(&url).map_err(aht_core::Error::Invalid)?;
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("open");
+    #[cfg(windows)]
+    let mut cmd = std::process::Command::new("explorer");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = std::process::Command::new("xdg-open");
+    let mut child = cmd
+        .arg(url.as_str())
+        .spawn()
+        .map_err(|e| aht_core::Error::Other(format!("could not open the browser: {e}")))?;
+    // Reap the opener (explorer.exe exits non-zero even on success, so its status is ignored).
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+fn external_url(s: &str) -> Result<tauri::Url, String> {
+    let url = tauri::Url::parse(s.trim()).map_err(|e| format!("not a valid URL: {e}"))?;
+    if url.scheme() != "https" {
+        return Err("only https links can be opened".into());
+    }
+    if url.host_str().is_none_or(str::is_empty)
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err("unsupported link".into());
+    }
+    Ok(url)
+}
+
 /// App data directory of builds released as "AIHubTerm" (bundle identifier `dev.aihubterm.app`).
 const LEGACY_DATA_DIR_NAME: &str = "dev.aihubterm.app";
 
@@ -64,6 +101,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_version,
             restart_app,
+            open_url,
             cmd_vault::vault_status,
             cmd_vault::vault_create,
             cmd_vault::vault_unlock,
@@ -124,4 +162,29 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Handrail");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::external_url;
+
+    #[test]
+    fn only_plain_https_links_open() {
+        assert_eq!(
+            external_url(" https://github.com/login/device ")
+                .unwrap()
+                .as_str(),
+            "https://github.com/login/device"
+        );
+        for bad in [
+            "http://github.com/login/device",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "https://user:pw@github.com/",
+            "-a Calculator",
+            "",
+        ] {
+            assert!(external_url(bad).is_err(), "{bad}");
+        }
+    }
 }

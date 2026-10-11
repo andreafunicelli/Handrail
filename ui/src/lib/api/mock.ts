@@ -471,6 +471,10 @@ export function createMockApi(): Api {
     async restartApp() {
       location.reload();
     },
+    async openUrl(url) {
+      if (!/^https:\/\//.test(url)) throw new Error("only https links can be opened");
+      if (typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");
+    },
     async saveEmergencyKit(contents) {
       // In a real browser a blob download works; the desktop webview needs the backend command.
       if (typeof document !== "undefined" && typeof URL.createObjectURL === "function") {

@@ -10,12 +10,14 @@
   let { onconnected, disabled = false }: { onconnected: (repo: string) => void | Promise<void>; disabled?: boolean } = $props();
 
   let device = $state<GithubDeviceStart | null>(null);
+  let copied = $state(false);
   let timer: ReturnType<typeof setTimeout> | null = null;
   onDestroy(() => timer && clearTimeout(timer));
 
   async function start() {
     try {
       device = await api.syncGithubStart();
+      copied = false;
       poll(device.interval);
     } catch (e) {
       toasts.error(e);
@@ -40,6 +42,23 @@
     }, Math.max(1, interval) * 1000);
   }
 
+  /** Copies the code and opens GitHub's device page; the webview cannot follow the link itself. */
+  async function openGithub(e: MouseEvent) {
+    e.preventDefault();
+    if (!device) return;
+    try {
+      await navigator.clipboard?.writeText(device.user_code);
+      copied = true;
+    } catch {
+      // Clipboard access can be refused; the code stays selectable.
+    }
+    try {
+      await api.openUrl(device.verification_uri);
+    } catch (err) {
+      toasts.error(err);
+    }
+  }
+
   function cancel() {
     if (timer) clearTimeout(timer);
     device = null;
@@ -49,8 +68,9 @@
 {#if device}
   <div class="device">
     <span class="hint">{t("sync.githubCode")}</span>
-    <a class="mono uri" href={device.verification_uri} target="_blank" rel="noreferrer noopener">{device.verification_uri}</a>
+    <a class="mono uri" href={device.verification_uri} onclick={openGithub}>{device.verification_uri}</a>
     <div class="code mono">{device.user_code}</div>
+    <button class="btn sm primary" onclick={openGithub}><Icon name="link" size={13} />{t(copied ? "sync.githubCopiedOpen" : "sync.githubOpen")}</button>
     <span class="hint waiting">{t("sync.githubWaiting")}</span>
     <button class="btn sm ghost" onclick={cancel}>{t("common.cancel")}</button>
   </div>

@@ -84,6 +84,12 @@ describe("mock api", () => {
     await expect(api.importApply(preview.preview_id, [])).rejects.toMatchObject({ kind: "not_found" });
   });
 
+  it("opens only https links", async () => {
+    const api = createMockApi();
+    await expect(api.openUrl("javascript:alert(1)")).rejects.toThrow();
+    await expect(api.openUrl("http://github.com/login/device")).rejects.toThrow();
+  });
+
   it("reports the version and installs an update with progress", async () => {
     const api = createMockApi();
     expect(await api.appVersion()).toMatch(/^\d+\.\d+\.\d+$/);

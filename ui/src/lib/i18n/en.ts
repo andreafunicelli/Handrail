@@ -422,6 +422,8 @@ export const en = {
   "sync.githubConnect": "Connect GitHub",
   "sync.githubCode": "Enter this code at",
   "sync.githubWaiting": "Waiting for you to authorize…",
+  "sync.githubOpen": "Copy code and open GitHub",
+  "sync.githubCopiedOpen": "Code copied · open GitHub again",
   "sync.githubScope": "Creates a private repository named handrail-vault. GitHub grants access to all your private repositories; the token is kept encrypted in your vault.",
   "sync.githubExpired": "The GitHub code expired. Start again.",
   "sync.githubDenied": "GitHub access was denied.",
