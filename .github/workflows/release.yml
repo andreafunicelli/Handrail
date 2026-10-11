@@ -1,8 +1,9 @@
 name: Release
 
 # Every push to main builds installers (macOS universal .dmg, Windows .exe + .msi) and
-# publishes them as a GitHub Release of this repository named v<major>.<minor>.<run number>,
-# so each build has a higher version than the last (the updater only offers newer versions).
+# publishes them as a GitHub Release of this repository named v<major>.<minor>.<patch>, the patch
+# one past the last release of that major.minor (the updater only offers newer versions; the
+# major.minor comes from the workspace version in Cargo.toml).
 # The release notes are a changelog: the pull requests merged since the previous release
 # (.github/scripts/changelog.sh). Pull requests build the same installers as downloadable
 # workflow artifacts, without a release.
@@ -27,8 +28,12 @@ on:
 permissions:
   contents: write
 
+# Publishing runs (pushes and manual runs, from any ref) share one group and run one at a time:
+# each picks the next version from the tags the previous one created, so two can never take the
+# same version. (A newer queued run replaces an older queued one; its changelog covers both.)
+# Pull request runs only build, so a newer push to the same PR cancels the older run.
 concurrency:
-  group: release-${{ github.ref }}
+  group: ${{ github.event_name == 'pull_request' && format('release-pr-{0}', github.ref) || 'release-publish' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -61,7 +66,10 @@ jobs:
         run: |
           base=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\)\.[0-9]*"$/\1/p' Cargo.toml | head -n 1)
           test -n "$base" || { echo "no workspace version in Cargo.toml" >&2; exit 1; }
-          echo "version=${base}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          # The patch counts releases of this major.minor: one past the highest v<base>.N tag, so a
+          # new base (1.0) starts at .0. Pull request builds get the same number (never published).
+          last=$(git tag -l "v${base}.*" | sed -n "s/^v${base//./\\.}\.\([0-9][0-9]*\)$/\1/p" | sort -n | tail -n 1)
+          echo "version=${base}.$(( ${last:--1} + 1 ))" >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
