@@ -1,4 +1,5 @@
 import type {
+  Snippet,
   AgentEventEnvelope,
   AgentMarkEvent,
   ApprovalDecision,
@@ -88,6 +89,9 @@ export interface Api {
   saveApprovalSettings(settings: ApprovalSettings): Promise<void>;
 
   // providers / harnesses / agent
+  listSnippets(): Promise<Snippet[]>;
+  saveSnippet(snippet: Snippet): Promise<Snippet>;
+  deleteSnippet(id: string): Promise<void>;
   listProviders(): Promise<Provider[]>;
   saveProvider(provider: Provider, apiKey?: string): Promise<Provider>;
   deleteProvider(id: string): Promise<void>;

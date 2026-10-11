@@ -14,6 +14,9 @@
   import Modal from "../common/Modal.svelte";
   import Icon from "../icons/Icon.svelte";
   import UpdateBanner from "./UpdateBanner.svelte";
+  import SnippetsPanel from "../snippets/SnippetsPanel.svelte";
+  import SnippetDialogs from "../snippets/SnippetDialogs.svelte";
+  import { snippets } from "../../stores/snippets.svelte";
   import { t } from "../../i18n";
   import { leaves } from "../../util/layout";
   import { agent } from "../../stores/agent.svelte";
@@ -38,7 +41,7 @@
   const settled = () => performance.now() - openedAt > 350;
 
   onMount(() => {
-    void Promise.all([connections.load(), sessions.init(), agent.init()]).catch(toasts.error);
+    void Promise.all([connections.load(), snippets.load(), sessions.init(), agent.init()]).catch(toasts.error);
     updates.start();
 
     // Background syncs change the vault behind the UI: refresh the cached items when one pulled.
@@ -148,11 +151,7 @@
   {#if ui.rail === "connections"}
     <ConnectionSidebar />
   {:else}
-    <div class="snippets">
-      <Icon name="snippet" size={18} />
-      <strong>{t("sidebar.snippets.title")}</strong>
-      <p>{t("sidebar.snippets.body")}</p>
-    </div>
+    <SnippetsPanel />
   {/if}
 {/snippet}
 
@@ -175,6 +174,7 @@
 {#if ui.editing}<ConnectionEditor connection={ui.editing.connection} isNew={ui.editing.isNew} />{/if}
 {#if ui.settingsPage}<Settings />{/if}
 {#if ui.paletteOpen}<CommandPalette />{/if}
+<SnippetDialogs />
 {#if sessions.hostKeys[0]}{#key sessions.hostKeys[0].request_id}<HostKeyDialog req={sessions.hostKeys[0]} />{/key}{/if}
 
 {#if ui.saveWorkspaceOpen}
@@ -235,26 +235,6 @@
     flex: none;
     min-width: 0;
     height: 100%;
-  }
-  .snippets {
-    display: grid;
-    align-content: start;
-    justify-items: start;
-    gap: 6px;
-    padding: 24px 18px;
-    background: var(--panel);
-    color: var(--muted);
-  }
-  .snippets :global(svg) {
-    color: var(--faint);
-  }
-  .snippets strong {
-    color: var(--text);
-    font-weight: 550;
-  }
-  .snippets p {
-    margin: 0;
-    font-size: var(--fs-meta);
   }
   .scrim {
     position: fixed;

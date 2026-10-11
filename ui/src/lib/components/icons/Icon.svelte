@@ -11,6 +11,7 @@
     x: "M18 6 6 18M6 6l12 12",
     chevronRight: "m9 6 6 6-6 6",
     chevronDown: "m6 9 6 6 6-6",
+    more: "M6 12h.01M12 12h.01M18 12h.01",
     folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z",
     folderPlus: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2ZM12 11v5M9.5 13.5h5",
     terminal: "M4 5h16v14H4zM7 9l3 3-3 3M12 15h5",

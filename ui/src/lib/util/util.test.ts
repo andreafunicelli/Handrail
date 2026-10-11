@@ -9,6 +9,7 @@ import { joinArgs, splitArgs } from "./args";
 import { formatBytes, relativeTime } from "./time";
 import { syncChangedVault } from "../stores/vaultData";
 import type { SyncStatus } from "../api/types";
+import { SUGGESTED_SNIPPETS, fillPlaceholders, placeholders, snippetInput } from "./snippets";
 
 describe("fuzzy", () => {
   it("matches subsequences and rejects non-matches", () => {
@@ -186,5 +187,24 @@ describe("syncChangedVault", () => {
     expect(syncChangedVault(st(1), st(2, 2, 0, { last_error: "offline" }))).toBe(false);
     // The listener started after the sync had begun: still reloads.
     expect(syncChangedVault(null, st(2, 2))).toBe(true);
+  });
+});
+
+describe("snippets", () => {
+  it("finds placeholders once, in order, and leaves Go templates alone", () => {
+    expect(placeholders("ssh {{ user }}@{{host}} -p {{port}} # {{host}}")).toEqual(["user", "host", "port"]);
+    expect(placeholders('docker ps --format "{{.Names}}"')).toEqual([]);
+  });
+  it("fills placeholders", () => {
+    expect(fillPlaceholders("journalctl -u {{service}} -n {{ n }}", { service: "nginx", n: "50" })).toBe("journalctl -u nginx -n 50");
+    expect(fillPlaceholders('docker ps --format "{{.Names}}" {{x}}', {})).toBe('docker ps --format "{{.Names}}" ');
+  });
+  it("types lines with Enter only when running", () => {
+    expect(snippetInput("uptime\n", true)).toBe("uptime\r");
+    expect(snippetInput("cd /tmp\nls", false)).toBe("cd /tmp\rls");
+  });
+  it("suggests unique names", () => {
+    const names = SUGGESTED_SNIPPETS.map((s) => s.name);
+    expect(new Set(names).size).toBe(names.length);
   });
 });

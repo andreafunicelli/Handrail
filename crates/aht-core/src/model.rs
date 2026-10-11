@@ -1,6 +1,6 @@
 //! Persistent domain model. These are the payloads stored (encrypted) in the vault and synced.
 
-use crate::{ConnectionId, GroupId, HarnessProfileId, ProviderId, SecretId};
+use crate::{ConnectionId, GroupId, HarnessProfileId, ProviderId, SecretId, SnippetId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -187,4 +187,16 @@ pub struct HarnessProfile {
 pub enum Brain {
     BuiltIn { provider: ProviderId, model: String },
     Harness { profile: HarnessProfileId },
+}
+
+/// A saved command. `{{name}}` placeholders are filled in by the user when it runs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snippet {
+    pub id: SnippetId,
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }

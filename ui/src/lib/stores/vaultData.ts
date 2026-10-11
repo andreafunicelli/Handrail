@@ -1,14 +1,15 @@
 import type { SyncStatus } from "../api/types";
 import { agent } from "./agent.svelte";
 import { connections } from "./connections.svelte";
+import { snippets } from "./snippets.svelte";
 
 /**
- * Reload every store that caches vault items (connections and groups, providers, harness
- * profiles). Call after anything changes the vault behind the UI's back: a sync that pulled,
+ * Reload every store that caches vault items (connections and groups, snippets, providers,
+ * harness profiles). Call after anything changes the vault behind the UI's back: a sync that pulled,
  * a snapshot or conflict restore.
  */
 export function reloadVaultData(): Promise<unknown> {
-  return Promise.all([connections.load(), agent.reload()]);
+  return Promise.all([connections.load(), snippets.load(), agent.reload()]);
 }
 
 /**

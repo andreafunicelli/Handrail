@@ -1,7 +1,7 @@
 //! Vault lifecycle and stored records (connections, groups, secrets, providers, profiles).
 
 use crate::state::{err, AppState};
-use aht_core::model::{Connection, Group, HarnessProfile, Provider, Secret, SecretKind};
+use aht_core::model::{Connection, Group, HarnessProfile, Provider, Secret, SecretKind, Snippet};
 use aht_core::{Error, Result, SecretId};
 use aht_vault::{
     ConflictRecord, KdfParams, SecretKey, Setting, SnapshotInfo, Vault, VaultItem, VaultStatus,
@@ -227,6 +227,27 @@ pub async fn delete_group(state: State<'_, AppState>, id: String) -> Result<()> 
 pub async fn save_secret(state: State<'_, AppState>, secret: Secret) -> Result<SecretId> {
     put(&state, &secret).await?;
     Ok(secret.id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_snippets(state: State<'_, AppState>) -> Result<Vec<Snippet>> {
+    list(&state).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn save_snippet(state: State<'_, AppState>, snippet: Snippet) -> Result<Snippet> {
+    if snippet.name.trim().is_empty() || snippet.command.trim().is_empty() {
+        return Err(Error::Invalid(
+            "a snippet needs a name and a command".into(),
+        ));
+    }
+    put(&state, &snippet).await?;
+    Ok(snippet)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn delete_snippet(state: State<'_, AppState>, id: String) -> Result<()> {
+    delete::<Snippet>(&state, &id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

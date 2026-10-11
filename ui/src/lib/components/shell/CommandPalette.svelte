@@ -8,6 +8,7 @@
   import { groupPath } from "../../util/tree";
   import { needsTypedConfirm } from "../../util/approval";
   import { connections, blankConnection } from "../../stores/connections.svelte";
+  import { snippets } from "../../stores/snippets.svelte";
   import { sessions } from "../../stores/sessions.svelte";
   import { agent } from "../../stores/agent.svelte";
   import { settings } from "../../stores/settings.svelte";
@@ -65,6 +66,9 @@
           },
         });
       }
+    if (sid)
+      for (const sn of snippets.sorted)
+        out.push({ id: "sn:" + sn.id, label: t("palette.snippet", { name: sn.name }), hint: sn.command, icon: "snippet", group: "actions", run: () => snippets.use(sn, true) });
     for (const w of sessions.workspaces)
       out.push({ id: "w:" + w.id, label: t("palette.workspace", { name: w.name }), icon: "layout", group: "actions", run: () => sessions.openWorkspace(w.id) });
     for (const p of pages)

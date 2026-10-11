@@ -43,6 +43,9 @@ export function createTauriApi(): Api {
       (await invoke<ApprovalSettings | null>("get_setting", { key: APPROVALS_KEY })) ?? DEFAULT_APPROVALS,
     saveApprovalSettings: (settings) => invoke("set_setting", { key: APPROVALS_KEY, value: settings }),
 
+    listSnippets: () => invoke("list_snippets"),
+    saveSnippet: (snippet) => invoke("save_snippet", { snippet }),
+    deleteSnippet: (id) => invoke("delete_snippet", { id }),
     listProviders: () => invoke("list_providers"),
     saveProvider: (provider, api_key) => invoke("save_provider", { provider, api_key: api_key || null }),
     deleteProvider: (id) => invoke("delete_provider", { id }),

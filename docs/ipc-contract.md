@@ -34,6 +34,11 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 - Event `approval://requested` `ApprovalRequest`; answer `approval_decide({ approval_id, decision })`
 - `set_approval_mode({ session_id, mode })`
 
+## Snippets
+- `list_snippets()`, `save_snippet({ snippet })` (name and command required), `delete_snippet({ id })`.
+  Vault item type `snippet` `{ id, name, command, description, tags }`; `{{name}}` placeholders are
+  filled in by the UI before the command is typed into the terminal.
+
 ## Providers, harnesses, agent
 - `list_providers()`, `save_provider({ provider, api_key? })`, `delete_provider({ id })`,
   `list_models({ provider_id }) -> string[]`

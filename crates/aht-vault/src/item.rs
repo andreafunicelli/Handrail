@@ -1,6 +1,6 @@
 //! Typed items stored in the vault.
 
-use aht_core::model::{Connection, Group, HarnessProfile, Provider, Secret};
+use aht_core::model::{Connection, Group, HarnessProfile, Provider, Secret, Snippet};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
@@ -41,3 +41,4 @@ impl_item!(Group, "group");
 impl_item!(Secret, "secret");
 impl_item!(Provider, "provider");
 impl_item!(HarnessProfile, "harness_profile");
+impl_item!(Snippet, "snippet");

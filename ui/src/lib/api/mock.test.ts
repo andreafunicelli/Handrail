@@ -98,6 +98,18 @@ describe("mock api", () => {
     expect(asked).toEqual(["", "Permission denied, please try again."]);
   });
 
+  it("saves, lists and deletes snippets", async () => {
+    const api = createMockApi();
+    const before = await api.listSnippets();
+    const s = await api.saveSnippet({ id: "s-1", name: "Uptime", command: "uptime", description: "", tags: [] });
+    expect((await api.listSnippets()).length).toBe(before.length + 1);
+    await api.saveSnippet({ ...s, command: "uptime -p" });
+    expect((await api.listSnippets()).find((x) => x.id === "s-1")?.command).toBe("uptime -p");
+    await expect(api.saveSnippet({ ...s, name: " " })).rejects.toMatchObject({ kind: "invalid" });
+    await api.deleteSnippet("s-1");
+    expect(await api.listSnippets()).toEqual(before);
+  });
+
   it("opens only https links", async () => {
     const api = createMockApi();
     await expect(api.openUrl("javascript:alert(1)")).rejects.toThrow();

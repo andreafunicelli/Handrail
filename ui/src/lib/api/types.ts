@@ -195,6 +195,15 @@ export interface HostKeyEvent {
 }
 /** The server asks something while logging in (password, OTP) for a connection without saved
  *  credentials. Answer with `answerAuthPrompt`, one answer per prompt. */
+/** A saved command; `{{name}}` placeholders are asked for when it runs. */
+export interface Snippet {
+  id: Uuid;
+  name: string;
+  command: string;
+  description: string;
+  tags: string[];
+}
+
 export interface AuthPromptEvent {
   request_id: string;
   /** The `promptRef` passed to `openSession`. */

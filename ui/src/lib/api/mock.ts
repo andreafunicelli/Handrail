@@ -12,6 +12,7 @@ import type {
   ImportPreview,
   Provider,
   SessionInfo,
+  Snippet,
   SyncStatus,
   ConflictView,
   SnapshotInfo,
@@ -106,7 +107,11 @@ function seed() {
       model: null,
     },
   ];
-  return { groups, connections, providers, profiles };
+  const snippets: Snippet[] = [
+    { id: uuid(), name: "Restart nginx", command: "sudo systemctl restart nginx", description: "", tags: ["nginx"] },
+    { id: uuid(), name: "Tail app log", command: "tail -f /var/log/{{app}}/current.log", description: "Follow an app's log", tags: ["logs"] },
+  ];
+  return { groups, connections, providers, profiles, snippets };
 }
 
 // ---------- fake shell ----------
@@ -607,6 +612,20 @@ export function createMockApi(): Api {
     },
     async saveApprovalSettings(s) {
       approvalSettings = structuredClone(s);
+    },
+
+    async listSnippets() {
+      return structuredClone(db.snippets);
+    },
+    async saveSnippet(s) {
+      if (!s.name.trim() || !s.command.trim()) throw fail("invalid", "a snippet needs a name and a command");
+      const i = db.snippets.findIndex((x) => x.id === s.id);
+      if (i >= 0) db.snippets[i] = structuredClone(s);
+      else db.snippets.push(structuredClone(s));
+      return structuredClone(s);
+    },
+    async deleteSnippet(id) {
+      db.snippets = db.snippets.filter((s) => s.id !== id);
     },
 
     async listProviders() {
