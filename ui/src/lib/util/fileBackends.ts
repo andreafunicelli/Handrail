@@ -37,6 +37,11 @@ export interface FileBackend {
   asRoot?(password: string | null): Promise<FileBackend>;
   /** Leaving root mode (the root backend's counterpart of `asRoot`). */
   leaveRoot?(): Promise<void>;
+  /**
+   * Copy `path` into `dir` of `dest` (another SSH session's files, or these), server to server
+   * (SFTP only). Resolves with the new path; rejects with `exists` (see `alreadyExists`).
+   */
+  copyTo?(path: string, dest: FileBackend, dir: string, overwrite: boolean, transferId: string): Promise<string>;
 }
 
 export function sftpBackend(sessionId: string, root = false): FileBackend {
@@ -62,6 +67,10 @@ export function sftpBackend(sessionId: string, root = false): FileBackend {
       return sftpBackend(sessionId, true);
     },
     leaveRoot: root ? () => api.sftpRootOff(sessionId) : undefined,
+    copyTo: (path, dest, dir, overwrite, id) => {
+      if (!dest.sessionId) return Promise.reject(new Error("files can only be copied to an SSH session"));
+      return api.sftpCopy({ sessionId, root, path }, { sessionId: dest.sessionId, root: !!dest.root, dir }, overwrite, id);
+    },
   };
 }
 
@@ -85,6 +94,9 @@ export function s3Backend(accountId: string): FileBackend {
     canRename: (e) => e.kind !== "dir",
   };
 }
+
+/** The error a copy rejects with when its destination name is taken. */
+export const alreadyExists = (e: unknown) => !!e && typeof e === "object" && (e as { message?: unknown }).message === "exists";
 
 /** The error a save rejects with when the file changed on the server since it was read. */
 export const changedOnServer = (e: unknown) =>

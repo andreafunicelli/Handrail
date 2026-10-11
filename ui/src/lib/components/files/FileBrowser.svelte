@@ -3,6 +3,7 @@
   import Icon from "../icons/Icon.svelte";
   import Modal from "../common/Modal.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
+  import CopyDialog from "./CopyDialog.svelte";
   import { t } from "../../i18n";
   import { api } from "../../api";
   import { errorMessage } from "../../api/errors";
@@ -43,7 +44,9 @@
   let naming = $state<{ mode: "mkdir" | "touch" | "rename"; dir?: string; entry?: FileEntry; value: string } | null>(null);
   const TITLES = { mkdir: "files.newFolder", touch: "files.newFile", rename: "files.rename" } as const;
 
-  const mine = $derived(transfers.list.filter((x) => x.backend === fs.key));
+  const mine = $derived(transfers.of(fs.key));
+  /** Entry being copied to another server. */
+  let copying = $state<FileEntry | null>(null);
   const writable = $derived(fs.writable(path));
 
   /** The folder last asked for (switching to root retries it, e.g. after "Permission denied"). */
@@ -58,6 +61,8 @@
       path = to;
       pathInput = to;
       selected = null;
+      // Where this browser is: the default destination of copies from other servers.
+      if (fs.sessionId) transfers.located(fs, to);
     } catch (e) {
       error = errorMessage(e);
       pathInput = path || to;
@@ -89,7 +94,20 @@
   }
 
   // Closing the browser leaves root mode too.
-  onDestroy(() => void rootFs?.leaveRoot?.().catch(() => {}));
+  onDestroy(() => {
+    void rootFs?.leaveRoot?.().catch(() => {});
+    transfers.gone(fs);
+  });
+
+  // A copy from another browser landed here: show it.
+  let seen = untrack(() => transfers.touched[base.key] ?? 0);
+  $effect(() => {
+    const n = transfers.touched[base.key] ?? 0;
+    if (n !== seen) {
+      seen = n;
+      untrack(() => path && void refresh());
+    }
+  });
 
   onMount(async () => {
     try {
@@ -222,6 +240,7 @@
         ...(isFile && fs.readText ? [{ label: t("files.edit"), icon: "edit" as const, action: () => edit(e) }] : []),
         isFile ? { label: t("files.download"), icon: "download", action: () => download(e) } : { label: t("files.open"), icon: "folder", action: () => go(e.path) },
         { label: t("files.copyPath"), icon: "copy", action: () => void navigator.clipboard?.writeText(e.path).catch(() => {}) },
+        ...(fs.copyTo ? [{ label: t("files.copyToServer"), icon: "server" as const, action: () => (copying = e) }] : []),
         "sep",
         { label: t("files.rename"), icon: "edit", disabled: !writable || !fs.canRename(e), action: () => (naming = { mode: "rename", entry: e, value: e.name }) },
         { label: t("common.delete"), icon: "trash", danger: true, disabled: !writable, action: () => remove(e) },
@@ -301,7 +320,7 @@
     <div class="transfers">
       {#each mine as x (x.id)}
         <div class="tr" class:failed={x.state === "failed"}>
-          <Icon name={x.direction === "up" ? "upload" : "download"} size={13} />
+          <Icon name={x.direction === "up" ? "upload" : x.direction === "copy" ? "copy" : "download"} size={13} />
           <span class="tn" title={x.result ?? ""}>{x.name}</span>
           {#if x.state === "running"}
             <progress max={x.total || 1} value={x.done}></progress>
@@ -319,6 +338,7 @@
 </div>
 
 {#if menu}<ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />{/if}
+{#if copying}<CopyDialog {fs} entry={copying} onclose={() => (copying = null)} />{/if}
 
 {#if naming}
   {@const n = naming}

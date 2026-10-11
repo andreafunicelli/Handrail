@@ -132,6 +132,17 @@ export interface Api {
   sftpDownload(sessionId: string, path: string, transferId: string, root?: boolean): Promise<string>;
   /** Upload a local file into `dir`; resolves with the remote path. */
   sftpUpload(sessionId: string, localPath: string, dir: string, transferId: string, root?: boolean): Promise<string>;
+  /**
+   * Copy a file or folder to `toDir` on another SSH session's server (or the same one),
+   * streamed between the two connections. Resolves with the new path; rejects with
+   * `{ kind: "busy", message: "exists" }` when the name is taken, unless `overwrite`.
+   */
+  sftpCopy(
+    from: { sessionId: string; root: boolean; path: string },
+    to: { sessionId: string; root: boolean; dir: string },
+    overwrite: boolean,
+    transferId: string,
+  ): Promise<string>;
   /** UTF-8 text up to 5 MB (binary files are refused). */
   sftpReadText(sessionId: string, path: string, root?: boolean): Promise<TextFile>;
   /**

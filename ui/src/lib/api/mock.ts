@@ -934,6 +934,23 @@ export function createMockApi(): Api {
       files.set(remote, { kind: "file", size, modified: Math.floor(Date.now() / 1000), permissions: 0o100644 });
       return remote;
     },
+    async sftpCopy(from, to, overwrite, transfer_id) {
+      sshShell(from.sessionId, from.root, from.path);
+      const name = baseName(from.path);
+      const dest = `${to.dir === "/" ? "" : to.dir}/${name}`;
+      sshShell(to.sessionId, to.root, dest, true);
+      const src = files.get(from.path);
+      if (!src) throw fail("not_found", `No such file: ${from.path}`);
+      if (files.has(dest) && !overwrite) throw fail("busy", "exists");
+      const under = [...files.entries()].filter(([p]) => p === from.path || p.startsWith(from.path + "/"));
+      await transfer(transfer_id, under.reduce((n, [, f]) => n + (f.kind === "file" ? f.size : 0), 0));
+      const now = Math.floor(Date.now() / 1000);
+      for (const [p, f] of under) {
+        files.set(dest + p.slice(from.path.length), { ...f, link: false, modified: now });
+        if (texts.has(p)) texts.set(dest + p.slice(from.path.length), texts.get(p)!);
+      }
+      return dest;
+    },
     async sftpReadText(session_id, path, root = false) {
       sshShell(session_id, root, path);
       const n = files.get(path);

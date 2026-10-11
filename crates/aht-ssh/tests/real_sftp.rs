@@ -149,3 +149,95 @@ async fn real_sftp_round_trip() {
     assert!(root.list("/root").await.is_ok());
     root.close().await;
 }
+
+#[tokio::test]
+async fn real_sftp_copy_between_connections() {
+    let Some((user, host, port, key)) = target() else {
+        eprintln!("HANDRAIL_SSH_TEST not set; skipping");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let verifier = Arc::new(StrictVerifier {
+        store: KnownHosts::new(dir.path().join("known_hosts")),
+        accept_new: true,
+    });
+    let params = SshParams::new(
+        host,
+        port,
+        user,
+        AuthMaterial::Key {
+            pem: zeroize::Zeroizing::new(key),
+            passphrase: None,
+        },
+    );
+    // Two logins, as two servers would be.
+    let a = SshConnection::connect(&params, verifier.clone())
+        .await
+        .unwrap();
+    let b = SshConnection::connect(&params, verifier).await.unwrap();
+    let (src, dst) = (a.open_sftp().await.unwrap(), b.open_sftp().await.unwrap());
+    let home = src.canonicalize(".").await.unwrap();
+    let base = join(&home, &format!("handrail-copy-{}", std::process::id()));
+    let out = a
+        .exec(&format!(
+            "mkdir -p '{base}/from/sub' '{base}/to' && head -c 700000 /dev/urandom > '{base}/from/sub/data.bin' \
+             && printf 'hi\\n' > '{base}/from/run.sh' && chmod 750 '{base}/from/run.sh' \
+             && ln -s sub '{base}/from/loop' && ln -s sub/data.bin '{base}/from/data-link'"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        out.exit_status,
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let to = join(&base, "to/copied");
+    let mut last = (0, 0);
+    let n = src
+        .copy_to(&join(&base, "from"), &dst, &to, false, |d, t| last = (d, t))
+        .await
+        .unwrap();
+    // data.bin, its link (copied as a file) and run.sh; the link to a folder is skipped.
+    assert_eq!(n, 700_000 * 2 + 3);
+    assert_eq!(last, (n, n));
+    let check = b
+        .exec(&format!(
+            "cd '{base}' && cmp from/sub/data.bin to/copied/sub/data.bin && cmp from/sub/data.bin to/copied/data-link \
+             && [ ! -L to/copied/data-link ] && [ ! -e to/copied/loop ] && stat -c %a to/copied/run.sh"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&check.stdout).trim(),
+        "750",
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    // An existing destination needs `overwrite`.
+    let err = src
+        .copy_to(&join(&base, "from/run.sh"), &dst, &to, false, |_, _| {})
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, aht_core::Error::Busy(m) if m == aht_ssh::sftp::EXISTS),
+        "{err:?}"
+    );
+    let file = join(&to, "run.sh");
+    src.copy_to(
+        &join(&base, "from/sub/data.bin"),
+        &dst,
+        &file,
+        true,
+        |_, _| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(dst.stamp(&file).await.unwrap().size, 700_000);
+
+    let _ = a.exec(&format!("rm -rf '{base}'")).await;
+    src.close().await;
+    dst.close().await;
+}

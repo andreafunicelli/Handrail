@@ -84,6 +84,26 @@ pub fn join(dir: &str, name: &str) -> String {
     }
 }
 
+/// `base/rel`, or `base` itself for the empty `rel`.
+fn join_rel(base: &str, rel: &str) -> String {
+    if rel.is_empty() {
+        base.to_string()
+    } else {
+        join(base, rel)
+    }
+}
+
+/// Error text of a copy whose destination already exists (and `overwrite` was not given).
+pub const EXISTS: &str = "exists";
+
+/// One step of a copy: a folder to create or a file to copy, relative to the copied item.
+struct CopyItem {
+    rel: String,
+    dir: bool,
+    size: u64,
+    mode: Option<u32>,
+}
+
 /// Printed on stdout once sudo let the command run, before `sftp-server` starts.
 const SUDO_OK: &str = "HANDRAIL-SUDO-OK";
 const NO_SERVER: &str = "HANDRAIL-NO-SFTP-SERVER";
@@ -417,6 +437,116 @@ impl Sftp {
         Ok(())
     }
 
+    /// What copying `path` involves: the item itself and, for a folder, everything under it.
+    /// Links to folders are not followed (they can loop); links to files are copied as files;
+    /// dangling links and special files are left out.
+    async fn copy_plan(&self, path: &str) -> Result<Vec<CopyItem>> {
+        let m = self.session.metadata(path).await.map_err(sftp_err)?;
+        if m.file_type() != FileType::Dir {
+            return Ok(vec![CopyItem {
+                rel: String::new(),
+                dir: false,
+                size: m.size.unwrap_or(0),
+                mode: m.permissions,
+            }]);
+        }
+        let mut items = vec![CopyItem {
+            rel: String::new(),
+            dir: true,
+            size: 0,
+            mode: m.permissions,
+        }];
+        let mut todo = vec![String::new()];
+        while let Some(rel) = todo.pop() {
+            for e in self.list(&join_rel(path, &rel)).await? {
+                let r = join_rel(&rel, &e.name);
+                match e.kind {
+                    EntryKind::Dir if !e.link => {
+                        items.push(CopyItem {
+                            rel: r.clone(),
+                            dir: true,
+                            size: 0,
+                            mode: e.permissions,
+                        });
+                        todo.push(r);
+                    }
+                    EntryKind::File => items.push(CopyItem {
+                        rel: r,
+                        dir: false,
+                        size: e.size,
+                        // A link's own mode is not its target's.
+                        mode: if e.link { None } else { e.permissions },
+                    }),
+                    _ => {}
+                }
+            }
+        }
+        Ok(items)
+    }
+
+    /// Copy `from` (a file, or a folder with everything in it) to `to` on `dest`, the SFTP of
+    /// another connection (or this one). The bytes stream through this computer without
+    /// touching its disk; permission bits are kept. Fails with `Busy(EXISTS)` when `to` exists,
+    /// unless `overwrite` (files are replaced, folders merged). `progress(done, total)` follows
+    /// the bytes of all files.
+    pub async fn copy_to(
+        &self,
+        from: &str,
+        dest: &Sftp,
+        to: &str,
+        overwrite: bool,
+        mut progress: impl FnMut(u64, u64) + Send,
+    ) -> Result<u64> {
+        if !overwrite && dest.session.metadata(to).await.is_ok() {
+            return Err(Error::Busy(EXISTS.into()));
+        }
+        let items = self.copy_plan(from).await?;
+        let total = items.iter().map(|i| i.size).sum();
+        let mut done = 0u64;
+        progress(0, total);
+        let mut buf = vec![0u8; CHUNK];
+        for it in &items {
+            let (src, dst) = (join_rel(from, &it.rel), join_rel(to, &it.rel));
+            let attrs = it.mode.map(|m| FileAttributes {
+                permissions: Some(m & 0o7777),
+                ..FileAttributes::empty()
+            });
+            if it.dir {
+                if let Err(e) = dest.session.create_dir(&dst).await {
+                    if !dest.is_dir(&dst).await.unwrap_or(false) {
+                        return Err(sftp_err(e));
+                    }
+                }
+                if let Some(a) = attrs {
+                    let _ = dest.session.set_metadata(&dst, a).await;
+                }
+                continue;
+            }
+            let mut r = self.session.open(&src).await.map_err(sftp_err)?;
+            let mut w = dest.session.create(&dst).await.map_err(sftp_err)?;
+            if let Some(a) = attrs {
+                let _ = w.set_metadata(a).await;
+            }
+            let copied = async {
+                loop {
+                    let n = r.read(&mut buf).await?;
+                    if n == 0 {
+                        return Ok::<(), std::io::Error>(());
+                    }
+                    w.write_all(&buf[..n]).await?;
+                    done += n as u64;
+                    progress(done, total);
+                }
+            }
+            .await;
+            let _ = r.close().await;
+            copied.map_err(io_err)?;
+            w.close().await.map_err(io_err)?;
+        }
+        progress(done, total);
+        Ok(done)
+    }
+
     pub async fn close(&self) {
         let _ = self.session.close().await;
     }
@@ -443,6 +573,12 @@ mod tests {
             sudo_error("bob is not in the sudoers file.", true),
             Error::Denied(_)
         ));
+    }
+
+    #[test]
+    fn joins_relative_paths() {
+        assert_eq!(join_rel("/srv/app", ""), "/srv/app");
+        assert_eq!(join_rel("/srv/app", "a/b.txt"), "/srv/app/a/b.txt");
     }
 
     #[test]

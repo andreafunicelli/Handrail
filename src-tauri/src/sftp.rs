@@ -165,6 +165,42 @@ pub async fn sftp_root_off(state: State<'_, AppState>, session_id: SessionId) ->
     Ok(())
 }
 
+/// Copy a file or folder from one SSH session's server to another's (or within one): streamed
+/// over both SFTP connections, nothing written on this computer. Resolves with the new path.
+/// Rejects with `{ kind: "busy", message: "exists" }` when the name is taken in `to_dir`,
+/// unless `overwrite`.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sftp_copy(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    from_session: SessionId,
+    from_root: Option<bool>,
+    path: String,
+    to_session: SessionId,
+    to_root: Option<bool>,
+    to_dir: String,
+    overwrite: bool,
+    transfer_id: String,
+) -> Result<String> {
+    let name = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|n| !n.is_empty() && *n != "." && *n != "..")
+        .ok_or_else(|| Error::Invalid(format!("cannot copy {path}")))?
+        .to_string();
+    let to = aht_ssh::sftp::join(&to_dir, &name);
+    if from_session == to_session && from_root == to_root && to == path {
+        return Err(Error::Invalid(format!("{name} is already in {to_dir}")));
+    }
+    let src = client(&state, from_session, from_root).await?;
+    let dst = client(&state, to_session, to_root).await?;
+    src.copy_to(&path, &dst, &to, overwrite, reporter(&app, transfer_id))
+        .await?;
+    Ok(to)
+}
+
 /// Progress events for `transfer_id`, at most ten a second plus the final one.
 pub(crate) fn reporter(
     app: &AppHandle,
