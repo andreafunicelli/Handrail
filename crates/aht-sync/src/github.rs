@@ -184,18 +184,24 @@ impl GitHubBackend {
         check(rb.send().await?).await
     }
 
-    /// Create `{owner}/{repo}` as a private repo if it does not exist. Returns whether it was
-    /// created. (Assumes the owner is the authenticated user.)
-    /// Whether the repository exists and the token can see it.
-    pub async fn repo_exists(&self) -> Result<bool> {
+    /// The repository's current `(owner, name)`. GitHub redirects reads of a renamed repository
+    /// to its new name, but a redirected write is replayed as a GET by the HTTP client and fails,
+    /// so callers store the new name. `None` when it does not exist or the token cannot see it.
+    pub async fn current_name(&self) -> Result<Option<(String, String)>> {
         let (status, body) = self.call(Method::GET, "", None).await?;
-        match status {
-            s if s.is_success() => Ok(true),
-            StatusCode::NOT_FOUND => Ok(false),
-            s => Err(http_err(s, &body)),
+        if status == StatusCode::NOT_FOUND {
+            return Ok(None);
         }
+        if !status.is_success() {
+            return Err(http_err(status, &body));
+        }
+        let owner = str_field(&body, &["owner", "login"])?.to_string();
+        let name = str_field(&body, &["name"])?.to_string();
+        Ok(Some((owner, name)))
     }
 
+    /// Create `{owner}/{repo}` as a private repo if it does not exist. Returns whether it was
+    /// created. (Assumes the owner is the authenticated user.)
     pub async fn ensure_repo(&self) -> Result<bool> {
         let (status, body) = self.call(Method::GET, "", None).await?;
         if status.is_success() {
