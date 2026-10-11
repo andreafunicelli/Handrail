@@ -121,6 +121,14 @@ export interface SessionInfo {
   integration: IntegrationMode;
   state: SessionState;
   approval_mode: ApprovalMode;
+  /** Why the session ended, once it is "disconnected". */
+  ended?: SessionEnd | null;
+}
+
+/** The shell exited (`exit_status`), or the connection was lost (`error`). */
+export interface SessionEnd {
+  exit_status: number | null;
+  error: string | null;
 }
 
 export type CommandState = "completed" | "timed_out" | "interrupted" | "needs_user" | "denied";

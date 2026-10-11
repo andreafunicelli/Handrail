@@ -88,6 +88,23 @@
     if (focused) requestAnimationFrame(() => terminals.peek(sessionId)?.term.focus());
   });
 
+  const rc = $derived(sessions.reconnects[sessionId]);
+  // Ticks the countdown to the next attempt.
+  let now = $state(Date.now());
+  $effect(() => {
+    if (!rc?.nextAt) return;
+    now = Date.now();
+    const timer = setInterval(() => (now = Date.now()), 500);
+    return () => clearInterval(timer);
+  });
+  const endedText = $derived.by(() => {
+    const end = info?.ended;
+    if (end?.exit_status != null) return t("term.exited", { code: end.exit_status });
+    if (rc && !rc.running && rc.attempt > 0) return t("term.reconnectFailed", { reason: rc.error ?? "" });
+    if (end?.error) return t("term.lost", { reason: end.error });
+    return t("term.disconnected");
+  });
+
   async function reconnect() {
     try {
       await sessions.reconnect(sessionId);
@@ -111,9 +128,19 @@
     <span class="badge pill warn" title={t("term.limitedHint")}>{t("term.limited")}</span>
   {/if}
   {#if info?.state === "disconnected"}
-    <div class="ended">
-      <span>{t("term.disconnected")}</span>
-      <button class="btn sm" onclick={reconnect}><Icon name="refresh" size={13} />{t("term.reconnect")}</button>
+    <div class="ended" role="status">
+      {#if rc?.running}
+        <span class="spin" aria-hidden="true"><Icon name="refresh" size={13} /></span>
+        <span class="msg" title={rc.error ?? ""}>
+          {rc.nextAt ? t("term.reconnectingIn", { s: Math.max(1, Math.ceil((rc.nextAt - now) / 1000)) }) : t("term.reconnecting")}
+          {#if rc.attempt}<span class="faint"> · {t("term.attempt", { n: rc.attempt })}</span>{/if}
+        </span>
+        <button class="btn sm" onclick={() => sessions.reconnectNow(sessionId)}>{t("term.reconnectNow")}</button>
+        <button class="btn sm ghost" onclick={() => sessions.stopReconnect(sessionId)}>{t("term.stopReconnect")}</button>
+      {:else}
+        <span class="msg" title={endedText}>{endedText}</span>
+        <button class="btn sm" onclick={reconnect}><Icon name="refresh" size={13} />{t("term.reconnect")}</button>
+      {/if}
     </div>
   {/if}
 </div>
@@ -199,7 +226,27 @@
       transform: translateY(-3px);
     }
   }
-  .ended {
+  .ended,
+  .spin {
     animation-name: none;
+  }
+  .ended .msg {
+    max-width: 46ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ended .faint {
+    color: var(--faint);
+  }
+  .spin {
+    display: inline-flex;
+    color: var(--accent);
+    animation: spin 1.2s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

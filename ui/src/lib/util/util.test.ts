@@ -12,6 +12,8 @@ import type { SyncStatus } from "../api/types";
 import { joinPath, modeString, parentDir, validName } from "./files";
 import { SUGGESTED_SNIPPETS, fillPlaceholders, placeholders, snippetInput } from "./snippets";
 import { presetOf, s3Where } from "./s3";
+import { reconnectDelay, retryable, shouldAutoReconnect } from "./reconnect";
+import type { SessionInfo } from "../api/types";
 
 describe("fuzzy", () => {
   it("matches subsequences and rejects non-matches", () => {
@@ -247,5 +249,43 @@ describe("s3 helpers", () => {
     expect(presetOf({ ...base, endpoint: "", bucket: null }).id).toBe("aws");
     expect(presetOf({ ...base, endpoint: "https://x.r2.cloudflarestorage.com", bucket: null }).id).toBe("r2");
     expect(presetOf({ ...base, endpoint: "http://10.0.0.5:9000", bucket: null }).id).toBe("other");
+  });
+});
+
+describe("auto-reconnect", () => {
+  const info = (p: Partial<SessionInfo>): SessionInfo => ({
+    session_id: "s",
+    connection_id: "c",
+    title: "web",
+    env: "none",
+    os: null,
+    shell: null,
+    cwd: null,
+    user: null,
+    host: null,
+    integration: "full",
+    state: "disconnected",
+    approval_mode: "confirm_all",
+    ended: { exit_status: null, error: "Connection reset by peer" },
+    ...p,
+  });
+  it("backs off from 1s to 30s", () => {
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 19].map(reconnectDelay)).toEqual([0, 1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+  });
+  it("retries the network, never the login or host key", () => {
+    expect(retryable({ kind: "network", message: "Connection refused" })).toBe(true);
+    expect(retryable({ kind: "io", message: "x" })).toBe(true);
+    expect(retryable({ kind: "auth", message: "denied" })).toBe(false);
+    expect(retryable({ kind: "host_key_mismatch", message: "x" })).toBe(false);
+    expect(retryable(new Error("boom"))).toBe(false);
+  });
+  it("reconnects only lost SSH sessions that log in without asking", () => {
+    expect(shouldAutoReconnect(info({}), "key")).toBe(true);
+    expect(shouldAutoReconnect(info({}), "password")).toBe(true);
+    expect(shouldAutoReconnect(info({ ended: { exit_status: 0, error: null } }), "key")).toBe(false);
+    expect(shouldAutoReconnect(info({}), "prompt")).toBe(false);
+    expect(shouldAutoReconnect(info({ connection_id: null }), "key")).toBe(false);
+    expect(shouldAutoReconnect(info({ state: "idle" }), "key")).toBe(false);
+    expect(shouldAutoReconnect(info({ ended: null }), "key")).toBe(false);
   });
 });

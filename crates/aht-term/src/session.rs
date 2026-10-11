@@ -7,7 +7,7 @@ use crate::store::{excerpt, OutputStore};
 use aht_core::agent::{ApprovalDecision, ApprovalRequest};
 use aht_core::terminal::{
     Actor, CommandResult, CommandState, ControlKey, IntegrationMode, OutputChunk,
-    RunCommandRequest, SessionInfo, SessionState, Transport, TransportEvent,
+    RunCommandRequest, SessionEnd, SessionInfo, SessionState, Transport, TransportEvent,
 };
 use aht_core::{ApprovalId, ConnectionId, Error, OutputId, Result, SessionId};
 use async_trait::async_trait;
@@ -695,6 +695,7 @@ impl TermSession {
             integration: IntegrationMode::Unknown,
             state: SessionState::Connecting,
             approval_mode: cfg.policy.mode,
+            ended: None,
         };
         let inner = Inner {
             tracker: Tracker::new(),
@@ -1092,7 +1093,7 @@ async fn reader_task(sh: Arc<Shared>, mut rx: mpsc::Receiver<TransportEvent>) {
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let mut writes = Vec::new();
-        let mut closed = false;
+        let mut closed: Option<SessionEnd> = None;
         tokio::select! {
             ev = rx.recv() => match ev {
                 Some(TransportEvent::Data(d)) => {
@@ -1111,16 +1112,27 @@ async fn reader_task(sh: Arc<Shared>, mut rx: mpsc::Receiver<TransportEvent>) {
                     }
                     g.after_chunk();
                 }
-                Some(TransportEvent::Closed { .. }) | Some(TransportEvent::Error(_)) | None => {
-                    closed = true;
+                // A lost connection reports an error before closing; the first event decides.
+                Some(TransportEvent::Closed { exit_status }) => {
+                    closed = Some(SessionEnd { exit_status, error: None });
+                }
+                Some(TransportEvent::Error(e)) => {
+                    closed = Some(SessionEnd { exit_status: None, error: Some(e) });
+                }
+                None => {
+                    closed = Some(SessionEnd {
+                        exit_status: None,
+                        error: Some("connection lost".into()),
+                    });
                 }
             },
             _ = tick.tick() => {
                 sh.inner.lock().unwrap().on_tick(&sh, &mut writes);
             }
         }
-        if closed {
+        if let Some(end) = closed {
             let mut g = sh.inner.lock().unwrap();
+            g.info.ended = Some(end);
             if let Some(c) = g.capture.as_mut() {
                 if !c.done && c.status == CapStatus::Running {
                     c.status = CapStatus::Interrupted("connection closed".into());

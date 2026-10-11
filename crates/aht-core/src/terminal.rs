@@ -87,6 +87,16 @@ pub struct SessionInfo {
     pub integration: IntegrationMode,
     pub state: SessionState,
     pub approval_mode: ApprovalMode,
+    /// Why the session ended, once it is `Disconnected`.
+    #[serde(default)]
+    pub ended: Option<SessionEnd>,
+}
+
+/// How a session ended: the shell exited (`exit_status`), or the connection was lost (`error`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionEnd {
+    pub exit_status: Option<u32>,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -25,6 +25,9 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 - `open_local_session({ shell?, cols, rows }) -> SessionInfo`
 - `session_write({ session_id, data_b64 })`, `session_resize({ session_id, cols, rows })`,
   `close_session({ session_id })`, `list_sessions() -> SessionInfo[]`
+- `SessionInfo.ended` (once `disconnected`): `{ exit_status, error }`. An exit status means the
+  shell ended (e.g. `exit`); none means the connection was lost, and the UI then logs in again by
+  itself (SSH with a saved password, key or agent; never on login or host key errors).
 - Events: `session://data` `{ session_id, data_b64 }`, `session://state` `SessionInfo`,
   `session://agent_mark` `{ session_id, command, actor_label }`,
   `session://host_key` `{ request_id, host, fingerprint, kind: "new" | "changed" }` →
