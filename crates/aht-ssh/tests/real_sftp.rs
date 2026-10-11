@@ -237,6 +237,22 @@ async fn real_sftp_copy_between_connections() {
     .unwrap();
     assert_eq!(dst.stamp(&file).await.unwrap().size, 700_000);
 
+    // The streams S3 transfers use: read a file with its size, write a new one.
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut f, size) = dst.open_read(&file).await.unwrap();
+        let mut got = Vec::new();
+        f.read_to_end(&mut got).await.unwrap();
+        assert_eq!((size, got.len() as u64), (700_000, 700_000));
+        assert!(dst.open_read(&to).await.is_err(), "a folder is refused");
+        let out = join(&to, "streamed.txt");
+        let mut w = dst.create(&out).await.unwrap();
+        w.write_all(b"streamed\n").await.unwrap();
+        w.shutdown().await.unwrap();
+        assert!(dst.exists(&out).await);
+        assert_eq!(dst.read_all(&out, 100).await.unwrap(), b"streamed\n");
+    }
+
     let _ = a.exec(&format!("rm -rf '{base}'")).await;
     src.close().await;
     dst.close().await;

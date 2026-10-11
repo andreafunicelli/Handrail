@@ -4,50 +4,80 @@
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import type { FileEntry } from "../../api/types";
+  import { s3 } from "../../stores/s3.svelte";
   import { sessions } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
   import { ui } from "../../stores/ui.svelte";
-  import { alreadyExists, sftpBackend, type FileBackend } from "../../util/fileBackends";
+  import { alreadyExists, canCopy, s3Backend, sftpBackend, type FileBackend } from "../../util/fileBackends";
 
-  /** Copy `entry` from `fs` to a folder on another open SSH session (or the same one). */
+  /**
+   * Copy `entry` from `fs` into a folder of another file system: an open SSH session's server
+   * (or the same one), or an S3 account.
+   */
   let { fs, entry, onclose }: { fs: FileBackend; entry: FileEntry; onclose: () => void } = $props();
 
-  const targets = $derived(Object.values(sessions.infos).filter((i) => i.connection_id && i.state !== "disconnected"));
+  interface Target {
+    /** `FileBackend.key` of the destination. */
+    key: string;
+    label: string;
+    kind: "sftp" | "s3";
+    fs: FileBackend;
+  }
+
+  /** Where it can go: the browser already open there (its folder, root or not), else a new one. */
+  const targets = $derived.by(() => {
+    const open = (key: string, make: () => FileBackend) => transfers.locations[key]?.fs ?? make();
+    const out: Target[] = [];
+    for (const i of Object.values(sessions.infos)) {
+      if (!i.connection_id || i.state === "disconnected") continue;
+      const key = `sftp:${i.session_id}`;
+      const here = key === fs.key ? ` ${t("files.copySame")}` : "";
+      out.push({ key, kind: "sftp", label: `${i.title} — ${i.user ?? ""}@${i.host ?? ""}${here}`, fs: open(key, () => sftpBackend(i.session_id)) });
+    }
+    for (const a of s3.sorted) {
+      const key = `s3:${a.id}`;
+      out.push({ key, kind: "s3", label: `${a.name} (S3)`, fs: open(key, () => s3Backend(a.id)) });
+    }
+    return out.filter((x) => canCopy(fs, entry, x.fs));
+  });
+
   // svelte-ignore state_referenced_locally
-  let target = $state(targets.find((i) => i.session_id !== fs.sessionId)?.session_id ?? fs.sessionId ?? "");
+  let target = $state((targets.find((x) => x.key !== fs.key) ?? targets[0])?.key ?? "");
   let dir = $state("");
   let loadingDir = $state(false);
+  const dest = $derived(targets.find((x) => x.key === target) ?? null);
 
-  /** The destination's file system: its open browser's (root or not), else the login user's. */
-  const dest = $derived(transfers.locations[`sftp:${target}`]?.fs ?? sftpBackend(target));
-
-  async function pickDir(sessionId: string) {
-    const open = transfers.locations[`sftp:${sessionId}`];
+  async function pickDir() {
+    const d = dest;
+    if (!d) return;
+    const open = transfers.locations[d.key];
     if (open) return void (dir = open.path);
     loadingDir = true;
     try {
-      dir = await sftpBackend(sessionId).home();
+      dir = await d.fs.home();
     } catch {
       dir = "";
     } finally {
       loadingDir = false;
     }
   }
-  onMount(() => void (target && pickDir(target)));
+  onMount(() => {
+    if (!s3.list.length) void s3.load().catch(() => {});
+    void pickDir();
+  });
 
-  const label = (id: string) => {
-    const i = sessions.infos[id];
-    return i ? `${i.title} — ${i.user ?? ""}@${i.host ?? ""}` : id;
-  };
+  /** S3: "/" is the bucket list, not a folder. */
+  const dirOk = $derived(!!dir.trim() && !(dest?.kind === "s3" && !dir.trim().replace(/^\/+/, "")));
 
   async function go(ev: SubmitEvent) {
     ev.preventDefault();
     // Read everything first: closing the dialog drops its props.
-    const [to, where, src, item, whereLabel] = [dest, dir.trim(), fs, { path: entry.path, name: entry.name, kind: entry.kind }, label(target)];
-    if (!where || !target) return;
+    const d = dest;
+    const [src, where, item] = [fs, dir.trim(), { path: entry.path, name: entry.name, kind: entry.kind }];
+    if (!d || !dirOk) return;
     onclose();
-    const run = (overwrite: boolean) => transfers.copy(src, item.path, to, where, overwrite);
+    const run = (overwrite: boolean) => transfers.copy(src, item.path, d.fs, where, overwrite);
     try {
       let path: string;
       try {
@@ -62,7 +92,7 @@
         if (!ok) return;
         path = await run(true);
       }
-      toasts.success(t("files.copied", { path, where: whereLabel }));
+      toasts.success(t("files.copied", { path, where: d.label }));
     } catch (e) {
       toasts.error(e);
     }
@@ -72,24 +102,25 @@
 <Modal label={t("files.copyTitle", { name: entry.name })} {onclose} width="460px">
   <form class="dialog" onsubmit={go}>
     <h2>{t("files.copyTitle", { name: entry.name })}</h2>
-    <p class="hint">{t("files.copyBody")}</p>
+    <p class="hint">{t(entry.kind === "dir" ? "files.copyBodyDir" : "files.copyBody")}</p>
     {#if !targets.length}
       <p class="hint">{t("files.copyNoTarget")}</p>
     {:else}
       <label class="field">
         <span class="label">{t("files.copyTo")}</span>
-        <select class="select" bind:value={target} onchange={() => pickDir(target)}>
-          {#each targets as i (i.session_id)}<option value={i.session_id}>{label(i.session_id)}{i.session_id === fs.sessionId ? ` ${t("files.copySame")}` : ""}</option>{/each}
+        <select class="select" bind:value={target} onchange={pickDir}>
+          {#each targets as x (x.key)}<option value={x.key}>{x.label}</option>{/each}
         </select>
       </label>
       <label class="field">
-        <span class="label">{t("files.copyFolder")}{#if dest.root}<span class="root"><Icon name="shield" size={11} />root</span>{/if}</span>
-        <input class="input mono" bind:value={dir} placeholder={loadingDir ? "…" : "/"} spellcheck="false" data-autofocus />
+        <span class="label">{t("files.copyFolder")}{#if dest?.fs.root}<span class="root"><Icon name="shield" size={11} />root</span>{/if}</span>
+        <input class="input mono" bind:value={dir} placeholder={loadingDir ? "…" : dest?.kind === "s3" ? "/bucket/folder" : "/"} spellcheck="false" data-autofocus />
+        {#if dest?.kind === "s3" && !dirOk && !loadingDir}<span class="hint">{t("files.copyBucket")}</span>{/if}
       </label>
     {/if}
     <div class="actions">
       <button type="button" class="btn ghost" onclick={onclose}>{t("common.cancel")}</button>
-      <button class="btn primary" disabled={!targets.length || !dir.trim()}>{t("files.copyGo")}</button>
+      <button class="btn primary" disabled={!dest || !dirOk}>{t("files.copyGo")}</button>
     </div>
   </form>
 </Modal>

@@ -1,6 +1,7 @@
 mod autosync;
 mod cmd_misc;
 mod cmd_vault;
+mod copy;
 mod s3;
 mod sftp;
 mod state;
@@ -166,7 +167,7 @@ pub fn run() {
             sftp::sftp_remove,
             sftp::sftp_download,
             sftp::sftp_upload,
-            sftp::sftp_copy,
+            copy::copy_between,
             sftp::sftp_sudo,
             sftp::sftp_root_off,
             sftp::sftp_read_text,

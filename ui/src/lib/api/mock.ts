@@ -934,22 +934,49 @@ export function createMockApi(): Api {
       files.set(remote, { kind: "file", size, modified: Math.floor(Date.now() / 1000), permissions: 0o100644 });
       return remote;
     },
-    async sftpCopy(from, to, overwrite, transfer_id) {
-      sshShell(from.sessionId, from.root, from.path);
-      const name = baseName(from.path);
-      const dest = `${to.dir === "/" ? "" : to.dir}/${name}`;
-      sshShell(to.sessionId, to.root, dest, true);
-      const src = files.get(from.path);
-      if (!src) throw fail("not_found", `No such file: ${from.path}`);
-      if (files.has(dest) && !overwrite) throw fail("busy", "exists");
-      const under = [...files.entries()].filter(([p]) => p === from.path || p.startsWith(from.path + "/"));
-      await transfer(transfer_id, under.reduce((n, [, f]) => n + (f.kind === "file" ? f.size : 0), 0));
+    async copyBetween(from, path, to, toDir, overwrite, transfer_id) {
+      const name = baseName(path);
       const now = Math.floor(Date.now() / 1000);
-      for (const [p, f] of under) {
-        files.set(dest + p.slice(from.path.length), { ...f, link: false, modified: now });
-        if (texts.has(p)) texts.set(dest + p.slice(from.path.length), texts.get(p)!);
+      if (from.kind === "s3" && to.kind === "s3") throw fail("invalid", "copying between S3 accounts is not supported: download the file and upload it");
+      if (to.kind === "sftp") {
+        const dest = `${toDir === "/" ? "" : toDir}/${name}`;
+        sshShell(to.session_id, to.root, dest, true);
+        if (from.kind === "s3") {
+          s3Account(from.account_id);
+          const { b, key } = s3Object(path);
+          const o = b.objects.get(key);
+          if (!o) throw fail("not_found", "NoSuchKey: The specified key does not exist.");
+          if (files.has(dest) && !overwrite) throw fail("busy", "exists");
+          await transfer(transfer_id, o.size);
+          files.set(dest, { kind: "file", size: o.size, modified: now, permissions: 0o100644 });
+          return dest;
+        }
+        sshShell(from.session_id, from.root, path);
+        if (!files.get(path)) throw fail("not_found", `No such file: ${path}`);
+        if (files.has(dest) && !overwrite) throw fail("busy", "exists");
+        const under = [...files.entries()].filter(([p]) => p === path || p.startsWith(path + "/"));
+        await transfer(transfer_id, under.reduce((n, [, f]) => n + (f.kind === "file" ? f.size : 0), 0));
+        for (const [p, f] of under) {
+          files.set(dest + p.slice(path.length), { ...f, link: false, modified: now });
+          if (texts.has(p)) texts.set(dest + p.slice(path.length), texts.get(p)!);
+        }
+        return dest;
       }
-      return dest;
+      // A server's file to S3.
+      if (from.kind !== "sftp") throw fail("invalid", "unsupported copy");
+      sshShell(from.session_id, from.root, path);
+      s3Account(to.account_id);
+      const f = files.get(path);
+      if (!f) throw fail("not_found", `No such file: ${path}`);
+      if (f.kind === "dir") throw fail("invalid", `${path} is a folder`);
+      const { bucket, key: prefix } = s3Split(toDir);
+      if (!bucket) throw fail("invalid", "open a bucket first");
+      const b = s3Bucket(bucket);
+      const k = (prefix ? prefix + "/" : "") + name;
+      if (b.objects.has(k) && !overwrite) throw fail("busy", "exists");
+      await transfer(transfer_id, f.size);
+      b.objects.set(k, { size: f.size, modified: now });
+      return `/${bucket}/${k}`;
     },
     async sftpReadText(session_id, path, root = false) {
       sshShell(session_id, root, path);

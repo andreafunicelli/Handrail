@@ -1,6 +1,6 @@
 import { api } from "../api";
 import { errorMessage } from "../api/errors";
-import { alreadyExists, type FileBackend } from "../util/fileBackends";
+import { alreadyExists, copyBetween, type FileBackend } from "../util/fileBackends";
 import { uuid } from "../util/id";
 
 export interface Transfer {
@@ -21,7 +21,7 @@ export interface Transfer {
 /** File transfers of every file browser, with progress from "transfer://progress". */
 class Transfers {
   list = $state<Transfer[]>([]);
-  /** The folder each open SSH file browser shows (by `FileBackend.key`), and its file system. */
+  /** The folder each open file browser shows (by `FileBackend.key`), and its file system. */
   locations = $state.raw<Record<string, { path: string; fs: FileBackend }>>({});
   /** Bumped when a copy lands in a browser's file system, so an open browser refreshes. */
   touched = $state<Record<string, number>>({});
@@ -75,12 +75,11 @@ class Transfers {
     this.locations = rest;
   }
 
-  /** Copy `path` from `src` into `dir` of `dest`, server to server. */
+  /** Copy `path` from `src` into `dir` of `dest` (server to server, S3 to a server, a server to S3). */
   async copy(src: FileBackend, path: string, dest: FileBackend, dir: string, overwrite: boolean) {
-    if (!src.copyTo) throw new Error("this file browser cannot copy to another server");
     const name = path.split("/").pop() ?? path;
     let id = "";
-    const out = await this.run(src.key, "copy", name, (tid) => src.copyTo!(path, dest, dir, overwrite, (id = tid)), dest.key).catch((e) => {
+    const out = await this.run(src.key, "copy", name, (tid) => copyBetween(src, path, dest, dir, overwrite, (id = tid)), dest.key).catch((e) => {
       // Not a failure: the caller asks whether to replace it.
       if (alreadyExists(e)) this.list = this.list.filter((x) => x.id !== id);
       throw e;

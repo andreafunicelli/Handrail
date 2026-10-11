@@ -55,10 +55,11 @@ SFTP runs on the SSH connection of an open SSH session (no second login); local 
   `sftp_remove({ session_id, path, is_dir })` (empty folders only)
 - `sftp_download({ session_id, path, transfer_id }) -> local path` (into Downloads, never
   overwrites), `sftp_upload({ session_id, local_path, dir, transfer_id }) -> remote path`
-- `sftp_copy({ from_session, from_root?, path, to_session, to_root?, to_dir, overwrite,
-  transfer_id }) -> new path`: a file or folder from one session's server to another's (or the
-  same), streamed between the two SFTP connections; `busy`/`exists` when the name is taken and
-  not `overwrite` (files replaced, folders merged); permission bits kept
+- `copy_between({ from, path, to, to_dir, overwrite, transfer_id }) -> new path`, where a place is
+  `{ kind: "sftp", session_id, root? }` or `{ kind: "s3", account_id }`: server to server (files
+  and folders, permission bits kept), S3 to a server and a server to S3 (files); streamed, nothing
+  saved locally; `busy`/`exists` when the name is taken and not `overwrite` (files replaced,
+  folders merged)
 - Event `transfer://progress` (SFTP and S3) `{ transfer_id, done, total }` (at most ten a second, plus the last)
 - Every `sftp_*` command takes `root?: bool`: use the session's root server, started by
   `sftp_sudo({ session_id, password? })` (sudo on its own channel: `sudo -n`, then the connection's

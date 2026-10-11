@@ -58,17 +58,7 @@ export function createTauriApi(): Api {
     sftpRemove: (session_id, path, is_dir, root = false) => invoke("sftp_remove", { session_id, path, is_dir, root }),
     sftpDownload: (session_id, path, transfer_id, root = false) => invoke("sftp_download", { session_id, path, transfer_id, root }),
     sftpUpload: (session_id, local_path, dir, transfer_id, root = false) => invoke("sftp_upload", { session_id, local_path, dir, transfer_id, root }),
-    sftpCopy: (from, to, overwrite, transfer_id) =>
-      invoke("sftp_copy", {
-        from_session: from.sessionId,
-        from_root: from.root,
-        path: from.path,
-        to_session: to.sessionId,
-        to_root: to.root,
-        to_dir: to.dir,
-        overwrite,
-        transfer_id,
-      }),
+    copyBetween: (from, path, to, to_dir, overwrite, transfer_id) => invoke("copy_between", { from, path, to, to_dir, overwrite, transfer_id }),
     sftpReadText: (session_id, path, root = false) => invoke("sftp_read_text", { session_id, path, root }),
     sftpWriteText: (session_id, path, text, expected, backup, root = false) => invoke("sftp_write_text", { session_id, path, text, expected, backup, root }),
     editProposalDecide: (proposal_id, outcome, note) => invoke("edit_proposal_decide", { proposal_id, outcome, note }),

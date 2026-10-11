@@ -34,6 +34,7 @@ import type {
   SecretInfo,
   SessionDataEvent,
   SessionInfo,
+  Place,
   ServerStats,
   TunnelStatus,
   TunnelsEvent,
@@ -133,16 +134,12 @@ export interface Api {
   /** Upload a local file into `dir`; resolves with the remote path. */
   sftpUpload(sessionId: string, localPath: string, dir: string, transferId: string, root?: boolean): Promise<string>;
   /**
-   * Copy a file or folder to `toDir` on another SSH session's server (or the same one),
-   * streamed between the two connections. Resolves with the new path; rejects with
-   * `{ kind: "busy", message: "exists" }` when the name is taken, unless `overwrite`.
+   * Copy `path` from one file system into folder `toDir` of another: server to server (files
+   * and folders), S3 to a server or a server to S3 (files). Streamed, nothing saved locally.
+   * Resolves with the new path; rejects with `{ kind: "busy", message: "exists" }` when the
+   * name is taken, unless `overwrite`.
    */
-  sftpCopy(
-    from: { sessionId: string; root: boolean; path: string },
-    to: { sessionId: string; root: boolean; dir: string },
-    overwrite: boolean,
-    transferId: string,
-  ): Promise<string>;
+  copyBetween(from: Place, path: string, to: Place, toDir: string, overwrite: boolean, transferId: string): Promise<string>;
   /** UTF-8 text up to 5 MB (binary files are refused). */
   sftpReadText(sessionId: string, path: string, root?: boolean): Promise<TextFile>;
   /**

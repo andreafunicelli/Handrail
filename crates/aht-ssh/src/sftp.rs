@@ -47,6 +47,9 @@ pub struct FileStamp {
     pub permissions: Option<u32>,
 }
 
+/// An open remote file: `AsyncRead` and `AsyncWrite` (e.g. to stream it to or from S3).
+pub type SftpFile = russh_sftp::client::fs::File;
+
 /// An SFTP session on one SSH connection.
 pub struct Sftp {
     session: SftpSession,
@@ -437,6 +440,26 @@ impl Sftp {
         Ok(())
     }
 
+    /// Whether `path` exists (following links).
+    pub async fn exists(&self, path: &str) -> bool {
+        self.session.metadata(path).await.is_ok()
+    }
+
+    /// Open the file `path` for reading, with its size. Folders are refused.
+    pub async fn open_read(&self, path: &str) -> Result<(SftpFile, u64)> {
+        let m = self.session.metadata(path).await.map_err(sftp_err)?;
+        if m.file_type() == FileType::Dir {
+            return Err(Error::Invalid(format!("{path} is a folder")));
+        }
+        let f = self.session.open(path).await.map_err(sftp_err)?;
+        Ok((f, m.size.unwrap_or(0)))
+    }
+
+    /// Create `path` for writing (an existing file is emptied first).
+    pub async fn create(&self, path: &str) -> Result<SftpFile> {
+        self.session.create(path).await.map_err(sftp_err)
+    }
+
     /// What copying `path` involves: the item itself and, for a folder, everything under it.
     /// Links to folders are not followed (they can loop); links to files are copied as files;
     /// dangling links and special files are left out.
@@ -497,7 +520,7 @@ impl Sftp {
         overwrite: bool,
         mut progress: impl FnMut(u64, u64) + Send,
     ) -> Result<u64> {
-        if !overwrite && dest.session.metadata(to).await.is_ok() {
+        if !overwrite && dest.exists(to).await {
             return Err(Error::Busy(EXISTS.into()));
         }
         let items = self.copy_plan(from).await?;

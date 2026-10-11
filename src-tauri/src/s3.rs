@@ -24,12 +24,12 @@ fn split(path: &str) -> Result<Option<(String, String)>> {
     Ok(Some((bucket.to_string(), key.to_string())))
 }
 
-fn in_bucket(path: &str) -> Result<(String, String)> {
+pub(crate) fn in_bucket(path: &str) -> Result<(String, String)> {
     split(path)?.ok_or_else(|| Error::Invalid("open a bucket first".into()))
 }
 
 /// A path naming an object or folder, not a bucket.
-fn object(path: &str) -> Result<(String, String)> {
+pub(crate) fn object(path: &str) -> Result<(String, String)> {
     let (bucket, key) = in_bucket(path)?;
     if key.is_empty() {
         return Err(Error::Invalid(
@@ -52,7 +52,7 @@ async fn account(state: &AppState, id: &str) -> Result<S3Account> {
 /// The account's client. The account and its secret are read from the vault on every call, so
 /// nothing works while it is locked and edits (also from sync) apply at once; the client (with
 /// the bucket regions it learned) is reused while both are unchanged.
-async fn client(state: &AppState, id: &str) -> Result<Arc<S3Client>> {
+pub(crate) async fn client(state: &AppState, id: &str) -> Result<Arc<S3Client>> {
     let a = account(state, id).await?;
     let secret_id = a
         .secret

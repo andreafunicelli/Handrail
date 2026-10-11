@@ -62,7 +62,7 @@
       pathInput = to;
       selected = null;
       // Where this browser is: the default destination of copies from other servers.
-      if (fs.sessionId) transfers.located(fs, to);
+      transfers.located(fs, to);
     } catch (e) {
       error = errorMessage(e);
       pathInput = path || to;
@@ -240,7 +240,8 @@
         ...(isFile && fs.readText ? [{ label: t("files.edit"), icon: "edit" as const, action: () => edit(e) }] : []),
         isFile ? { label: t("files.download"), icon: "download", action: () => download(e) } : { label: t("files.open"), icon: "folder", action: () => go(e.path) },
         { label: t("files.copyPath"), icon: "copy", action: () => void navigator.clipboard?.writeText(e.path).catch(() => {}) },
-        ...(fs.copyTo ? [{ label: t("files.copyToServer"), icon: "server" as const, action: () => (copying = e) }] : []),
+        // Folders only go server to server; files also between a server and S3.
+        ...(fs.kind === "sftp" || isFile ? [{ label: t("files.copyToServer"), icon: "server" as const, action: () => (copying = e) }] : []),
         "sep",
         { label: t("files.rename"), icon: "edit", disabled: !writable || !fs.canRename(e), action: () => (naming = { mode: "rename", entry: e, value: e.name }) },
         { label: t("common.delete"), icon: "trash", danger: true, disabled: !writable, action: () => remove(e) },
