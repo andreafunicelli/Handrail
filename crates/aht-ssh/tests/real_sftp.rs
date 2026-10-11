@@ -182,7 +182,8 @@ async fn real_sftp_copy_between_connections() {
         .exec(&format!(
             "mkdir -p '{base}/from/sub' '{base}/to' && head -c 700000 /dev/urandom > '{base}/from/sub/data.bin' \
              && printf 'hi\\n' > '{base}/from/run.sh' && chmod 750 '{base}/from/run.sh' \
-             && ln -s sub '{base}/from/loop' && ln -s sub/data.bin '{base}/from/data-link'"
+             && ln -s sub '{base}/from/loop' && ln -s sub/data.bin '{base}/from/data-link' \
+             && chmod 555 '{base}/from/sub' && mkfifo '{base}/pipe'"
         ))
         .await
         .unwrap();
@@ -205,16 +206,32 @@ async fn real_sftp_copy_between_connections() {
     let check = b
         .exec(&format!(
             "cd '{base}' && cmp from/sub/data.bin to/copied/sub/data.bin && cmp from/sub/data.bin to/copied/data-link \
-             && [ ! -L to/copied/data-link ] && [ ! -e to/copied/loop ] && stat -c %a to/copied/run.sh"
+             && [ ! -L to/copied/data-link ] && [ ! -e to/copied/loop ] && stat -c %a to/copied/run.sh \
+             && stat -c %a to/copied/sub"
         ))
         .await
         .unwrap();
+    // A read-only folder is filled first, then gets its mode.
     assert_eq!(
         String::from_utf8_lossy(&check.stdout).trim(),
-        "750",
+        "750\n555",
         "{}",
         String::from_utf8_lossy(&check.stderr)
     );
+
+    // A pipe (or device) is refused instead of hanging on a read.
+    let err = src
+        .copy_to(
+            &join(&base, "pipe"),
+            &dst,
+            &join(&base, "to/pipe"),
+            false,
+            |_, _| {},
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, aht_core::Error::Invalid(_)), "{err:?}");
+    assert!(src.open_read(&join(&base, "pipe")).await.is_err());
 
     // An existing destination needs `overwrite`.
     let err = src
@@ -251,9 +268,38 @@ async fn real_sftp_copy_between_connections() {
         w.shutdown().await.unwrap();
         assert!(dst.exists(&out).await);
         assert_eq!(dst.read_all(&out, 100).await.unwrap(), b"streamed\n");
+
+        // Replacing goes through a temporary file: the old content stays until the new one is
+        // complete, and nothing is left behind.
+        let tmp = aht_ssh::sftp::temp_sibling(&out);
+        let mut w = dst.create_mode(&tmp, Some(0o100600)).await.unwrap();
+        w.write_all(b"new\n").await.unwrap();
+        w.shutdown().await.unwrap();
+        assert_eq!(dst.read_all(&out, 100).await.unwrap(), b"streamed\n");
+        dst.replace_with(&tmp, &out).await.unwrap();
+        assert_eq!(dst.read_all(&out, 100).await.unwrap(), b"new\n");
+        assert_eq!(
+            dst.stamp(&out)
+                .await
+                .unwrap()
+                .permissions
+                .map(|p| p & 0o777),
+            Some(0o600)
+        );
+        let left: Vec<String> = dst
+            .list(&to)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .filter(|n| n.contains("handrail-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
     }
 
-    let _ = a.exec(&format!("rm -rf '{base}'")).await;
+    let _ = a
+        .exec(&format!("chmod -R u+w '{base}'; rm -rf '{base}'"))
+        .await;
     src.close().await;
     dst.close().await;
 }

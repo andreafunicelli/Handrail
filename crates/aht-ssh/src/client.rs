@@ -139,7 +139,7 @@ impl client::Handler for ClientHandler {
     async fn server_channel_open_forwarded_tcpip(
         &mut self,
         channel: Channel<Msg>,
-        _connected_address: &str,
+        connected_address: &str,
         connected_port: u32,
         _originator_address: &str,
         _originator_port: u32,
@@ -147,7 +147,7 @@ impl client::Handler for ClientHandler {
         _session: &mut Session,
     ) -> std::result::Result<(), Self::Error> {
         // Not a port we asked for: dropping `reply` refuses the channel.
-        if let Some(dest) = self.remote.get(connected_port) {
+        if let Some(dest) = self.remote.get(connected_address, connected_port) {
             reply.accept().await;
             connect_forwarded(channel, dest);
         }

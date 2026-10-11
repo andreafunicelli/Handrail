@@ -5,7 +5,7 @@
 use crate::sftp::{client as sftp, reporter};
 use crate::state::AppState;
 use aht_core::{Error, Result, SessionId};
-use aht_ssh::sftp::{join, EXISTS};
+use aht_ssh::sftp::{join, temp_sibling, EXISTS};
 use serde::Deserialize;
 use tauri::{AppHandle, State};
 use tokio::io::AsyncWriteExt;
@@ -76,7 +76,15 @@ pub async fn copy_between(
                 return Err(Error::Busy(EXISTS.into()));
             }
             let s3 = crate::s3::client(&state, &account_id).await?;
-            let mut file = dst.create(&dest).await?;
+            // Into a temporary file beside the destination, moved over it only once complete:
+            // a failed download never empties or deletes a file being replaced.
+            let tmp = temp_sibling(&dest);
+            // A replaced file keeps its permissions.
+            let mode = match overwrite {
+                true => dst.stamp(&dest).await.ok().and_then(|s| s.permissions),
+                false => None,
+            };
+            let mut file = dst.create_mode(&tmp, mode).await?;
             let copied = async {
                 s3.download_to(&bucket, &key, &mut file, progress).await?;
                 file.shutdown()
@@ -85,10 +93,10 @@ pub async fn copy_between(
             }
             .await;
             if let Err(e) = copied {
-                // No half-copied file left behind.
-                let _ = dst.remove(&dest, false).await;
+                let _ = dst.remove(&tmp, false).await;
                 return Err(e);
             }
+            dst.replace_with(&tmp, &dest).await?;
             Ok(dest)
         }
         (Place::Sftp { session_id, root }, Place::S3 { account_id }) => {

@@ -48,7 +48,7 @@ impl Drop for Forward {
             t.abort();
         }
         if let Some((conn, host, port)) = self.remote.take() {
-            conn.remote_forwards().remove(port);
+            conn.remote_forwards().remove(&host, port);
             if let Ok(rt) = tokio::runtime::Handle::try_current() {
                 rt.spawn(async move {
                     let _ = conn.handle.cancel_tcpip_forward(host, port).await;
@@ -124,7 +124,7 @@ impl SshConnection {
                     })?;
                 // Servers answer 0 when the requested port was not 0.
                 let port = if b.1 == 0 { got } else { b.1 as u32 };
-                self.remote_forwards().insert(port, dest.clone());
+                self.remote_forwards().insert(&b.0, port, dest.clone());
                 Ok(Forward {
                     port: port as u16,
                     task: None,
@@ -247,34 +247,39 @@ async fn socks_conn(conn: Arc<SshConnection>, mut tcp: TcpStream, peer: SocketAd
     }
 }
 
-/// Destinations of the server's listening ports (`ssh -R`), by port: the client handler
-/// connects each forwarded connection to its destination.
+type RemoteMap = std::collections::HashMap<(String, u32), (String, u16)>;
+
+/// Destinations of the server's listening ports (`ssh -R`), by the address and port it listens
+/// on: the client handler connects each forwarded connection to its destination.
 #[derive(Clone, Default)]
-pub(crate) struct RemoteForwards(
-    Arc<std::sync::Mutex<std::collections::HashMap<u32, (String, u16)>>>,
-);
+pub(crate) struct RemoteForwards(Arc<std::sync::Mutex<RemoteMap>>);
 
 impl RemoteForwards {
-    fn insert(&self, port: u32, dest: (String, u16)) {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(port, dest);
+    fn map(&self) -> std::sync::MutexGuard<'_, RemoteMap> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn remove(&self, port: u32) {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&port);
+    fn insert(&self, address: &str, port: u32, dest: (String, u16)) {
+        self.map().insert((address.to_string(), port), dest);
     }
 
-    pub(crate) fn get(&self, port: u32) -> Option<(String, u16)> {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&port)
-            .cloned()
+    fn remove(&self, address: &str, port: u32) {
+        self.map().remove(&(address.to_string(), port));
+    }
+
+    /// The destination for a connection to `address:port` on the server. Servers report the
+    /// address as it was requested; one that rewrites it (e.g. "localhost" to "127.0.0.1")
+    /// still matches when only one forward uses that port.
+    pub(crate) fn get(&self, address: &str, port: u32) -> Option<(String, u16)> {
+        let map = self.map();
+        if let Some(d) = map.get(&(address.to_string(), port)) {
+            return Some(d.clone());
+        }
+        let mut on_port = map.iter().filter(|((_, p), _)| *p == port);
+        match (on_port.next(), on_port.next()) {
+            (Some((_, d)), None) => Some(d.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -292,4 +297,26 @@ pub(crate) fn connect_forwarded(channel: russh::Channel<russh::client::Msg>, des
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_forwards_are_told_apart_by_address() {
+        let r = RemoteForwards::default();
+        r.insert("127.0.0.1", 8080, ("localhost".into(), 3000));
+        r.insert("10.0.0.5", 8080, ("localhost".into(), 4000));
+        r.insert("localhost", 9090, ("localhost".into(), 5000));
+        assert_eq!(r.get("127.0.0.1", 8080).unwrap().1, 3000);
+        assert_eq!(r.get("10.0.0.5", 8080).unwrap().1, 4000);
+        // Ambiguous: two forwards share the port and the address matches neither.
+        assert_eq!(r.get("0.0.0.0", 8080), None);
+        // The server rewrote the address, but only one forward uses the port.
+        assert_eq!(r.get("127.0.0.1", 9090).unwrap().1, 5000);
+        r.remove("127.0.0.1", 8080);
+        assert_eq!(r.get("127.0.0.1", 8080), None);
+        assert_eq!(r.get("10.0.0.5", 8080).unwrap().1, 4000);
+    }
 }

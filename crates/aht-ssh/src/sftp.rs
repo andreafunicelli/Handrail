@@ -96,8 +96,30 @@ fn join_rel(base: &str, rel: &str) -> String {
     }
 }
 
+/// A hidden, unused name next to `path` (same folder), for writing before replacing it.
+pub fn temp_sibling(path: &str) -> String {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let tmp = format!(".{name}.handrail-{nanos:x}-{n}.part");
+    if dir.is_empty() && !path.starts_with('/') {
+        tmp
+    } else {
+        format!("{dir}/{tmp}")
+    }
+}
+
 /// Error text of a copy whose destination already exists (and `overwrite` was not given).
 pub const EXISTS: &str = "exists";
+
+fn not_a_file(path: &str) -> Error {
+    Error::Invalid(format!(
+        "{path} is not a regular file (a device, socket or pipe): it cannot be copied"
+    ))
+}
 
 /// One step of a copy: a folder to create or a file to copy, relative to the copied item.
 struct CopyItem {
@@ -448,8 +470,10 @@ impl Sftp {
     /// Open the file `path` for reading, with its size. Folders are refused.
     pub async fn open_read(&self, path: &str) -> Result<(SftpFile, u64)> {
         let m = self.session.metadata(path).await.map_err(sftp_err)?;
-        if m.file_type() == FileType::Dir {
-            return Err(Error::Invalid(format!("{path} is a folder")));
+        match m.file_type() {
+            FileType::File => {}
+            FileType::Dir => return Err(Error::Invalid(format!("{path} is a folder"))),
+            _ => return Err(not_a_file(path)),
         }
         let f = self.session.open(path).await.map_err(sftp_err)?;
         Ok((f, m.size.unwrap_or(0)))
@@ -457,7 +481,21 @@ impl Sftp {
 
     /// Create `path` for writing (an existing file is emptied first).
     pub async fn create(&self, path: &str) -> Result<SftpFile> {
-        self.session.create(path).await.map_err(sftp_err)
+        self.create_mode(path, None).await
+    }
+
+    /// [`Self::create`], giving the file the permission bits of `mode` before anything is
+    /// written.
+    pub async fn create_mode(&self, path: &str, mode: Option<u32>) -> Result<SftpFile> {
+        let f = self.session.create(path).await.map_err(sftp_err)?;
+        if let Some(mode) = mode {
+            let attrs = FileAttributes {
+                permissions: Some(mode & 0o7777),
+                ..FileAttributes::empty()
+            };
+            f.set_metadata(attrs).await.map_err(sftp_err)?;
+        }
+        Ok(f)
     }
 
     /// What copying `path` involves: the item itself and, for a folder, everything under it.
@@ -466,6 +504,10 @@ impl Sftp {
     async fn copy_plan(&self, path: &str) -> Result<Vec<CopyItem>> {
         let m = self.session.metadata(path).await.map_err(sftp_err)?;
         if m.file_type() != FileType::Dir {
+            // A FIFO would block a read forever; a device would be read as data.
+            if m.file_type() != FileType::File {
+                return Err(not_a_file(path));
+            }
             return Ok(vec![CopyItem {
                 rel: String::new(),
                 dir: false,
@@ -528,6 +570,7 @@ impl Sftp {
         let mut done = 0u64;
         progress(0, total);
         let mut buf = vec![0u8; CHUNK];
+        let mut dir_modes = Vec::new();
         for it in &items {
             let (src, dst) = (join_rel(from, &it.rel), join_rel(to, &it.rel));
             let attrs = it.mode.map(|m| FileAttributes {
@@ -540,13 +583,17 @@ impl Sftp {
                         return Err(sftp_err(e));
                     }
                 }
+                // Its mode comes last: a read-only folder must stay writable while it is filled.
                 if let Some(a) = attrs {
-                    let _ = dest.session.set_metadata(&dst, a).await;
+                    dir_modes.push((dst, a));
                 }
                 continue;
             }
+            // Into a temporary file beside the destination: a copy that fails half-way never
+            // touches (or empties) a file being replaced.
+            let tmp = temp_sibling(&dst);
             let mut r = self.session.open(&src).await.map_err(sftp_err)?;
-            let mut w = dest.session.create(&dst).await.map_err(sftp_err)?;
+            let mut w = dest.session.create(&tmp).await.map_err(sftp_err)?;
             if let Some(a) = attrs {
                 let _ = w.set_metadata(a).await;
             }
@@ -563,11 +610,49 @@ impl Sftp {
             }
             .await;
             let _ = r.close().await;
-            copied.map_err(io_err)?;
-            w.close().await.map_err(io_err)?;
+            let written = match copied {
+                Ok(()) => w.close().await,
+                Err(e) => {
+                    let _ = w.close().await;
+                    Err(e)
+                }
+            };
+            if let Err(e) = written {
+                let _ = dest.remove(&tmp, false).await;
+                return Err(io_err(e));
+            }
+            dest.replace_with(&tmp, &dst).await?;
+        }
+        // Deepest folders first, so a read-only parent is set after its children.
+        for (dir, attrs) in dir_modes.into_iter().rev() {
+            let _ = dest.session.set_metadata(&dir, attrs).await;
         }
         progress(done, total);
         Ok(done)
+    }
+
+    /// Put the finished file `tmp` at `dest`. SFTP's rename does not replace an existing file,
+    /// so the old one steps aside first and is deleted only once the new one is in place (or
+    /// put back if that fails). `tmp` is removed when it cannot be placed.
+    pub async fn replace_with(&self, tmp: &str, dest: &str) -> Result<()> {
+        let placed = async {
+            if !self.exists(dest).await {
+                return self.rename(tmp, dest).await;
+            }
+            let old = temp_sibling(dest);
+            self.rename(dest, &old).await?;
+            if let Err(e) = self.rename(tmp, dest).await {
+                let _ = self.rename(&old, dest).await;
+                return Err(e);
+            }
+            let _ = self.remove(&old, false).await;
+            Ok(())
+        }
+        .await;
+        if placed.is_err() {
+            let _ = self.remove(tmp, false).await;
+        }
+        placed
     }
 
     pub async fn close(&self) {
@@ -596,6 +681,19 @@ mod tests {
             sudo_error("bob is not in the sudoers file.", true),
             Error::Denied(_)
         ));
+    }
+
+    #[test]
+    fn temp_siblings_are_hidden_unique_and_beside() {
+        let a = temp_sibling("/srv/app/data.db");
+        let b = temp_sibling("/srv/app/data.db");
+        assert_ne!(a, b);
+        assert!(
+            a.starts_with("/srv/app/.data.db.handrail-") && a.ends_with(".part"),
+            "{a}"
+        );
+        assert!(temp_sibling("/top").starts_with("/.top.handrail-"));
+        assert!(temp_sibling("rel").starts_with(".rel.handrail-"));
     }
 
     #[test]
