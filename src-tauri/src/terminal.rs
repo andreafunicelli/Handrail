@@ -61,6 +61,9 @@ struct HarnessChat {
     run_id: Arc<std::sync::Mutex<String>>,
 }
 
+/// Answers to a login prompt; `None` when the user cancelled.
+type LoginAnswers = Option<Vec<Zeroizing<String>>>;
+
 type PendingApprovals = HashMap<ApprovalId, (SessionId, oneshot::Sender<ApprovalDecision>)>;
 
 #[derive(Default)]
@@ -72,7 +75,7 @@ pub struct TerminalHub {
     grants: std::sync::Mutex<HashMap<String, HashSet<SessionId>>>,
     host_keys: Mutex<HashMap<String, oneshot::Sender<bool>>>,
     /// Login prompts waiting for the user's answers (`None` = cancelled).
-    auth_prompts: Mutex<HashMap<String, oneshot::Sender<Option<Vec<Zeroizing<String>>>>>>,
+    auth_prompts: Mutex<HashMap<String, oneshot::Sender<LoginAnswers>>>,
     mcp: OnceCell<McpServer>,
     agents: Mutex<HashMap<String, Arc<Mutex<aht_agent::Agent>>>>,
     harness_chats: Mutex<HashMap<(SessionId, String), HarnessChat>>,
