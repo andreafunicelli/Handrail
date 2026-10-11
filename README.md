@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/andreafunicelli/handrail-releases/releases/latest">Download for macOS and Windows</a>
+  <a href="https://github.com/andreafunicelli/Handrail/releases/latest">Download for macOS and Windows</a>
 </p>
 
 ![Handrail: the built-in agent checks disk usage on a production server, after approval](docs/images/agent.png)
@@ -56,7 +56,7 @@
 
 ## Install
 
-Download the latest `.dmg` (macOS, Apple silicon and Intel) or `.exe` (Windows) from the [releases page](https://github.com/andreafunicelli/handrail-releases/releases/latest).
+Download the latest `.dmg` (macOS, Apple silicon and Intel) or `.exe` (Windows) from the [releases page](https://github.com/andreafunicelli/Handrail/releases/latest).
 
 The builds are not code-signed yet:
 - **macOS:** the first time, open **System Settings › Privacy & Security** and click **Open Anyway**. Or run `xattr -dr com.apple.quarantine /Applications/Handrail.app`.
@@ -127,7 +127,9 @@ Updates need two things:
 1. **An updater key pair** from `npx tauri signer generate`.
    - The public key goes in `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
    - The private key and its password go in the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-2. **A public releases repository.** The app repository is private, and the updater cannot download from it. Releases go to the public `andreafunicelli/handrail-releases`, using a fine-grained token with "Contents: read and write" on that repository, stored as the secret `RELEASES_TOKEN`.
+2. **Releases in this repository.** Every push to `main` publishes one here, with a changelog of the pull requests merged since the previous release. The updater reads `latest.json` from the latest release.
+
+Releases used to go to the separate `andreafunicelli/handrail-releases` repository, and apps installed from there still look for updates there. While the secret `RELEASES_TOKEN` (a token with "Contents: read and write" on that repository) exists, each release also copies its `latest.json` there, so those apps update to a version that looks here. Delete the secret once they have updated.
 
 ### Renamed from AIHubTerm
 

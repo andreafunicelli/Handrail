@@ -124,7 +124,7 @@ Accounts are vault items; the secret access key is a vault secret and never come
 - `app_version() -> string` (workspace `Cargo.toml` version; release builds stamp `<major>.<minor>.<build>`)
 - `restart_app()` (after an installed update on macOS/Linux)
 - Updates use `@tauri-apps/plugin-updater` (`updater:default` capability) against
-  `https://github.com/andreafunicelli/handrail-releases/releases/latest/download/latest.json`.
+  `https://github.com/andreafunicelli/Handrail/releases/latest/download/latest.json`.
 
 ## Misc
 - `get_setting({ key }) -> any|null`, `set_setting({ key, value })`
