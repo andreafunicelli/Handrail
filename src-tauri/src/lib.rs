@@ -146,6 +146,7 @@ pub fn run() {
             cmd_misc::sync_folder_presets,
             terminal::approval_decide,
             terminal::host_key_decision,
+            terminal::auth_prompt_answer,
             terminal::open_session,
             terminal::list_local_shells,
             terminal::open_local_session,

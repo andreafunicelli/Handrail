@@ -18,7 +18,10 @@ use aht_core::terminal::{
 use aht_core::{ApprovalId, ConnectionId, Error, OutputId, Result, SessionId};
 use aht_harness::{HeadlessRun, LaunchContext, LaunchMode, LaunchSpec};
 use aht_mcp::{McpOptions, McpServer, McpToken};
-use aht_ssh::{AuthMaterial, HostKeyPrompt, JumpHop, KnownHosts, PromptingVerifier, SshParams};
+use aht_ssh::{
+    AuthMaterial, HostKeyPrompt, JumpHop, KeyboardInteractiveHandler, KiPrompt, KnownHosts,
+    PromptingVerifier, SshParams,
+};
 use aht_term::{Approver, Policy, SessionEvent, TermConfig, TermSession};
 use async_trait::async_trait;
 use base64::Engine;
@@ -68,6 +71,8 @@ pub struct TerminalHub {
     /// Sessions an agent opened itself (via `open_session`), added to its scope.
     grants: std::sync::Mutex<HashMap<String, HashSet<SessionId>>>,
     host_keys: Mutex<HashMap<String, oneshot::Sender<bool>>>,
+    /// Login prompts waiting for the user's answers (`None` = cancelled).
+    auth_prompts: Mutex<HashMap<String, oneshot::Sender<Option<Vec<Zeroizing<String>>>>>>,
     mcp: OnceCell<McpServer>,
     agents: Mutex<HashMap<String, Arc<Mutex<aht_agent::Agent>>>>,
     harness_chats: Mutex<HashMap<(SessionId, String), HarnessChat>>,
@@ -170,6 +175,23 @@ struct HostKeyEvent {
     fingerprint: String,
     old_fingerprint: Option<String>,
     kind: &'static str,
+}
+
+/// The server (or the password method) asks the user something while logging in. The UI shows it
+/// in the pane identified by `prompt_ref` and answers with [`auth_prompt_answer`].
+#[derive(Clone, Serialize)]
+struct AuthPromptEvent {
+    request_id: String,
+    prompt_ref: String,
+    name: String,
+    instructions: String,
+    prompts: Vec<AuthPromptField>,
+}
+
+#[derive(Clone, Serialize)]
+struct AuthPromptField {
+    prompt: String,
+    echo: bool,
 }
 
 /// Register a running session and pump its output/events to the UI.
@@ -313,6 +335,65 @@ impl UiHostKeyPrompt {
     }
 }
 
+/// Login prompts for connections without saved credentials, answered in the connecting pane.
+struct UiAuthPrompt {
+    app: AppHandle,
+    prompt_ref: String,
+}
+
+#[async_trait]
+impl KeyboardInteractiveHandler for UiAuthPrompt {
+    async fn respond(
+        &self,
+        name: &str,
+        instructions: &str,
+        prompts: &[KiPrompt],
+    ) -> Option<Vec<Zeroizing<String>>> {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel();
+        hub(&self.app)
+            .auth_prompts
+            .lock()
+            .await
+            .insert(request_id.clone(), tx);
+        let _ = self.app.emit(
+            "session://auth_prompt",
+            AuthPromptEvent {
+                request_id: request_id.clone(),
+                prompt_ref: self.prompt_ref.clone(),
+                name: name.into(),
+                instructions: instructions.into(),
+                prompts: prompts
+                    .iter()
+                    .map(|p| AuthPromptField {
+                        prompt: p.prompt.clone(),
+                        echo: p.echo,
+                    })
+                    .collect(),
+            },
+        );
+        let answer = tokio::time::timeout(Duration::from_secs(300), rx)
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .flatten();
+        hub(&self.app).auth_prompts.lock().await.remove(&request_id);
+        answer
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn auth_prompt_answer(
+    state: tauri::State<'_, AppState>,
+    request_id: String,
+    answers: Option<Vec<String>>,
+) -> Result<()> {
+    if let Some(tx) = state.terminal.auth_prompts.lock().await.remove(&request_id) {
+        let _ = tx.send(answers.map(|a| a.into_iter().map(Zeroizing::new).collect()));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl HostKeyPrompt for UiHostKeyPrompt {
     async fn confirm_new(&self, host: &str, port: u16, fingerprint: &str) -> bool {
@@ -403,7 +484,13 @@ async fn approval_settings(state: &AppState) -> (ApprovalMode, Vec<regex::Regex>
     (mode, deny)
 }
 
-async fn auth_material(state: &AppState, c: &Connection) -> Result<AuthMaterial> {
+/// `ask` answers login prompts for connections without saved credentials; without it (an agent
+/// opening the connection) such a connection cannot log in.
+async fn auth_material(
+    state: &AppState,
+    c: &Connection,
+    ask: Option<&Arc<dyn KeyboardInteractiveHandler>>,
+) -> Result<AuthMaterial> {
     Ok(match &c.auth {
         SshAuth::Password { secret } => {
             AuthMaterial::Password(Zeroizing::new(secret_value(state, *secret).await?))
@@ -416,12 +503,16 @@ async fn auth_material(state: &AppState, c: &Connection) -> Result<AuthMaterial>
             },
         },
         SshAuth::Agent => AuthMaterial::Agent,
-        SshAuth::Prompt => {
-            return Err(Error::Auth(format!(
-                "no saved credentials for {} — edit the connection to add a password or key",
-                c.name
-            )))
-        }
+        SshAuth::Prompt => match ask {
+            Some(handler) => AuthMaterial::KeyboardInteractive(handler.clone()),
+            None => {
+                return Err(Error::Auth(format!(
+                    "{} has no saved password or key, so only you can log in to it: open it \
+                     in Handrail and type the password",
+                    c.name
+                )))
+            }
+        },
     })
 }
 
@@ -440,6 +531,7 @@ pub async fn open_ssh(
     connection_id: ConnectionId,
     cols: u16,
     rows: u16,
+    prompt_ref: Option<String>,
 ) -> Result<SessionInfo> {
     let state = app.state::<AppState>();
     let conn = load_connection(&state, connection_id).await?;
@@ -449,11 +541,17 @@ pub async fn open_ssh(
             conn.kind
         )));
     }
+    let ask: Option<Arc<dyn KeyboardInteractiveHandler>> = prompt_ref.map(|prompt_ref| {
+        Arc::new(UiAuthPrompt {
+            app: app.clone(),
+            prompt_ref,
+        }) as Arc<dyn KeyboardInteractiveHandler>
+    });
     let mut params = SshParams::new(
         conn.host.clone(),
         conn.port,
         conn.user.clone(),
-        auth_material(&state, &conn).await?,
+        auth_material(&state, &conn, ask.as_ref()).await?,
     );
     params.cols = cols;
     params.rows = rows;
@@ -463,7 +561,7 @@ pub async fn open_ssh(
             host: j.host.clone(),
             port: j.port,
             user: j.user.clone(),
-            auth: auth_material(&state, &j).await?,
+            auth: auth_material(&state, &j, ask.as_ref()).await?,
         });
     }
     let store = KnownHosts::with_user_known_hosts(state.paths.data_dir.join("known_hosts"));
@@ -522,8 +620,9 @@ pub async fn open_session(
     connection_id: ConnectionId,
     cols: u16,
     rows: u16,
+    prompt_ref: Option<String>,
 ) -> Result<SessionInfo> {
-    open_ssh(&app, connection_id, cols, rows).await
+    open_ssh(&app, connection_id, cols, rows, prompt_ref).await
 }
 
 #[derive(Serialize)]
@@ -738,7 +837,7 @@ impl TerminalTools for Tools {
     }
 
     async fn open_session(&self, actor: &Actor, connection: ConnectionId) -> Result<SessionInfo> {
-        let info = open_ssh(&self.app, connection, 120, 32).await?;
+        let info = open_ssh(&self.app, connection, 120, 32, None).await?;
         hub(&self.app)
             .grants
             .lock()

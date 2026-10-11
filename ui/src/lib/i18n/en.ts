@@ -136,6 +136,10 @@ export const en = {
   "tabs.saveWorkspace": "Save workspace…",
   "tabs.workspaceName": "Workspace name",
   "tabs.noWorkspaces": "No saved workspaces",
+  "connecting.to": "Connecting to {target}…",
+  "connecting.hint": "Enter to send · Esc to cancel · not saved",
+  "connecting.retry": "Try again",
+  "connecting.close": "Close",
   "tabs.workspaceSaved": "Workspace “{name}” saved",
   "tabs.closePane": "Close pane",
 

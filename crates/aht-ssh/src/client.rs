@@ -1,6 +1,6 @@
 //! SSH client: connect (with ProxyJump), authenticate, open PTY shells and exec channels.
 
-use crate::auth::{AuthMaterial, KiPrompt};
+use crate::auth::{AuthMaterial, KeyboardInteractiveHandler, KiPrompt};
 use crate::verify::{HostKeyDecision, HostKeyVerifier};
 use aht_core::terminal::{Transport, TransportEvent};
 use aht_core::{Error, Result};
@@ -462,38 +462,7 @@ async fn authenticate(h: &mut Handle<ClientHandler>, ep: &JumpHop) -> Result<()>
         }
         AuthMaterial::Agent => agent_auth(h, &user).await?,
         AuthMaterial::KeyboardInteractive(handler) => {
-            let mut resp = h
-                .authenticate_keyboard_interactive_start(user, None)
-                .await
-                .map_err(net)?;
-            loop {
-                match resp {
-                    KeyboardInteractiveAuthResponse::Success => break true,
-                    KeyboardInteractiveAuthResponse::Failure { .. } => break false,
-                    KeyboardInteractiveAuthResponse::InfoRequest {
-                        name,
-                        instructions,
-                        prompts,
-                    } => {
-                        let prompts: Vec<KiPrompt> = prompts
-                            .into_iter()
-                            .map(|p| KiPrompt {
-                                prompt: p.prompt,
-                                echo: p.echo,
-                            })
-                            .collect();
-                        let Some(answers) = handler.respond(&name, &instructions, &prompts).await
-                        else {
-                            return Err(Error::Auth("keyboard-interactive cancelled".into()));
-                        };
-                        let answers = answers.iter().map(|a| a.to_string()).collect();
-                        resp = h
-                            .authenticate_keyboard_interactive_respond(answers)
-                            .await
-                            .map_err(net)?;
-                    }
-                }
-            }
+            interactive_auth(h, ep, handler.as_ref()).await?
         }
     };
     if ok {
@@ -501,6 +470,93 @@ async fn authenticate(h: &mut Handle<ClientHandler>, ep: &JumpHop) -> Result<()>
     } else {
         Err(auth_failed(ep, ep.auth.method_name()))
     }
+}
+
+const LOGIN_TRIES: usize = 3;
+const LOGIN_RETRY: &str = "Permission denied, please try again.";
+
+/// Log in by asking the user, like OpenSSH does: keyboard-interactive (password prompts, OTP
+/// codes), falling back to the "password" method for servers that disable keyboard-interactive
+/// (Ubuntu's default). Three tries; after a rejected answer the handler is told to try again.
+async fn interactive_auth(
+    h: &mut Handle<ClientHandler>,
+    ep: &JumpHop,
+    handler: &dyn KeyboardInteractiveHandler,
+) -> Result<bool> {
+    for attempt in 0..LOGIN_TRIES {
+        let notice = if attempt == 0 { "" } else { LOGIN_RETRY };
+        let mut resp = h
+            .authenticate_keyboard_interactive_start(ep.user.clone(), None)
+            .await
+            .map_err(net)?;
+        let mut asked = false;
+        loop {
+            match resp {
+                KeyboardInteractiveAuthResponse::Success => return Ok(true),
+                KeyboardInteractiveAuthResponse::Failure { .. } => break,
+                KeyboardInteractiveAuthResponse::InfoRequest {
+                    name,
+                    instructions,
+                    prompts,
+                } => {
+                    let prompts: Vec<KiPrompt> = prompts
+                        .into_iter()
+                        .map(|p| KiPrompt {
+                            prompt: p.prompt,
+                            echo: p.echo,
+                        })
+                        .collect();
+                    let instructions = match (asked, notice, instructions.is_empty()) {
+                        (true, _, _) | (_, "", _) => instructions,
+                        (false, n, true) => n.to_string(),
+                        (false, n, false) => format!("{n}\n{instructions}"),
+                    };
+                    asked = true;
+                    let Some(answers) = handler.respond(&name, &instructions, &prompts).await
+                    else {
+                        return Err(Error::Auth("login cancelled".into()));
+                    };
+                    let answers = answers.iter().map(|a| a.to_string()).collect();
+                    resp = h
+                        .authenticate_keyboard_interactive_respond(answers)
+                        .await
+                        .map_err(net)?;
+                }
+            }
+        }
+        if !asked {
+            // Rejected before asking anything: the server does not offer keyboard-interactive.
+            return password_auth(h, ep, handler).await;
+        }
+    }
+    Ok(false)
+}
+
+/// Ask for a password and use the "password" method.
+async fn password_auth(
+    h: &mut Handle<ClientHandler>,
+    ep: &JumpHop,
+    handler: &dyn KeyboardInteractiveHandler,
+) -> Result<bool> {
+    let prompt = [KiPrompt {
+        prompt: format!("{}@{}'s password: ", ep.user, ep.host),
+        echo: false,
+    }];
+    for attempt in 0..LOGIN_TRIES {
+        let notice = if attempt == 0 { "" } else { LOGIN_RETRY };
+        let Some(answers) = handler.respond("", notice, &prompt).await else {
+            return Err(Error::Auth("login cancelled".into()));
+        };
+        let pw = answers.first().map(|a| a.as_str()).unwrap_or_default();
+        if h.authenticate_password(ep.user.clone(), pw)
+            .await
+            .map_err(net)?
+            .success()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 type DynAgent = AgentClient<Box<dyn AgentStream + Send + Unpin + 'static>>;

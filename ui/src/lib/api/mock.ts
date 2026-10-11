@@ -234,6 +234,7 @@ export function createMockApi(): Api {
   ];
   const syncEvent = () => emit("sync://status", structuredClone(sync));
   const settingsKv = new Map<string, unknown>();
+  const authPrompts = new Map<string, (answers: string[] | null) => void>();
   const fail = (kind: string, message: string) => Object.assign(new Error(message), { kind, message });
   let githubPolls = 0;
 
@@ -518,9 +519,31 @@ export function createMockApi(): Api {
       return secret.id;
     },
 
-    async openSession(connection_id) {
+    async openSession(connection_id, _cols, _rows, prompt_ref) {
       const c = db.connections.find((x) => x.id === connection_id);
       if (!c) throw fail("not_found", "Connection not found.");
+      await sleep(250);
+      if (c.auth.type === "prompt") {
+        if (!prompt_ref) throw fail("auth", `${c.name} has no saved password or key, so only you can log in to it`);
+        // Like the real login: three tries; an empty password is "wrong".
+        let ok = false;
+        for (let i = 0; i < 3 && !ok; i++) {
+          const answers = await new Promise<string[] | null>((resolve) => {
+            const request_id = uuid();
+            authPrompts.set(request_id, resolve);
+            emit("session://auth_prompt", {
+              request_id,
+              prompt_ref,
+              name: "",
+              instructions: i ? "Permission denied, please try again." : "",
+              prompts: [{ prompt: `${c.user}@${c.host}'s password: `, echo: false }],
+            });
+          });
+          if (!answers) throw fail("auth", "login cancelled");
+          ok = !!answers[0];
+        }
+        if (!ok) throw fail("auth", `password authentication failed for ${c.user}@${c.host}:${c.port}`);
+      }
       const mode = c.approval_mode ?? approvalSettings.default_mode;
       const sh = newSession(
         { connection_id, title: c.name, env: c.env, user: c.user, host: c.host, cwd: "~", approval_mode: c.env === "prod" && mode === "auto" ? "confirm_all" : mode },
@@ -528,6 +551,10 @@ export function createMockApi(): Api {
       );
       void boot(sh, c);
       return sh.info;
+    },
+    async answerAuthPrompt(request_id, answers) {
+      authPrompts.get(request_id)?.(answers);
+      authPrompts.delete(request_id);
     },
     async openLocalSession(shell) {
       const sh = newSession({ title: shell ?? "pwsh", user: "dev", host: "localhost" }, true);

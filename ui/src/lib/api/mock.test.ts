@@ -84,6 +84,20 @@ describe("mock api", () => {
     await expect(api.importApply(preview.preview_id, [])).rejects.toMatchObject({ kind: "not_found" });
   });
 
+  it("asks for the password of a connection without saved credentials", async () => {
+    const api = createMockApi();
+    const pi = (await api.listConnections()).find((c) => c.auth.type === "prompt")!;
+    await expect(api.openSession(pi.id, 80, 24)).rejects.toMatchObject({ kind: "auth" });
+    const asked: string[] = [];
+    await api.on("session://auth_prompt", (e) => {
+      asked.push(e.instructions);
+      void api.answerAuthPrompt(e.request_id, [asked.length === 1 ? "" : "secret"]);
+    });
+    const s = await api.openSession(pi.id, 80, 24, "ref-1");
+    expect(s.connection_id).toBe(pi.id);
+    expect(asked).toEqual(["", "Permission denied, please try again."]);
+  });
+
   it("opens only https links", async () => {
     const api = createMockApi();
     await expect(api.openUrl("javascript:alert(1)")).rejects.toThrow();

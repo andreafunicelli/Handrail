@@ -1,10 +1,11 @@
 <script lang="ts">
   import PaneTree from "./PaneTree.svelte";
   import TerminalView from "./TerminalView.svelte";
+  import ConnectingPane from "./ConnectingPane.svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import type { LayoutNode, SplitDir } from "../../util/layout";
-  import { sessions } from "../../stores/sessions.svelte";
+  import { isPending, pendingRef, sessions } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
 
   let { node, tabId, multi = false }: { node: LayoutNode; tabId: string; multi?: boolean } = $props();
@@ -102,13 +103,19 @@
       <div class="pane-head">
         <span class="dot {info?.state ?? ''}"></span>
         <span class="env-tick env-{info?.env ?? 'none'}"></span>
-        <span class="ptitle">{info?.title ?? "…"}</span>
+        <span class="ptitle">{info?.title ?? sessions.pending[pendingRef(node.sessionId)]?.label ?? "…"}</span>
         <button class="icon-btn" title={t("tabs.closePane")} aria-label={t("tabs.closePane")} onclick={() => sessions.closePane(tabId, node.id)}>
           <Icon name="x" size={12} />
         </button>
       </div>
     {/if}
-    <div class="pane-body"><TerminalView sessionId={node.sessionId} {focused} /></div>
+    <div class="pane-body">
+      {#if isPending(node.sessionId)}
+        <ConnectingPane ref={pendingRef(node.sessionId)} {focused} onclose={() => sessions.closePane(tabId, node.id)} />
+      {:else}
+        <TerminalView sessionId={node.sessionId} {focused} />
+      {/if}
+    </div>
     {#if zone}
       <div class="zone {zone}" aria-hidden="true">
         <span>{zone === "right" ? t("tabs.dropRight") : t("tabs.dropDown")}</span>
