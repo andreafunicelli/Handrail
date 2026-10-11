@@ -47,8 +47,11 @@
     e.preventDefault();
     if (!device) return;
     try {
-      await navigator.clipboard?.writeText(device.user_code);
-      copied = true;
+      // Only claim "copied" after a write that really happened.
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(device.user_code);
+        copied = true;
+      }
     } catch {
       // Clipboard access can be refused; the code stays selectable.
     }
