@@ -28,8 +28,12 @@ on:
 permissions:
   contents: write
 
+# Publishing runs (pushes and manual runs, from any ref) share one group and run one at a time:
+# each picks the next version from the tags the previous one created, so two can never take the
+# same version. (A newer queued run replaces an older queued one; its changelog covers both.)
+# Pull request runs only build, so a newer push to the same PR cancels the older run.
 concurrency:
-  group: release-${{ github.ref }}
+  group: ${{ github.event_name == 'pull_request' && format('release-pr-{0}', github.ref) || 'release-publish' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
