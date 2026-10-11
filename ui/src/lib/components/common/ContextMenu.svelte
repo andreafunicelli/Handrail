@@ -6,6 +6,8 @@
     danger?: boolean;
     disabled?: boolean;
     shortcut?: string;
+    /** A toggle: shows a check mark while on. */
+    checked?: boolean;
     action: () => void;
   }
   export type MenuEntry = MenuItem | "sep";
@@ -60,7 +62,8 @@
       <div class="sep" role="separator"></div>
     {:else}
       <button
-        role="menuitem"
+        role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+        aria-checked={item.checked}
         class:danger={item.danger}
         disabled={item.disabled}
         onclick={() => {
@@ -68,7 +71,7 @@
           item.action();
         }}
       >
-        {#if item.icon}<Icon name={item.icon} size={14} />{:else}<span class="sp"></span>{/if}
+        {#if item.checked !== undefined}{#if item.checked}<Icon name="check" size={14} />{:else}<span class="sp"></span>{/if}{:else if item.icon}<Icon name={item.icon} size={14} />{:else}<span class="sp"></span>{/if}
         <span class="l">{item.label}</span>
         {#if item.shortcut}<span class="sc">{item.shortcut}</span>{/if}
       </button>
@@ -81,6 +84,8 @@
     position: fixed;
     z-index: 80;
     min-width: 190px;
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
     padding: 4px;
     border-radius: var(--r-lg);
     background: var(--raised);

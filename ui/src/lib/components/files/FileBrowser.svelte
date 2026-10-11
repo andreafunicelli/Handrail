@@ -10,7 +10,7 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
   import { ui } from "../../stores/ui.svelte";
-  import { editable, isFolder, type FileBackend } from "../../util/fileBackends";
+  import { changedOnServer, editable, isFolder, type FileBackend } from "../../util/fileBackends";
   import { editors } from "../../stores/editors.svelte";
   import { sessions } from "../../stores/sessions.svelte";
   import { sudo } from "../../stores/sudo.svelte";
@@ -39,8 +39,9 @@
   let error = $state<string | null>(null);
   let selected = $state<string | null>(null);
   let menu = $state<{ x: number; y: number; items: MenuEntry[] } | null>(null);
-  /** Name dialog for "New folder" or "Rename". */
-  let naming = $state<{ mode: "mkdir" | "rename"; entry?: FileEntry; value: string } | null>(null);
+  /** Name dialog for "New folder", "New file" (in `dir`) or "Rename". */
+  let naming = $state<{ mode: "mkdir" | "touch" | "rename"; dir?: string; entry?: FileEntry; value: string } | null>(null);
+  const TITLES = { mkdir: "files.newFolder", touch: "files.newFile", rename: "files.rename" } as const;
 
   const mine = $derived(transfers.list.filter((x) => x.backend === fs.key));
   const writable = $derived(fs.writable(path));
@@ -156,13 +157,58 @@
     const n = naming;
     if (!n || !validName(n.value)) return;
     naming = null;
+    const name = n.value.trim();
     try {
-      if (n.mode === "mkdir") await fs.mkdir(joinPath(path, n.value.trim()));
-      else if (n.entry) await fs.rename(n.entry, joinPath(parentDir(n.entry.path), n.value.trim()));
+      if (n.mode === "mkdir") await fs.mkdir(joinPath(n.dir ?? path, name));
+      else if (n.mode === "touch") return await createFile(n.dir ?? path, name);
+      else if (n.entry) await fs.rename(n.entry, joinPath(parentDir(n.entry.path), name));
       await refresh();
     } catch (err) {
       toasts.error(err);
     }
+  }
+
+  /** Create an empty file (never over an existing one) and open it in the editor. */
+  async function createFile(dir: string, name: string) {
+    const target = joinPath(dir, name);
+    const fsNow = fs;
+    try {
+      await fsNow.writeText!(target, "", null, false);
+    } catch (err) {
+      toasts.error(changedOnServer(err) ? t("files.exists", { name }) : err);
+      return;
+    }
+    await refresh();
+    selected = target;
+    try {
+      sessions.openEditor(await editors.open(fsNow, target, true));
+    } catch (err) {
+      toasts.error(err);
+    }
+  }
+
+  /** "New file" and "New folder", in `dir`. */
+  const newItems = (dir: string, ok: boolean): MenuEntry[] => [
+    ...(fs.writeText ? [{ label: t("files.newFile"), icon: "filePlus" as const, disabled: !ok, action: () => (naming = { mode: "touch", dir, value: "" }) }] : []),
+    { label: t("files.newFolder"), icon: "folderPlus", disabled: !ok, action: () => (naming = { mode: "mkdir", dir, value: "" }) },
+  ];
+
+  /** Right-click on the empty part of the list: the current folder. */
+  function folderMenu(ev: MouseEvent) {
+    if (ev.defaultPrevented) return;
+    ev.preventDefault();
+    selected = null;
+    menu = {
+      x: ev.clientX,
+      y: ev.clientY,
+      items: [
+        ...newItems(path, writable),
+        { label: t("files.upload"), icon: "upload", disabled: !writable, action: upload },
+        "sep",
+        { label: t("files.refresh"), icon: "refresh", action: refresh },
+        { label: t("files.copyPath"), icon: "copy", disabled: !path, action: () => void navigator.clipboard?.writeText(path).catch(() => {}) },
+      ],
+    };
   }
 
   function openMenu(ev: MouseEvent, e: FileEntry) {
@@ -179,6 +225,9 @@
         "sep",
         { label: t("files.rename"), icon: "edit", disabled: !writable || !fs.canRename(e), action: () => (naming = { mode: "rename", entry: e, value: e.name }) },
         { label: t("common.delete"), icon: "trash", danger: true, disabled: !writable, action: () => remove(e) },
+        "sep",
+        // On a folder: new items go inside it.
+        ...newItems(e.kind === "dir" ? e.path : path, e.kind === "dir" ? fs.writable(e.path) : writable),
       ],
     };
   }
@@ -203,7 +252,10 @@
       <input class="input mono path" bind:value={pathInput} aria-label={t("files.path")} spellcheck="false" />
     </form>
     <button class="icon-btn" title={t("files.refresh")} aria-label={t("files.refresh")} onclick={refresh}><Icon name="refresh" size={14} /></button>
-    <button class="icon-btn" title={t("files.newFolder")} aria-label={t("files.newFolder")} disabled={!writable} onclick={() => (naming = { mode: "mkdir", value: "" })}><Icon name="plus" size={14} /></button>
+    {#if fs.writeText}
+      <button class="icon-btn" title={t("files.newFile")} aria-label={t("files.newFile")} disabled={!writable} onclick={() => (naming = { mode: "touch", value: "" })}><Icon name="filePlus" size={14} /></button>
+    {/if}
+    <button class="icon-btn" title={t("files.newFolder")} aria-label={t("files.newFolder")} disabled={!writable} onclick={() => (naming = { mode: "mkdir", value: "" })}><Icon name="folderPlus" size={14} /></button>
     <button class="btn sm" disabled={!writable} onclick={upload}><Icon name="upload" size={13} />{t("files.upload")}</button>
     {#if base.asRoot}
       <button class="btn sm root" class:on={!!rootFs} aria-pressed={!!rootFs} title={t(rootFs ? "files.rootOff" : "files.rootOn")} onclick={toggleRoot}>
@@ -220,7 +272,7 @@
     <span class="who" class:asroot={!!rootFs}>{rootFs ? t("files.asRoot", { label }) : label}</span>
   </nav>
 
-  <div class="list" role="grid" aria-busy={loading}>
+  <div class="list" role="grid" tabindex="-1" aria-busy={loading} oncontextmenu={folderMenu}>
     {#if error}
       <div class="msg err">{error}</div>
     {:else if !loading && !entries.length}
@@ -270,13 +322,14 @@
 
 {#if naming}
   {@const n = naming}
-  <Modal label={t(n.mode === "mkdir" ? "files.newFolder" : "files.rename")} onclose={() => (naming = null)} width="380px">
+  <Modal label={t(TITLES[n.mode])} onclose={() => (naming = null)} width="380px">
     <form class="dialog" onsubmit={submitName}>
-      <h2>{t(n.mode === "mkdir" ? "files.newFolder" : "files.rename")}</h2>
+      <h2>{t(TITLES[n.mode])}</h2>
+      {#if n.mode !== "rename" && n.dir && n.dir !== path}<p class="where mono">{n.dir}</p>{/if}
       <input class="input mono" bind:value={n.value} aria-label={t("files.name")} spellcheck="false" data-autofocus />
       <div class="actions">
         <button type="button" class="btn ghost" onclick={() => (naming = null)}>{t("common.cancel")}</button>
-        <button class="btn primary" disabled={!validName(n.value)}>{t(n.mode === "mkdir" ? "files.create" : "files.rename")}</button>
+        <button class="btn primary" disabled={!validName(n.value)}>{t(n.mode === "rename" ? "files.rename" : "files.create")}</button>
       </div>
     </form>
   </Modal>
@@ -461,6 +514,12 @@
     margin: 0;
     font-size: 15px;
     font-weight: 600;
+  }
+  .where {
+    margin: -6px 0 0;
+    color: var(--faint);
+    font-size: var(--fs-small);
+    overflow-wrap: anywhere;
   }
   .actions {
     display: flex;
