@@ -148,13 +148,38 @@ pub(crate) fn free_local_path(dir: &Path, name: &str) -> PathBuf {
         .expect("an unused name")
 }
 
-/// A remote file name safe to use as a local file name.
+/// The local file name for a remote file, valid on every OS: characters Windows forbids and
+/// control characters become `_`, trailing dots and spaces go, and device names (`CON`, `COM1`…)
+/// get a `_` in front.
 pub(crate) fn local_name(remote: &str) -> Result<String> {
     let name = remote.rsplit('/').next().unwrap_or_default();
-    if name.is_empty() || name == "." || name == ".." || name.contains(['\\', '\0']) {
+    if name.is_empty() || name == "." || name == ".." {
         return Err(Error::Invalid(format!("cannot download {remote}")));
     }
-    Ok(name.to_string())
+    let mut out: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || r#"<>:"\|?*"#.contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    out.truncate(out.trim_end_matches(['.', ' ']).len());
+    if out.is_empty() {
+        out.push('_');
+    }
+    let stem = out.split('.').next().unwrap_or_default().trim_end();
+    let stem = stem.to_ascii_uppercase();
+    let numbered = |p: &str| {
+        stem.len() == 4 && stem.starts_with(p) && matches!(stem.as_bytes()[3], b'1'..=b'9')
+    };
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT")
+    {
+        out.insert(0, '_');
+    }
+    Ok(out)
 }
 
 /// The Downloads folder, or home when there is none.
@@ -217,6 +242,18 @@ mod tests {
         assert_eq!(local_name("/var/log/syslog").unwrap(), "syslog");
         assert!(local_name("/var/log/").is_err());
         assert!(local_name("/tmp/..").is_err());
+        assert_eq!(
+            local_name("/r/report:2026?.txt").unwrap(),
+            "report_2026_.txt"
+        );
+        assert_eq!(local_name("/r/a\\b\t<c>|\"d*").unwrap(), "a_b__c___d_");
+        assert_eq!(local_name("/r/notes. . ").unwrap(), "notes");
+        assert_eq!(local_name("/r/...").unwrap(), "_");
+        assert_eq!(local_name("/r/con").unwrap(), "_con");
+        assert_eq!(local_name("/r/COM1.log").unwrap(), "_COM1.log");
+        assert_eq!(local_name("/r/nul .tar.gz").unwrap(), "_nul .tar.gz");
+        assert_eq!(local_name("/r/COM0").unwrap(), "COM0");
+        assert_eq!(local_name("/r/console.log").unwrap(), "console.log");
         let dir = std::env::temp_dir().join(format!("aht-sftp-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(free_local_path(&dir, "a.tar.gz"), dir.join("a.tar.gz"));

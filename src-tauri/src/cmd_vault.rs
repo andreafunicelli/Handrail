@@ -141,6 +141,7 @@ pub async fn vault_lock(state: State<'_, AppState>) -> Result<()> {
     // Nothing decrypted may outlive the lock: agents hold API keys, previews hold passwords.
     state.terminal.on_lock().await;
     state.import_previews.lock().await.clear();
+    state.s3.lock().await.clear();
     *state.pending_github_token.lock().await = None;
     Ok(())
 }
@@ -286,12 +287,12 @@ pub async fn save_s3_account(
         ));
     }
     put(&state, &account).await?;
-    state.s3.lock().await.remove(&account.id.to_string());
     Ok(account)
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn delete_s3_account(state: State<'_, AppState>, id: String) -> Result<()> {
+    // Drops the client and the secret it holds.
     state.s3.lock().await.remove(&id);
     let mut vault = state.vault.lock().await;
     if let Some(a) = vault.get::<S3Account>(&id).map_err(Error::from)? {

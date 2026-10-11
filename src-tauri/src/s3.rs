@@ -49,23 +49,27 @@ async fn account(state: &AppState, id: &str) -> Result<S3Account> {
         .ok_or_else(|| Error::NotFound(format!("S3 account {id}")))
 }
 
-/// The account's client, built on first use.
+/// The account's client. The account and its secret are read from the vault on every call, so
+/// nothing works while it is locked and edits (also from sync) apply at once; the client (with
+/// the bucket regions it learned) is reused while both are unchanged.
 async fn client(state: &AppState, id: &str) -> Result<Arc<S3Client>> {
-    if let Some(c) = state.s3.lock().await.get(id) {
-        return Ok(c.clone());
-    }
     let a = account(state, id).await?;
     let secret_id = a
         .secret
         .ok_or_else(|| Error::Invalid("no secret access key saved for this account".into()))?;
-    let c = Arc::new(S3Client::new(S3Config {
+    let cfg = S3Config {
         endpoint: a.endpoint,
         region: a.region,
         access_key_id: a.access_key_id,
         secret_access_key: secret_value(state, secret_id).await?,
         path_style: a.path_style,
-    })?);
-    state.s3.lock().await.insert(id.to_string(), c.clone());
+    };
+    let mut cache = state.s3.lock().await;
+    if let Some(c) = cache.get(id).filter(|c| c.config() == &cfg) {
+        return Ok(c.clone());
+    }
+    let c = Arc::new(S3Client::new(cfg)?);
+    cache.insert(id.to_string(), c.clone());
     Ok(c)
 }
 

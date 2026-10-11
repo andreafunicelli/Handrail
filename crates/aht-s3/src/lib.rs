@@ -20,7 +20,7 @@ const CHUNK: usize = 256 * 1024;
 /// Largest single PUT S3 accepts (multipart uploads are not supported).
 const MAX_PUT: u64 = 5 * 1024 * 1024 * 1024;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct S3Config {
     /// Service URL such as `https://<account>.r2.cloudflarestorage.com`; empty for AWS.
     pub endpoint: String,
@@ -130,6 +130,10 @@ impl S3Client {
             http,
             regions: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn config(&self) -> &S3Config {
+        &self.cfg
     }
 
     fn is_aws(&self) -> bool {
