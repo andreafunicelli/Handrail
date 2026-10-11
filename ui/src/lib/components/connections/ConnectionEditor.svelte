@@ -5,6 +5,7 @@
   import { api } from "../../api";
   import type { ApprovalMode, Connection, Environment, SecretKind } from "../../api/types";
   import { connections } from "../../stores/connections.svelte";
+  import { credentials } from "../../stores/credentials.svelte";
   import { sessions } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { ui } from "../../stores/ui.svelte";
@@ -26,14 +27,21 @@
   let sheet: HTMLElement;
   let fileInput = $state<HTMLInputElement>();
 
-  const hasSavedPassword = c.auth.type === "password";
-  const hasSavedKey = c.auth.type === "key";
+  /** The saved password or key this connection uses ("" for a new one typed below). */
+  let passwordId = $state(c.auth.type === "password" ? c.auth.secret : "");
+  let keyId = $state(c.auth.type === "key" ? c.auth.key : "");
+  const keptPassphrase = c.auth.type === "key" ? c.auth.passphrase : null;
+  /** Other connections using a saved secret. */
+  const others = (id: string) => credentials.usedBy(id, c.id);
   const envs: Environment[] = ["none", "dev", "staging", "prod"];
   const jumpCandidates = $derived(connections.list.filter((x) => x.id !== c.id && x.kind === "ssh"));
   const tunnelsOk = $derived(c.tunnels.every((x) => !tunnelProblem(x)));
   const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk);
 
-  onMount(() => sheet.querySelector<HTMLInputElement>("input")?.focus());
+  onMount(() => {
+    sheet.querySelector<HTMLInputElement>("input")?.focus();
+    void credentials.load().catch(() => {});
+  });
 
   function close() {
     ui.editing = null;
@@ -55,14 +63,21 @@
       out.tunnels = out.tunnels.map((x) => ({ ...x, bind_host: x.bind_host.trim(), dest_host: x.kind === "dynamic" ? "" : x.dest_host.trim(), dest_port: x.kind === "dynamic" ? 0 : x.dest_port }));
       if (out.env === "prod" && out.approval_mode === "auto") out.approval_mode = null;
       if (authType === "password") {
+        // A typed password is new (for this connection only); else the saved one picked.
         if (password) out.auth = { type: "password", secret: await secret("password", password, `${out.name} password`) };
-        else if (!hasSavedPassword) out.auth = { type: "prompt" };
+        else if (passwordId) out.auth = { type: "password", secret: passwordId };
+        else out.auth = { type: "prompt" };
       } else if (authType === "key") {
         if (keyText.trim()) {
           const key = await secret("private_key", keyText, `${out.name} key`);
           const pp = passphrase ? await secret("passphrase", passphrase, `${out.name} passphrase`) : null;
           out.auth = { type: "key", key, passphrase: pp };
-        } else if (!hasSavedKey) {
+        } else if (keyId) {
+          // A saved key keeps the passphrase stored with it, unless a new one is typed.
+          const kept = c.auth.type === "key" && c.auth.key === keyId ? keptPassphrase : credentials.passphraseFor(keyId);
+          const pp = passphrase ? await secret("passphrase", passphrase, `${credentials.label(keyId) || out.name} passphrase`) : kept;
+          out.auth = { type: "key", key: keyId, passphrase: pp };
+        } else {
           toasts.error(t("editor.keyPaste"));
           busy = false;
           return;
@@ -149,14 +164,28 @@
         {/each}
       </div>
       {#if authType === "password"}
-        <input class="input" type="password" autocomplete="new-password" bind:value={password} placeholder={hasSavedPassword ? t("editor.passwordPlaceholder") : t("editor.auth.password")} />
+        {#if credentials.passwords.length}
+          <select class="select" bind:value={passwordId} aria-label={t("editor.savedPassword")}>
+            <option value="">{t("editor.newPassword")}</option>
+            {#each credentials.passwords as p (p.id)}<option value={p.id}>{p.label}{others(p.id).length ? ` — ${t("editor.usedBy", { names: others(p.id).join(", ") })}` : ""}</option>{/each}
+          </select>
+        {/if}
+        <input class="input" type="password" autocomplete="new-password" bind:value={password} placeholder={passwordId ? t("editor.passwordPlaceholder") : t("editor.auth.password")} />
       {:else if authType === "key"}
-        <textarea class="textarea mono" rows="4" bind:value={keyText} placeholder={hasSavedKey ? t("editor.keyKeep") : "-----BEGIN OPENSSH PRIVATE KEY-----"} spellcheck="false"></textarea>
+        {#if credentials.keys.length}
+          <select class="select" bind:value={keyId} aria-label={t("editor.savedKey")}>
+            <option value="">{t("editor.newKey")}</option>
+            {#each credentials.keys as k (k.id)}<option value={k.id}>{k.label}{others(k.id).length ? ` — ${t("editor.usedBy", { names: others(k.id).join(", ") })}` : ""}</option>{/each}
+          </select>
+        {/if}
+        {#if !keyId || keyText}
+          <textarea class="textarea mono" rows="4" bind:value={keyText} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea>
+        {/if}
         <div class="row-actions">
-          <button type="button" class="btn sm" onclick={() => fileInput?.click()}><Icon name="key" size={13} />{t("editor.keyPick")}</button>
+          <button type="button" class="btn sm" onclick={() => fileInput?.click()}><Icon name="key" size={13} />{keyId ? t("editor.keyPickOther") : t("editor.keyPick")}</button>
           <input type="file" class="visually-hidden" bind:this={fileInput} onchange={pickKey} tabindex="-1" />
         </div>
-        <input class="input" type="password" bind:value={passphrase} placeholder={t("editor.passphrase")} autocomplete="off" />
+        <input class="input" type="password" bind:value={passphrase} placeholder={keyId && !keyText ? t("editor.passphraseKeep") : t("editor.passphrase")} autocomplete="off" />
       {:else if authType === "agent"}
         <p class="hint">{t("editor.agentNote")}</p>
       {:else}

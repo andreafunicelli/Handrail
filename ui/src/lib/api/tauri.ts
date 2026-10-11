@@ -27,6 +27,9 @@ export function createTauriApi(): Api {
     saveGroup: (group) => invoke("save_group", { group }),
     deleteGroup: (id) => invoke("delete_group", { id }),
     saveSecret: (secret) => invoke("save_secret", { secret }),
+    listSecrets: () => invoke("list_secrets"),
+    updateSecret: (id, label, value) => invoke("update_secret", { id, label, value }),
+    deleteSecret: (id) => invoke("delete_secret", { id }),
 
     openSession: (connection_id, cols, rows, prompt_ref) =>
       invoke("open_session", { connection_id, cols, rows, prompt_ref: prompt_ref ?? null }),

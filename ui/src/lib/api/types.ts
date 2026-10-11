@@ -97,6 +97,9 @@ export interface Secret {
   value: string;
 }
 
+/** A saved secret without its value. */
+export type SecretInfo = Omit<Secret, "value">;
+
 export type ApprovalMode = "confirm_all" | "confirm_writes" | "auto";
 
 export type ProviderKind = "anthropic" | "open_ai" | "open_ai_compat";

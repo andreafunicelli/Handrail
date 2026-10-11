@@ -31,6 +31,7 @@ import type {
   ProviderTestResult,
   Secret,
   SecretId,
+  SecretInfo,
   SessionDataEvent,
   SessionInfo,
   ServerStats,
@@ -85,6 +86,12 @@ export interface Api {
   saveGroup(group: Group): Promise<Group>;
   deleteGroup(id: string): Promise<void>;
   saveSecret(secret: Secret): Promise<SecretId>;
+  /** Saved secrets, without their values. */
+  listSecrets(): Promise<SecretInfo[]>;
+  /** Rename a secret, or replace its value (for everything that uses it). */
+  updateSecret(id: string, label: string | null, value: string | null): Promise<void>;
+  /** Rejects while a connection, S3 account or provider still uses it. */
+  deleteSecret(id: string): Promise<void>;
 
   // sessions
   /** `promptRef` lets a connection without saved credentials ask for them while logging in

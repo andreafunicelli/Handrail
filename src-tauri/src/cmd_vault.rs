@@ -2,7 +2,7 @@
 
 use crate::state::{err, AppState};
 use aht_core::model::{
-    Connection, Group, HarnessProfile, Provider, S3Account, Secret, SecretKind, Snippet,
+    Connection, Group, HarnessProfile, Provider, S3Account, Secret, SecretKind, Snippet, SshAuth,
 };
 use aht_core::{Error, Result, SecretId};
 use aht_vault::{
@@ -230,6 +230,109 @@ pub async fn delete_group(state: State<'_, AppState>, id: String) -> Result<()> 
 pub async fn save_secret(state: State<'_, AppState>, secret: Secret) -> Result<SecretId> {
     put(&state, &secret).await?;
     Ok(secret.id)
+}
+
+/// A saved secret without its value (the value never goes to the UI).
+#[derive(Serialize)]
+pub struct SecretInfo {
+    id: SecretId,
+    kind: SecretKind,
+    label: String,
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_secrets(state: State<'_, AppState>) -> Result<Vec<SecretInfo>> {
+    Ok(list::<Secret>(&state)
+        .await?
+        .into_iter()
+        .map(|s| SecretInfo {
+            id: s.id,
+            kind: s.kind,
+            label: s.label,
+        })
+        .collect())
+}
+
+/// Rename a secret, or replace its value for every connection that uses it.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn update_secret(
+    state: State<'_, AppState>,
+    id: SecretId,
+    label: Option<String>,
+    value: Option<String>,
+) -> Result<()> {
+    let mut vault = state.vault.lock().await;
+    let mut secret = vault
+        .get::<Secret>(&id.to_string())
+        .map_err(Error::from)?
+        .ok_or_else(|| Error::NotFound(format!("secret {id}")))?;
+    if let Some(l) = label {
+        let l = l.trim();
+        if l.is_empty() {
+            return Err(Error::Invalid("a saved secret needs a name".into()));
+        }
+        secret.label = l.to_string();
+    }
+    if let Some(v) = value {
+        if v.is_empty() {
+            return Err(Error::Invalid("the new value is empty".into()));
+        }
+        secret.value = v;
+    }
+    vault.put(&secret).map_err(Error::from)?;
+    // S3 clients hold their decrypted key: the next use builds a new one.
+    state.s3.lock().await.clear();
+    Ok(())
+}
+
+/// What uses secret `id`: names of connections, S3 accounts and AI providers.
+fn secret_users(
+    id: SecretId,
+    connections: &[Connection],
+    s3: &[S3Account],
+    providers: &[Provider],
+) -> Vec<String> {
+    let by_connection = connections.iter().filter(|c| match &c.auth {
+        SshAuth::Password { secret } => *secret == id,
+        SshAuth::Key { key, passphrase } => *key == id || *passphrase == Some(id),
+        SshAuth::Agent | SshAuth::Prompt => false,
+    });
+    by_connection
+        .map(|c| c.name.clone())
+        .chain(
+            s3.iter()
+                .filter(|a| a.secret == Some(id))
+                .map(|a| a.name.clone()),
+        )
+        .chain(
+            providers
+                .iter()
+                .filter(|p| p.api_key == Some(id))
+                .map(|p| p.name.clone()),
+        )
+        .collect()
+}
+
+/// Delete a saved secret nothing uses any more.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn delete_secret(state: State<'_, AppState>, id: SecretId) -> Result<()> {
+    let mut vault = state.vault.lock().await;
+    let users = secret_users(
+        id,
+        &vault.list::<Connection>().map_err(Error::from)?,
+        &vault.list::<S3Account>().map_err(Error::from)?,
+        &vault.list::<Provider>().map_err(Error::from)?,
+    );
+    if !users.is_empty() {
+        return Err(Error::Invalid(format!(
+            "still used by {}",
+            users.join(", ")
+        )));
+    }
+    vault
+        .delete::<Secret>(&id.to_string())
+        .map(|_| ())
+        .map_err(Error::from)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -506,6 +609,48 @@ pub async fn secret_value(state: &AppState, id: SecretId) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_users_finds_every_reference() {
+        let key = SecretId::new();
+        let other = SecretId::new();
+        let conn = |name: &str, auth: SshAuth| {
+            let mut c: Connection = serde_json::from_value(serde_json::json!({
+                "id": aht_core::ConnectionId::new(), "name": name, "kind": "ssh", "group_id": null,
+                "host": "h", "port": 22, "user": "u", "auth": {"type": "agent"},
+                "color": null, "approval_mode": null, "local_shell": null
+            }))
+            .unwrap();
+            c.auth = auth;
+            c
+        };
+        let connections = vec![
+            conn(
+                "web-01",
+                SshAuth::Key {
+                    key,
+                    passphrase: None,
+                },
+            ),
+            conn(
+                "web-02",
+                SshAuth::Key {
+                    key: other,
+                    passphrase: Some(key),
+                },
+            ),
+            conn("db", SshAuth::Password { secret: other }),
+            conn("pi", SshAuth::Agent),
+        ];
+        assert_eq!(
+            secret_users(key, &connections, &[], &[]),
+            ["web-01", "web-02"]
+        );
+        assert_eq!(
+            secret_users(SecretId::new(), &connections, &[], &[]),
+            Vec::<String>::new()
+        );
+    }
 
     #[test]
     fn save_new_file_never_overwrites() {

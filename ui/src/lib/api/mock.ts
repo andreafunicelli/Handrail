@@ -11,6 +11,7 @@ import type {
   HarnessProfile,
   ImportPreview,
   Provider,
+  Secret,
   SessionInfo,
   Snippet,
   S3Account,
@@ -55,11 +56,17 @@ function seed() {
   const dev = g("Development", 2);
   const personal = g("Personal", 3);
   const groups = [prod, prodEu, staging, dev, personal];
-  const bastion = conn({ name: "bastion", host: "bastion.acme.io", env: "prod", group_id: prod.id, tags: ["jump"] });
+  // One deploy key shared by the production web servers.
+  const deployKey: Secret = { id: uuid(), kind: "private_key", label: "deploy key (ed25519)", value: "-----BEGIN OPENSSH PRIVATE KEY-----\n…" };
+  const dbPassword: Secret = { id: uuid(), kind: "password", label: "postgres password", value: "s3cret" };
+  const oldKey: Secret = { id: uuid(), kind: "private_key", label: "old laptop key", value: "-----BEGIN OPENSSH PRIVATE KEY-----\n…" };
+  const secrets = [deployKey, dbPassword, oldKey];
+  const keyAuth = { type: "key" as const, key: deployKey.id, passphrase: null };
+  const bastion = conn({ name: "bastion", host: "bastion.acme.io", env: "prod", group_id: prod.id, tags: ["jump"], auth: keyAuth });
   const connections: Connection[] = [
     bastion,
-    conn({ name: "web-01", host: "10.0.1.11", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"] }),
-    conn({ name: "web-02", host: "10.0.1.12", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"] }),
+    conn({ name: "web-01", host: "10.0.1.11", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"], auth: keyAuth }),
+    conn({ name: "web-02", host: "10.0.1.12", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"], auth: keyAuth }),
     conn({
       name: "legacy-db",
       host: "10.0.2.40",
@@ -67,6 +74,7 @@ function seed() {
       group_id: prodEu.id,
       user: "postgres",
       tags: ["postgres"],
+      auth: { type: "password", secret: dbPassword.id },
       tunnels: [
         { kind: "local", bind_host: "127.0.0.1", bind_port: 15432, dest_host: "127.0.0.1", dest_port: 5432, enabled: true },
         { kind: "dynamic", bind_host: "127.0.0.1", bind_port: 1080, dest_host: "", dest_port: 0, enabled: true },
@@ -130,7 +138,7 @@ function seed() {
     { id: uuid(), name: "Backups (R2)", endpoint: "https://acct.r2.cloudflarestorage.com", region: "auto", bucket: "backups", access_key_id: "r2-key", secret: uuid(), path_style: false },
     { id: uuid(), name: "AWS production", endpoint: "", region: "eu-west-1", bucket: null, access_key_id: "AKIA…", secret: uuid(), path_style: false },
   ];
-  return { groups, connections, providers, profiles, snippets, s3Accounts };
+  return { groups, connections, providers, profiles, snippets, s3Accounts, secrets };
 }
 
 // ---------- fake shell ----------
@@ -684,7 +692,34 @@ export function createMockApi(): Api {
       for (const c of db.connections) if (c.group_id === id) c.group_id = null;
     },
     async saveSecret(secret) {
+      const i = db.secrets.findIndex((x) => x.id === secret.id);
+      if (i >= 0) db.secrets[i] = structuredClone(secret);
+      else db.secrets.push(structuredClone(secret));
       return secret.id;
+    },
+    async listSecrets() {
+      return db.secrets.map(({ id, kind, label }) => ({ id, kind, label }));
+    },
+    async updateSecret(id, label, value) {
+      const x = db.secrets.find((s) => s.id === id);
+      if (!x) throw fail("not_found", `secret ${id}`);
+      if (label !== null) {
+        if (!label.trim()) throw fail("invalid", "a saved secret needs a name");
+        x.label = label.trim();
+      }
+      if (value !== null) {
+        if (!value) throw fail("invalid", "the new value is empty");
+        x.value = value;
+      }
+    },
+    async deleteSecret(id) {
+      const users = [
+        ...db.connections.filter((c) => (c.auth.type === "password" && c.auth.secret === id) || (c.auth.type === "key" && (c.auth.key === id || c.auth.passphrase === id))).map((c) => c.name),
+        ...db.s3Accounts.filter((a) => a.secret === id).map((a) => a.name),
+        ...db.providers.filter((p) => p.api_key === id).map((p) => p.name),
+      ];
+      if (users.length) throw fail("invalid", `still used by ${users.join(", ")}`);
+      db.secrets = db.secrets.filter((s) => s.id !== id);
     },
 
     async openSession(connection_id, _cols, _rows, prompt_ref) {
