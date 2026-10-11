@@ -5,6 +5,8 @@ describe("detectLanguage", () => {
   it("uses the extension, then the whole name", () => {
     expect(detectLanguage("/srv/app/main.py")).toBe("python");
     expect(detectLanguage("/srv/app/index.PHP")).toBe("php");
+    expect(detectLanguage("/srv/app/a.ts")).toBe("typescript");
+    expect(detectLanguage("/srv/app/App.tsx")).toBe("tsx");
     expect(detectLanguage("/srv/app/Dockerfile")).toBe("dockerfile");
     expect(detectLanguage("/srv/app/Dockerfile.prod")).toBe("dockerfile");
     expect(detectLanguage("/home/me/.bashrc")).toBe("shell");

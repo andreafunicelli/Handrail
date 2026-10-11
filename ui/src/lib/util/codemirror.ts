@@ -98,7 +98,9 @@ export const LANGUAGES: Lang[] = [
   { id: "sql", name: "SQL", load: () => sql(), ext: ["sql"] },
   { id: "swift", name: "Swift", load: legacy(swift), ext: ["swift"] },
   { id: "toml", name: "TOML", load: legacy(toml), ext: ["toml"], names: ["cargo.lock", "pipfile"] },
-  { id: "typescript", name: "TypeScript", load: () => javascript({ typescript: true, jsx: true }), ext: ["ts", "mts", "cts", "tsx"] },
+  // Not JSX: `<Foo>value` is a type assertion in .ts files.
+  { id: "typescript", name: "TypeScript", load: () => javascript({ typescript: true }), ext: ["ts", "mts", "cts"] },
+  { id: "tsx", name: "TypeScript JSX", load: () => javascript({ typescript: true, jsx: true }), ext: ["tsx"] },
   { id: "xml", name: "XML", load: () => xml(), ext: ["xml", "svg", "xsd", "xsl", "xslt", "plist", "csproj", "xaml", "pom"] },
   { id: "yaml", name: "YAML", load: () => yaml(), ext: ["yml", "yaml"] },
 ];
