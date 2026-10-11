@@ -161,6 +161,7 @@ pub fn run() {
             sftp::sftp_remove,
             sftp::sftp_download,
             sftp::sftp_upload,
+            sftp::sftp_sudo,
             s3::s3_home,
             s3::s3_list,
             s3::s3_mkdir,

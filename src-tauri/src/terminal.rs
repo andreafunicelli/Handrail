@@ -82,8 +82,9 @@ pub struct TerminalHub {
     agents: Mutex<HashMap<String, Arc<Mutex<aht_agent::Agent>>>>,
     harness_chats: Mutex<HashMap<(SessionId, String), HarnessChat>>,
     runs: Mutex<HashMap<String, Run>>,
-    /// SFTP sessions opened on SSH sessions' connections (file browser).
-    pub(crate) sftp: Mutex<HashMap<SessionId, Arc<aht_ssh::Sftp>>>,
+    /// SFTP sessions opened on SSH sessions' connections (file browser), by session and
+    /// whether the server runs as root (through sudo).
+    pub(crate) sftp: Mutex<HashMap<(SessionId, bool), Arc<aht_ssh::Sftp>>>,
 }
 
 impl TerminalHub {
@@ -95,7 +96,7 @@ impl TerminalHub {
         self.app.get().expect("TerminalHub attached at setup")
     }
 
-    async fn session(&self, id: SessionId) -> Result<Arc<TermSession>> {
+    pub(crate) async fn session(&self, id: SessionId) -> Result<Arc<TermSession>> {
         self.sessions
             .read()
             .await
@@ -712,7 +713,14 @@ pub async fn session_resize(
 pub async fn close_session(state: tauri::State<'_, AppState>, session_id: SessionId) -> Result<()> {
     let hub = &state.terminal;
     let entry = hub.sessions.write().await.remove(&session_id);
-    if let Some(sftp) = hub.sftp.lock().await.remove(&session_id) {
+    let sftps: Vec<_> = {
+        let mut map = hub.sftp.lock().await;
+        [false, true]
+            .iter()
+            .filter_map(|root| map.remove(&(session_id, *root)))
+            .collect()
+    };
+    for sftp in sftps {
         sftp.close().await;
     }
     let pending: Vec<_> = {

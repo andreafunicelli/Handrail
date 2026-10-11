@@ -10,12 +10,23 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
   import { ui } from "../../stores/ui.svelte";
-  import { isFolder, type FileBackend } from "../../util/fileBackends";
+  import { isFolder, needsSudoPassword, type FileBackend } from "../../util/fileBackends";
   import { joinPath, modeString, parentDir, validName } from "../../util/files";
   import { formatBytes, relativeTime } from "../../util/time";
 
   /** Browser for one remote file system; `label` names it (user@host, account name). */
-  let { fs, label }: { fs: FileBackend; label: string } = $props();
+  let { fs: base, label }: { fs: FileBackend; label: string } = $props();
+
+  /** The same file system as root, while the root toggle is on. */
+  let rootFs = $state<FileBackend | null>(null);
+  const fs = $derived(rootFs ?? base);
+  // A reconnect hands over a new session: its root server has to be started again.
+  $effect(() => {
+    void base.key;
+    rootFs = null;
+  });
+  /** The sudo password dialog. */
+  let sudoAsk = $state<{ password: string; error: string | null; busy: boolean } | null>(null);
 
   let path = $state("");
   let pathInput = $state("");
@@ -30,7 +41,11 @@
   const mine = $derived(transfers.list.filter((x) => x.backend === fs.key));
   const writable = $derived(fs.writable(path));
 
+  /** The folder last asked for (switching to root retries it, e.g. after "Permission denied"). */
+  let wanted = "";
+
   async function go(to: string) {
+    wanted = to;
     loading = true;
     error = null;
     try {
@@ -46,6 +61,36 @@
     }
   }
   const refresh = () => go(path);
+
+  async function toggleRoot() {
+    if (rootFs) {
+      rootFs = null;
+      return refresh();
+    }
+    await becomeRoot(null);
+  }
+
+  /** Start the root SFTP server; asks for the sudo password when sudo needs one. */
+  async function becomeRoot(password: string | null) {
+    if (!base.asRoot) return;
+    try {
+      const r = await base.asRoot(password);
+      rootFs = r;
+      sudoAsk = null;
+      await go(wanted || path || (await r.home()));
+    } catch (e) {
+      if (password === null && needsSudoPassword(e)) sudoAsk = { password: "", error: null, busy: false };
+      else if (sudoAsk) sudoAsk = { password: "", error: errorMessage(e), busy: false };
+      else toasts.error(e);
+    }
+  }
+
+  function submitSudo(ev: SubmitEvent) {
+    ev.preventDefault();
+    if (!sudoAsk?.password) return;
+    sudoAsk.busy = true;
+    void becomeRoot(sudoAsk.password);
+  }
 
   onMount(async () => {
     try {
@@ -151,6 +196,11 @@
     <button class="icon-btn" title={t("files.refresh")} aria-label={t("files.refresh")} onclick={refresh}><Icon name="refresh" size={14} /></button>
     <button class="icon-btn" title={t("files.newFolder")} aria-label={t("files.newFolder")} disabled={!writable} onclick={() => (naming = { mode: "mkdir", value: "" })}><Icon name="plus" size={14} /></button>
     <button class="btn sm" disabled={!writable} onclick={upload}><Icon name="upload" size={13} />{t("files.upload")}</button>
+    {#if base.asRoot}
+      <button class="btn sm root" class:on={!!rootFs} aria-pressed={!!rootFs} title={t(rootFs ? "files.rootOff" : "files.rootOn")} onclick={toggleRoot}>
+        <Icon name="shield" size={13} />{t("files.root")}
+      </button>
+    {/if}
   </div>
   <nav class="crumbs" aria-label={t("files.path")}>
     {#each crumbs as c, i (c.path)}
@@ -158,7 +208,7 @@
       <button class="crumb" onclick={() => go(c.path)}>{c.name}</button>
     {/each}
     <span class="grow"></span>
-    <span class="who">{label}</span>
+    <span class="who" class:asroot={!!rootFs}>{rootFs ? t("files.asRoot", { label }) : label}</span>
   </nav>
 
   <div class="list" role="grid" aria-busy={loading}>
@@ -208,6 +258,22 @@
 </div>
 
 {#if menu}<ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />{/if}
+
+{#if sudoAsk}
+  {@const sa = sudoAsk}
+  <Modal label={t("files.sudoTitle")} onclose={() => (sudoAsk = null)} width="380px">
+    <form class="dialog" onsubmit={submitSudo}>
+      <h2>{t("files.sudoTitle")}</h2>
+      <p class="hint">{t("files.sudoBody")}</p>
+      <input class="input" type="password" bind:value={sa.password} aria-label={t("files.sudoPassword")} autocomplete="off" data-autofocus />
+      {#if sa.error}<p class="err-line" role="alert">{sa.error}</p>{/if}
+      <div class="actions">
+        <button type="button" class="btn ghost" onclick={() => (sudoAsk = null)}>{t("common.cancel")}</button>
+        <button class="btn primary" disabled={!sa.password || sa.busy}>{t("files.sudoGo")}</button>
+      </div>
+    </form>
+  </Modal>
+{/if}
 
 {#if naming}
   {@const n = naming}
@@ -412,5 +478,23 @@
     flex: none;
     color: var(--faint);
     font-size: var(--fs-small);
+  }
+  .root.on {
+    background: var(--warn-soft);
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+  .who.asroot {
+    color: var(--warn);
+  }
+  .hint {
+    margin: 0;
+    font-size: var(--fs-meta);
+    color: var(--muted);
+  }
+  .err-line {
+    margin: 0;
+    font-size: var(--fs-meta);
+    color: var(--danger);
   }
 </style>

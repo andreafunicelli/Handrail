@@ -2,14 +2,18 @@
 //! files needs no second login. Downloads go to the Downloads folder; uploads come from paths
 //! the user picked in the native file dialog.
 
+use crate::cmd_vault::secret_value;
 use crate::state::{err, AppState};
+use aht_core::model::{Connection, SshAuth};
 use aht_core::{Error, Result, SessionId};
+use aht_ssh::sftp::SUDO_PASSWORD_REQUIRED;
 use aht_ssh::{EntryKind, RemoteEntry, Sftp};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
+use zeroize::Zeroizing;
 
 #[derive(Serialize)]
 pub struct FileEntry {
@@ -51,16 +55,89 @@ struct ProgressEvent {
     total: u64,
 }
 
-/// The session's SFTP client, started on first use.
-async fn sftp(state: &AppState, session_id: SessionId) -> Result<Arc<Sftp>> {
+/// The session's SFTP client: as the login user (started on first use), or as root once
+/// [`sftp_sudo`] started it.
+async fn sftp(state: &AppState, session_id: SessionId, root: Option<bool>) -> Result<Arc<Sftp>> {
+    let root = root.unwrap_or(false);
     let mut map = state.terminal.sftp.lock().await;
-    if let Some(s) = map.get(&session_id) {
+    if let Some(s) = map.get(&(session_id, root)) {
         return Ok(s.clone());
+    }
+    if root {
+        return Err(Error::Invalid(
+            "switch the file browser to root first".into(),
+        ));
     }
     let conn = state.terminal.ssh_connection(session_id).await?;
     let s = Arc::new(conn.open_sftp().await?);
-    map.insert(session_id, s.clone());
+    map.insert((session_id, false), s.clone());
     Ok(s)
+}
+
+/// The saved login password of the session's connection, if it logs in with one.
+async fn login_password(state: &AppState, session_id: SessionId) -> Option<Zeroizing<String>> {
+    let conn_id = state
+        .terminal
+        .session(session_id)
+        .await
+        .ok()?
+        .info()
+        .connection_id?;
+    let conn = state
+        .vault
+        .lock()
+        .await
+        .get::<Connection>(&conn_id.to_string())
+        .ok()??;
+    match conn.auth {
+        SshAuth::Password { secret } => secret_value(state, secret).await.ok().map(Zeroizing::new),
+        _ => None,
+    }
+}
+
+/// Start the session's root SFTP server through sudo. Without `password`: passwordless sudo,
+/// then the connection's saved login password; fails with `sudo_password_required` when the
+/// user has to type it. The password is used once and never stored.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sftp_sudo(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    password: Option<String>,
+) -> Result<()> {
+    if state
+        .terminal
+        .sftp
+        .lock()
+        .await
+        .contains_key(&(session_id, true))
+    {
+        return Ok(());
+    }
+    let password = password.map(Zeroizing::new);
+    let conn = state.terminal.ssh_connection(session_id).await?;
+    let needs_password = |e: &Error| matches!(e, Error::Auth(m) if m == SUDO_PASSWORD_REQUIRED);
+    let s = match password {
+        Some(pw) => conn.open_sftp_sudo(Some(&pw)).await?,
+        None => match conn.open_sftp_sudo(None).await {
+            Ok(s) => s,
+            Err(e) if needs_password(&e) => match login_password(&state, session_id).await {
+                // A different sudo password: ask for it instead of reporting a wrong one.
+                Some(pw) => conn
+                    .open_sftp_sudo(Some(&pw))
+                    .await
+                    .map_err(|_| Error::Auth(SUDO_PASSWORD_REQUIRED.into()))?,
+                None => return Err(e),
+            },
+            Err(e) => return Err(e),
+        },
+    };
+    state
+        .terminal
+        .sftp
+        .lock()
+        .await
+        .insert((session_id, true), Arc::new(s));
+    Ok(())
 }
 
 /// Progress events for `transfer_id`, at most ten a second plus the final one.
@@ -88,17 +165,25 @@ pub(crate) fn reporter(
 
 /// The login directory of the session's user.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn sftp_home(state: State<'_, AppState>, session_id: SessionId) -> Result<String> {
-    sftp(&state, session_id).await?.canonicalize(".").await
+pub async fn sftp_home(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    root: Option<bool>,
+) -> Result<String> {
+    sftp(&state, session_id, root)
+        .await?
+        .canonicalize(".")
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sftp_list(
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     path: String,
 ) -> Result<Vec<FileEntry>> {
-    let s = sftp(&state, session_id).await?;
+    let s = sftp(&state, session_id, root).await?;
     Ok(s.list(&path).await?.into_iter().map(Into::into).collect())
 }
 
@@ -106,19 +191,24 @@ pub async fn sftp_list(
 pub async fn sftp_mkdir(
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     path: String,
 ) -> Result<()> {
-    sftp(&state, session_id).await?.mkdir(&path).await
+    sftp(&state, session_id, root).await?.mkdir(&path).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sftp_rename(
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     from: String,
     to: String,
 ) -> Result<()> {
-    sftp(&state, session_id).await?.rename(&from, &to).await
+    sftp(&state, session_id, root)
+        .await?
+        .rename(&from, &to)
+        .await
 }
 
 /// Delete a file or an empty folder.
@@ -126,10 +216,14 @@ pub async fn sftp_rename(
 pub async fn sftp_remove(
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     path: String,
     is_dir: bool,
 ) -> Result<()> {
-    sftp(&state, session_id).await?.remove(&path, is_dir).await
+    sftp(&state, session_id, root)
+        .await?
+        .remove(&path, is_dir)
+        .await
 }
 
 /// `dir/name`, or `dir/stem (2).ext`… when taken.
@@ -205,10 +299,11 @@ pub async fn sftp_download(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     path: String,
     transfer_id: String,
 ) -> Result<String> {
-    let s = sftp(&state, session_id).await?;
+    let s = sftp(&state, session_id, root).await?;
     let local = free_local_path(&downloads(&app)?, &local_name(&path)?);
     s.download(&path, &local, reporter(&app, transfer_id))
         .await?;
@@ -221,12 +316,13 @@ pub async fn sftp_upload(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     local_path: PathBuf,
     dir: String,
     transfer_id: String,
 ) -> Result<String> {
     let name = picked_name(&local_path)?;
-    let s = sftp(&state, session_id).await?;
+    let s = sftp(&state, session_id, root).await?;
     let remote = aht_ssh::sftp::join(&dir, &name);
     s.upload(&local_path, &remote, reporter(&app, transfer_id))
         .await?;

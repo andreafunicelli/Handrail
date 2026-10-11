@@ -115,5 +115,12 @@ async fn real_sftp_round_trip() {
     sftp.remove(&renamed, false).await.unwrap();
     sftp.remove(&remote_dir, true).await.unwrap();
     assert!(sftp.list(&remote_dir).await.is_err());
+    // /root is private: the login user cannot list it...
+    assert!(sftp.list("/root").await.is_err());
     sftp.close().await;
+
+    // ...but the SFTP server started through sudo can (CI runners have passwordless sudo).
+    let root = conn.open_sftp_sudo(None).await.unwrap();
+    assert!(root.list("/root").await.is_ok());
+    root.close().await;
 }

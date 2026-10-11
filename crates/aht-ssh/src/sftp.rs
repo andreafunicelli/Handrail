@@ -74,7 +74,110 @@ pub fn join(dir: &str, name: &str) -> String {
     }
 }
 
+/// Printed on stdout once sudo let the command run, before `sftp-server` starts.
+const SUDO_OK: &str = "HANDRAIL-SUDO-OK";
+const NO_SERVER: &str = "HANDRAIL-NO-SFTP-SERVER";
+/// Error text that means "ask the user for the sudo password".
+pub const SUDO_PASSWORD_REQUIRED: &str = "sudo_password_required";
+
+/// The shell command that runs the first `sftp-server` found as root.
+fn sudo_command(with_password: bool) -> String {
+    let script = format!(
+        "for p in /usr/lib/openssh/sftp-server /usr/libexec/openssh/sftp-server \
+         /usr/lib/ssh/sftp-server /usr/libexec/sftp-server /usr/lib/sftp-server \
+         /usr/local/libexec/sftp-server; do if [ -x \"$p\" ]; then echo {SUDO_OK}; \
+         exec \"$p\"; fi; done; echo {NO_SERVER}; exit 127"
+    );
+    // -n never prompts; -S reads the password from stdin (exactly one line); -p '' keeps the
+    // prompt off the stream.
+    let mode = if with_password { "-S -p ''" } else { "-n" };
+    format!("sudo {mode} sh -c '{script}'")
+}
+
+/// The error sudo's stderr stands for.
+fn sudo_error(stderr: &str, with_password: bool) -> Error {
+    let s = stderr.to_lowercase();
+    if s.contains("password is required") || (!with_password && s.contains("password")) {
+        Error::Auth(SUDO_PASSWORD_REQUIRED.into())
+    } else if s.contains("sorry, try again") || s.contains("incorrect password") {
+        Error::Auth("wrong sudo password".into())
+    } else if s.contains("tty") {
+        Error::Denied("sudo on this server requires a terminal (requiretty)".into())
+    } else if s.contains("not in the sudoers") || s.contains("not allowed") {
+        Error::Denied(format!("sudo refused: {}", stderr.trim()))
+    } else if s.trim().is_empty() {
+        Error::Other("sudo ended without starting the SFTP server".into())
+    } else {
+        Error::Other(format!("sudo: {}", stderr.trim()))
+    }
+}
+
 impl SshConnection {
+    /// Start an SFTP server as root through `sudo` on a new channel (what "browse as root" uses;
+    /// becoming root in the terminal cannot change the user of an SFTP channel). Without a
+    /// password it uses `sudo -n` and fails with [`SUDO_PASSWORD_REQUIRED`] when one is needed.
+    pub async fn open_sftp_sudo(&self, password: Option<&str>) -> Result<Sftp> {
+        let with_password = password.is_some();
+        let mut ch = self.handle.channel_open_session().await.map_err(net)?;
+        ch.exec(true, sudo_command(with_password))
+            .await
+            .map_err(net)?;
+        if let Some(pw) = password {
+            let line = zeroize::Zeroizing::new(format!("{pw}\n"));
+            ch.data(line.as_bytes()).await.map_err(net)?;
+        }
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let started = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                match ch.wait().await {
+                    Some(ChannelMsg::Data { data }) => {
+                        stdout.extend_from_slice(&data);
+                        let out = String::from_utf8_lossy(&stdout);
+                        if out.contains(NO_SERVER) {
+                            return Err(Error::NotFound(
+                                "no sftp-server program found on the server".into(),
+                            ));
+                        }
+                        if let Some(i) = out.find(SUDO_OK) {
+                            // sftp-server says nothing before our init, so nothing may follow.
+                            if out[i + SUDO_OK.len()..].trim().is_empty() {
+                                return Ok(());
+                            }
+                            return Err(Error::Other("unexpected output from sudo".into()));
+                        }
+                    }
+                    Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        stderr.extend_from_slice(&data);
+                        // A wrong password makes sudo wait for another line: stop here.
+                        let err = String::from_utf8_lossy(&stderr).to_lowercase();
+                        if err.contains("sorry, try again") || err.contains("incorrect password") {
+                            return Err(sudo_error(&err, with_password));
+                        }
+                    }
+                    Some(ChannelMsg::Failure) => {
+                        return Err(Error::Denied("the server refused to run sudo".into()))
+                    }
+                    Some(ChannelMsg::ExitStatus { .. })
+                    | Some(ChannelMsg::Eof)
+                    | Some(ChannelMsg::Close)
+                    | None => {
+                        return Err(sudo_error(&String::from_utf8_lossy(&stderr), with_password))
+                    }
+                    Some(_) => {}
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| Err(Error::Other("sudo did not answer in time".into())));
+        if let Err(e) = started {
+            let _ = ch.close().await;
+            return Err(e);
+        }
+        let session = SftpSession::new(ch.into_stream()).await.map_err(sftp_err)?;
+        Ok(Sftp { session })
+    }
+
     /// Start the `sftp` subsystem on a new channel of this connection.
     pub async fn open_sftp(&self) -> Result<Sftp> {
         let mut ch = self.handle.channel_open_session().await.map_err(net)?;
@@ -246,7 +349,26 @@ impl Sftp {
 
 #[cfg(test)]
 mod tests {
-    use super::join;
+    use super::*;
+
+    #[test]
+    fn sudo_commands_and_errors() {
+        assert!(sudo_command(false).starts_with("sudo -n sh -c '"));
+        assert!(sudo_command(true).starts_with("sudo -S -p '' sh -c '"));
+        assert!(!sudo_command(true).contains('\n'));
+        let need = sudo_error("sudo: a password is required\n", false);
+        assert!(matches!(need, Error::Auth(m) if m == SUDO_PASSWORD_REQUIRED));
+        let wrong = sudo_error("Sorry, try again.\n", true);
+        assert!(matches!(wrong, Error::Auth(m) if m == "wrong sudo password"));
+        assert!(matches!(
+            sudo_error("sudo: sorry, you must have a tty to run sudo", false),
+            Error::Denied(_)
+        ));
+        assert!(matches!(
+            sudo_error("bob is not in the sudoers file.", true),
+            Error::Denied(_)
+        ));
+    }
 
     #[test]
     fn joins_posix_paths() {

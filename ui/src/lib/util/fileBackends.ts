@@ -22,23 +22,40 @@ export interface FileBackend {
   writable(dir: string): boolean;
   /** S3 folders are key prefixes and cannot be renamed. */
   canRename(entry: FileEntry): boolean;
+  /** Running as root through sudo. */
+  root?: boolean;
+  /**
+   * The same file system as root (SFTP only): starts the server through sudo. Rejects with
+   * `sudo_password_required` when `password` is needed.
+   */
+  asRoot?(password: string | null): Promise<FileBackend>;
 }
 
-export function sftpBackend(sessionId: string): FileBackend {
+export function sftpBackend(sessionId: string, root = false): FileBackend {
   return {
+    // One transfer list for both identities of the browser.
     key: `sftp:${sessionId}`,
     kind: "sftp",
-    home: () => api.sftpHome(sessionId),
-    list: (p) => api.sftpList(sessionId, p),
-    mkdir: (p) => api.sftpMkdir(sessionId, p),
-    rename: (e, to) => api.sftpRename(sessionId, e.path, to),
-    remove: (e) => api.sftpRemove(sessionId, e.path, isFolder(e)),
-    download: (p, id) => api.sftpDownload(sessionId, p, id),
-    upload: (local, dir, id) => api.sftpUpload(sessionId, local, dir, id),
+    root,
+    home: () => api.sftpHome(sessionId, root),
+    list: (p) => api.sftpList(sessionId, p, root),
+    mkdir: (p) => api.sftpMkdir(sessionId, p, root),
+    rename: (e, to) => api.sftpRename(sessionId, e.path, to, root),
+    remove: (e) => api.sftpRemove(sessionId, e.path, isFolder(e), root),
+    download: (p, id) => api.sftpDownload(sessionId, p, id, root),
+    upload: (local, dir, id) => api.sftpUpload(sessionId, local, dir, id, root),
     writable: (dir) => !!dir,
     canRename: () => true,
+    asRoot: async (password) => {
+      await api.sftpSudo(sessionId, password);
+      return sftpBackend(sessionId, true);
+    },
   };
 }
+
+/** The error `asRoot` rejects with when the sudo password has to be typed. */
+export const needsSudoPassword = (e: unknown) =>
+  !!e && typeof e === "object" && (e as { message?: unknown }).message === "sudo_password_required";
 
 /** "/" is the bucket list; files live at "/bucket/…". */
 export function s3Backend(accountId: string): FileBackend {

@@ -44,13 +44,14 @@ export function createTauriApi(): Api {
       (await invoke<ApprovalSettings | null>("get_setting", { key: APPROVALS_KEY })) ?? DEFAULT_APPROVALS,
     saveApprovalSettings: (settings) => invoke("set_setting", { key: APPROVALS_KEY, value: settings }),
 
-    sftpHome: (session_id) => invoke("sftp_home", { session_id }),
-    sftpList: (session_id, path) => invoke("sftp_list", { session_id, path }),
-    sftpMkdir: (session_id, path) => invoke("sftp_mkdir", { session_id, path }),
-    sftpRename: (session_id, from, to) => invoke("sftp_rename", { session_id, from, to }),
-    sftpRemove: (session_id, path, is_dir) => invoke("sftp_remove", { session_id, path, is_dir }),
-    sftpDownload: (session_id, path, transfer_id) => invoke("sftp_download", { session_id, path, transfer_id }),
-    sftpUpload: (session_id, local_path, dir, transfer_id) => invoke("sftp_upload", { session_id, local_path, dir, transfer_id }),
+    sftpSudo: (session_id, password) => invoke("sftp_sudo", { session_id, password }),
+    sftpHome: (session_id, root = false) => invoke("sftp_home", { session_id, root }),
+    sftpList: (session_id, path, root = false) => invoke("sftp_list", { session_id, path, root }),
+    sftpMkdir: (session_id, path, root = false) => invoke("sftp_mkdir", { session_id, path, root }),
+    sftpRename: (session_id, from, to, root = false) => invoke("sftp_rename", { session_id, from, to, root }),
+    sftpRemove: (session_id, path, is_dir, root = false) => invoke("sftp_remove", { session_id, path, is_dir, root }),
+    sftpDownload: (session_id, path, transfer_id, root = false) => invoke("sftp_download", { session_id, path, transfer_id, root }),
+    sftpUpload: (session_id, local_path, dir, transfer_id, root = false) => invoke("sftp_upload", { session_id, local_path, dir, transfer_id, root }),
     async pickFiles() {
       const picked = await openDialog({ multiple: true, directory: false });
       return picked == null ? [] : Array.isArray(picked) ? picked : [picked];
