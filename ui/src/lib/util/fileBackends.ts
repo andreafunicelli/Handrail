@@ -1,6 +1,9 @@
 import { api } from "../api";
 import type { FileEntry } from "../api/types";
 
+/** A real folder, not a link to one (deleting a link removes only the link). */
+export const isFolder = (e: FileEntry) => e.kind === "dir" && !e.link;
+
 /** What the file browser needs from a remote file system (SFTP on a session, or S3). */
 export interface FileBackend {
   /** Identifies the browser's transfers. */
@@ -29,7 +32,7 @@ export function sftpBackend(sessionId: string): FileBackend {
     list: (p) => api.sftpList(sessionId, p),
     mkdir: (p) => api.sftpMkdir(sessionId, p),
     rename: (e, to) => api.sftpRename(sessionId, e.path, to),
-    remove: (e) => api.sftpRemove(sessionId, e.path, e.kind === "dir"),
+    remove: (e) => api.sftpRemove(sessionId, e.path, isFolder(e)),
     download: (p, id) => api.sftpDownload(sessionId, p, id),
     upload: (local, dir, id) => api.sftpUpload(sessionId, local, dir, id),
     writable: (dir) => !!dir,

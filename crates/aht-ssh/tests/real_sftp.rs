@@ -69,6 +69,40 @@ async fn real_sftp_round_trip() {
     assert_eq!(got, data.len() as u64);
     assert_eq!(std::fs::read(&back).unwrap(), data);
 
+    // Symlinks report their target's kind (and size); a dangling one stays a symlink.
+    let out = conn
+        .exec(&format!(
+            "cd '{remote_dir}' && mkdir sub && ln -s renamed.bin file-link && ln -s sub dir-link \
+             && ln -s nowhere dead-link"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        out.exit_status,
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let listed = sftp.list(&remote_dir).await.unwrap();
+    let find = |n: &str| listed.iter().find(|e| e.name == n).unwrap().clone();
+    let dir_link = find("dir-link");
+    assert_eq!((dir_link.kind, dir_link.link), (EntryKind::Dir, true));
+    let file_link = find("file-link");
+    assert_eq!((file_link.kind, file_link.link), (EntryKind::File, true));
+    assert_eq!(file_link.size, data.len() as u64);
+    assert_eq!(find("dead-link").kind, EntryKind::Symlink);
+    assert!(!find("sub").link);
+    assert_eq!(
+        listed[0].kind,
+        EntryKind::Dir,
+        "folders and links to them first"
+    );
+    // A link is removed as a file, never as the folder it points to.
+    for l in ["file-link", "dir-link", "dead-link"] {
+        sftp.remove(&join(&remote_dir, l), false).await.unwrap();
+    }
+    sftp.remove(&join(&remote_dir, "sub"), true).await.unwrap();
+
     // A missing file is NotFound and leaves no partial local file.
     let missing = dir.path().join("missing.bin");
     let err = sftp

@@ -27,7 +27,9 @@ pub enum EntryKind {
 pub struct RemoteEntry {
     pub name: String,
     pub path: String,
+    /// For a symlink, the kind of its target (`Symlink` when the target cannot be read).
     pub kind: EntryKind,
+    pub link: bool,
     pub size: u64,
     /// Seconds since the Unix epoch.
     pub modified: Option<u32>,
@@ -102,31 +104,40 @@ impl Sftp {
         self.session.canonicalize(path).await.map_err(sftp_err)
     }
 
-    /// Entries of `dir` without `.` and `..`: folders first, then by name.
+    /// Entries of `dir` without `.` and `..`: folders first, then by name. Symlinks are followed
+    /// to tell links to folders from links to files.
     pub async fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>> {
-        let mut out: Vec<RemoteEntry> = self
-            .session
-            .read_dir(dir)
-            .await
-            .map_err(sftp_err)?
-            .filter(|e| e.file_name() != "." && e.file_name() != "..")
-            .map(|e| {
-                let m = e.metadata();
-                RemoteEntry {
-                    name: e.file_name(),
-                    path: join(dir, &e.file_name()),
-                    kind: match e.file_type() {
-                        FileType::Dir => EntryKind::Dir,
-                        FileType::File => EntryKind::File,
-                        FileType::Symlink => EntryKind::Symlink,
-                        FileType::Other => EntryKind::Other,
-                    },
-                    size: m.size.unwrap_or(0),
-                    modified: m.mtime,
-                    permissions: m.permissions,
-                }
-            })
-            .collect();
+        let kind_of = |t: FileType| match t {
+            FileType::Dir => EntryKind::Dir,
+            FileType::File => EntryKind::File,
+            FileType::Symlink => EntryKind::Symlink,
+            FileType::Other => EntryKind::Other,
+        };
+        let mut out = Vec::new();
+        for e in self.session.read_dir(dir).await.map_err(sftp_err)? {
+            let name = e.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let path = join(dir, &name);
+            let m = e.metadata();
+            let link = e.file_type() == FileType::Symlink;
+            // `metadata` follows the link; a dangling one stays a plain symlink.
+            let target = if link {
+                self.session.metadata(&path).await.ok()
+            } else {
+                None
+            };
+            out.push(RemoteEntry {
+                kind: kind_of(target.as_ref().map_or(e.file_type(), |t| t.file_type())),
+                size: target.as_ref().unwrap_or(&m).size.unwrap_or(0),
+                link,
+                name,
+                path,
+                modified: m.mtime,
+                permissions: m.permissions,
+            });
+        }
         out.sort_by(|a, b| {
             (b.kind == EntryKind::Dir)
                 .cmp(&(a.kind == EntryKind::Dir))

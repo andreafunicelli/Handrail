@@ -4,6 +4,8 @@ import { strToB64 } from "../util/b64";
 import { uuid } from "../util/id";
 import { fillPlaceholders, placeholders, snippetInput, SUGGESTED_SNIPPETS, type SuggestedSnippet } from "../util/snippets";
 import { sessions } from "./sessions.svelte";
+import { terminals } from "../terminal/host";
+import { t } from "../i18n";
 
 export function blankSnippet(): Snippet {
   return { id: uuid(), name: "", command: "", description: "", tags: [] };
@@ -58,7 +60,10 @@ class Snippets {
       return;
     }
     const command = fillPlaceholders(s.command, values ?? {});
-    await api.sessionWrite(sessionId, strToB64(snippetInput(command, run)));
+    const bracketedPaste = terminals.peek(sessionId)?.term.modes.bracketedPasteMode ?? false;
+    const input = snippetInput(command, run, bracketedPaste);
+    if (input === null) throw new Error(t("snip.multilineInsert"));
+    await api.sessionWrite(sessionId, strToB64(input));
     sessions.focusSession(sessionId);
   }
 }

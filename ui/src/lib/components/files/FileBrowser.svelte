@@ -10,7 +10,7 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
   import { ui } from "../../stores/ui.svelte";
-  import type { FileBackend } from "../../util/fileBackends";
+  import { isFolder, type FileBackend } from "../../util/fileBackends";
   import { joinPath, modeString, parentDir, validName } from "../../util/files";
   import { formatBytes, relativeTime } from "../../util/time";
 
@@ -57,7 +57,7 @@
   });
 
   function open(e: FileEntry) {
-    if (e.kind === "dir" || e.kind === "symlink") void go(e.path);
+    if (e.kind === "dir") void go(e.path);
     else void download(e);
   }
 
@@ -84,8 +84,8 @@
   }
 
   async function remove(e: FileEntry) {
-    const ok = await ui.ask(t(e.kind === "dir" ? "files.deleteFolder" : "files.deleteFile", { name: e.name }), {
-      body: e.kind === "dir" ? t("files.deleteFolderHint") : undefined,
+    const ok = await ui.ask(t(isFolder(e) ? "files.deleteFolder" : "files.deleteFile", { name: e.name }), {
+      body: isFolder(e) ? t("files.deleteFolderHint") : undefined,
       confirmLabel: t("common.delete"),
       danger: true,
     });
@@ -115,7 +115,7 @@
   function openMenu(ev: MouseEvent, e: FileEntry) {
     ev.preventDefault();
     selected = e.path;
-    const isFile = e.kind === "file";
+    const isFile = e.kind !== "dir";
     menu = {
       x: ev.clientX,
       y: ev.clientY,
@@ -139,7 +139,7 @@
     const parts = path.split("/").filter(Boolean);
     return [{ name: "/", path: "/" }, ...parts.map((p, i) => ({ name: p, path: "/" + parts.slice(0, i + 1).join("/") }))];
   });
-  const icon = (e: FileEntry) => (e.kind === "dir" ? "folder" : e.kind === "symlink" ? "link" : "file");
+  const icon = (e: FileEntry) => (e.kind === "dir" ? "folder" : e.link ? "link" : "file");
 </script>
 
 <div class="files">
@@ -178,7 +178,7 @@
         onkeydown={(ev) => rowKey(ev, e)}
         oncontextmenu={(ev) => openMenu(ev, e)}
       >
-        <span class="name" role="gridcell"><Icon name={icon(e)} size={14} /><span class="n">{e.name}</span></span>
+        <span class="name" role="gridcell"><Icon name={icon(e)} size={14} /><span class="n">{e.name}</span>{#if e.link}<span class="lnk" title={t("files.link")} aria-label={t("files.link")}>↗</span>{/if}</span>
         <span class="size" role="gridcell">{e.kind === "file" ? formatBytes(e.size) : ""}</span>
         <span class="mod" role="gridcell" title={e.modified ? new Date(e.modified * 1000).toLocaleString() : ""}>{e.modified ? relativeTime(e.modified * 1000) : ""}</span>
         <span class="perm mono" role="gridcell">{modeString(e.permissions)}</span>
@@ -407,5 +407,10 @@
     display: flex;
     justify-content: flex-end;
     gap: 8px;
+  }
+  .lnk {
+    flex: none;
+    color: var(--faint);
+    font-size: var(--fs-small);
   }
 </style>

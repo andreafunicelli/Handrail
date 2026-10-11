@@ -199,7 +199,10 @@ export interface HostKeyEvent {
 export interface FileEntry {
   name: string;
   path: string;
+  /** For a symlink, its target's kind ("symlink" when the target is missing). */
   kind: "dir" | "file" | "symlink" | "other";
+  /** A symbolic link: open follows it, delete removes only the link. */
+  link: boolean;
   size: number;
   /** Seconds since the Unix epoch. */
   modified: number | null;

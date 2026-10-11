@@ -242,7 +242,7 @@ export function createMockApi(): Api {
   const syncEvent = () => emit("sync://status", structuredClone(sync));
   const authPrompts = new Map<string, (answers: string[] | null) => void>();
   // ---- fake remote file system (one for all SSH sessions) ----
-  type FsNode = { kind: "dir" | "file"; size: number; modified: number; permissions: number };
+  type FsNode = { kind: "dir" | "file" | "symlink"; size: number; modified: number; permissions: number; link?: boolean };
   const files = new Map<string, FsNode>();
   const parentOf = (p: string) => p.replace(/\/[^/]+$/, "") || "/";
   const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
@@ -260,6 +260,10 @@ export function createMockApi(): Api {
     file(`${home}/app/.env`, 412, 86400 * 3, 0o100600);
     file(`${home}/logs/app.log`, 18_400_000, 60);
     file(`${home}/logs/app.log.1.gz`, 2_100_000, 86400);
+    // Symlinks carry their target's kind, as the backend reports them.
+    files.set(`${home}/current`, { kind: "dir", size: 4096, modified: now - 600, permissions: 0o120777, link: true });
+    files.set(`${home}/latest.log`, { kind: "file", size: 18_400_000, modified: now - 600, permissions: 0o120777, link: true });
+    files.set(`${home}/old-release`, { kind: "symlink", size: 0, modified: now - 86400 * 40, permissions: 0o120777, link: true });
   }
   function sshShell(session_id: string) {
     const sh = shells.get(session_id);
@@ -701,7 +705,7 @@ export function createMockApi(): Api {
       if (node.kind !== "dir") throw fail("invalid", `${path} is not a folder`);
       return [...files.entries()]
         .filter(([p]) => p !== path && parentOf(p) === path)
-        .map(([p, n]) => ({ name: baseName(p), path: p, kind: n.kind, size: n.size, modified: n.modified, permissions: n.permissions }))
+        .map(([p, n]) => ({ name: baseName(p), path: p, kind: n.kind, link: !!n.link, size: n.size, modified: n.modified, permissions: n.permissions }))
         .sort((a, b) => Number(b.kind === "dir") - Number(a.kind === "dir") || a.name.localeCompare(b.name));
     },
     async sftpMkdir(session_id, path) {
@@ -724,6 +728,7 @@ export function createMockApi(): Api {
       sshShell(session_id);
       const n = files.get(path);
       if (!n) throw fail("not_found", "No such file");
+      if (is_dir && n.link) throw fail("other", "SFTP: Failure (not a folder)");
       if (is_dir && [...files.keys()].some((p) => parentOf(p) === path && p !== path)) throw fail("other", "SFTP: Failure (folder not empty)");
       files.delete(path);
     },
@@ -770,7 +775,7 @@ export function createMockApi(): Api {
       await sleep(80);
       const { bucket, key } = s3Split(path);
       if (!bucket)
-        return [...buckets.entries()].map(([name, b]) => ({ name, path: `/${name}`, kind: "dir" as const, size: 0, modified: b.created, permissions: null }));
+        return [...buckets.entries()].map(([name, b]) => ({ name, path: `/${name}`, kind: "dir" as const, link: false, size: 0, modified: b.created, permissions: null }));
       const prefix = key ? key + "/" : "";
       const folders = new Set<string>();
       const out: FileEntry[] = [];
@@ -779,9 +784,9 @@ export function createMockApi(): Api {
         const rest = k.slice(prefix.length);
         const slash = rest.indexOf("/");
         if (slash >= 0) folders.add(rest.slice(0, slash));
-        else out.push({ name: rest, path: `/${bucket}/${k}`, kind: "file", size: o.size, modified: o.modified, permissions: null });
+        else out.push({ name: rest, path: `/${bucket}/${k}`, kind: "file", link: false, size: o.size, modified: o.modified, permissions: null });
       }
-      const dirs = [...folders].sort().map((name) => ({ name, path: `/${bucket}/${prefix}${name}`, kind: "dir" as const, size: 0, modified: null, permissions: null }));
+      const dirs = [...folders].sort().map((name) => ({ name, path: `/${bucket}/${prefix}${name}`, kind: "dir" as const, link: false, size: 0, modified: null, permissions: null }));
       return [...dirs, ...out.sort((a, b) => a.name.localeCompare(b.name))];
     },
     async s3Mkdir(accountId, path) {

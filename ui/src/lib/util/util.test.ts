@@ -202,8 +202,14 @@ describe("snippets", () => {
     expect(fillPlaceholders('docker ps --format "{{.Names}}" {{x}}', {})).toBe('docker ps --format "{{.Names}}" ');
   });
   it("types lines with Enter only when running", () => {
-    expect(snippetInput("uptime\n", true)).toBe("uptime\r");
-    expect(snippetInput("cd /tmp\nls", false)).toBe("cd /tmp\rls");
+    expect(snippetInput("uptime\n", true, false)).toBe("uptime\r");
+    expect(snippetInput("cd /tmp\nls", true, false)).toBe("cd /tmp\rls\r");
+    expect(snippetInput("uptime", false, false)).toBe("uptime");
+  });
+  it("never presses Enter when inserting a multi-line snippet", () => {
+    expect(snippetInput("cd /tmp\nrm -rf x\n", false, true)).toBe("\x1b[200~cd /tmp\rrm -rf x\x1b[201~");
+    expect(snippetInput("cd /tmp\nls", false, false)).toBeNull();
+    expect(snippetInput("a\n\x1b[201~rm -rf /", false, true)).toBe("\x1b[200~a\rrm -rf /\x1b[201~");
   });
   it("suggests unique names", () => {
     const names = SUGGESTED_SNIPPETS.map((s) => s.name);

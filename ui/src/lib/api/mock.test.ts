@@ -115,7 +115,11 @@ describe("mock api", () => {
     const conn = (await api.listConnections()).find((c) => c.auth.type !== "prompt")!;
     const s = await api.openSession(conn.id, 80, 24);
     const home = await api.sftpHome(s.session_id);
-    expect((await api.sftpList(s.session_id, home)).map((e) => e.name)).toContain("logs");
+    const listing = await api.sftpList(s.session_id, home);
+    expect(listing.map((e) => e.name)).toContain("logs");
+    expect(listing.find((e) => e.name === "current")).toMatchObject({ kind: "dir", link: true });
+    expect(listing.find((e) => e.name === "latest.log")).toMatchObject({ kind: "file", link: true });
+    await expect(api.sftpRemove(s.session_id, `${home}/current`, true)).rejects.toBeTruthy();
     const seen: number[] = [];
     await api.on("transfer://progress", (p) => seen.push(p.done));
     const remote = await api.sftpUpload(s.session_id, "/tmp/x.bin", home, "t1");

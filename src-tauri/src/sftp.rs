@@ -17,6 +17,8 @@ pub struct FileEntry {
     pub(crate) path: String,
     /// "dir" | "file" | "symlink" | "other"
     pub(crate) kind: &'static str,
+    /// A symlink; `kind` is then its target's kind.
+    pub(crate) link: bool,
     pub(crate) size: u64,
     /// Seconds since the Unix epoch.
     pub(crate) modified: Option<u32>,
@@ -34,6 +36,7 @@ impl From<RemoteEntry> for FileEntry {
                 EntryKind::Symlink => "symlink",
                 EntryKind::Other => "other",
             },
+            link: e.link,
             size: e.size,
             modified: e.modified,
             permissions: e.permissions,

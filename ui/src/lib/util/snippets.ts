@@ -12,10 +12,18 @@ export function fillPlaceholders(command: string, values: Record<string, string>
   return command.replace(/\{\{\s*([\w-]+)\s*\}\}/g, (_, name: string) => values[name] ?? "");
 }
 
-/** Text to type into a terminal: one line per command line, plus Enter when running. */
-export function snippetInput(command: string, run: boolean): string {
+/**
+ * Text to type into a terminal. Running presses Enter after every line. Inserting never does: a
+ * multi-line command goes in as one bracketed paste (as xterm pastes), which the shell edits
+ * without running. `null` when that is impossible because the shell has bracketed paste off.
+ */
+export function snippetInput(command: string, run: boolean, bracketedPaste: boolean): string | null {
   const text = command.replace(/\r\n?/g, "\n").replace(/\n+$/, "").replace(/\n/g, "\r");
-  return run ? text + "\r" : text;
+  if (run) return text + "\r";
+  if (!text.includes("\r")) return text;
+  if (!bracketedPaste) return null;
+  // A paste-end marker inside the text would end the paste early and run the rest.
+  return `\x1b[200~${text.replace(/\x1b\[20[01]~/g, "")}\x1b[201~`;
 }
 
 export type SuggestedSnippet = Omit<Snippet, "id">;
