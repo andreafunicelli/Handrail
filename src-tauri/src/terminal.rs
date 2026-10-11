@@ -625,25 +625,6 @@ pub async fn open_session(
     open_ssh(&app, connection_id, cols, rows, prompt_ref).await
 }
 
-#[derive(Serialize)]
-pub struct LocalShell {
-    id: String,
-    label: String,
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn list_local_shells() -> Result<Vec<LocalShell>> {
-    Ok(tokio::task::spawn_blocking(aht_ssh::default_local_shells)
-        .await
-        .map_err(err)?
-        .into_iter()
-        .map(|s| LocalShell {
-            id: s.id,
-            label: s.label,
-        })
-        .collect())
-}
-
 #[tauri::command(rename_all = "snake_case")]
 pub async fn open_local_session(
     app: AppHandle,

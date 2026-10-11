@@ -35,11 +35,6 @@ impl McpToken {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// Value for an `Authorization` header: `Bearer <token>`.
-    pub fn bearer_header(&self) -> String {
-        format!("Bearer {}", self.0)
-    }
 }
 
 impl fmt::Debug for McpToken {

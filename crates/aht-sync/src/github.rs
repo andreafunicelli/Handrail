@@ -11,7 +11,7 @@
 //! - `PATCH /repos/{o}/{r}/git/refs/heads/{branch}`     `force: false`; 422 => `Conflict`
 //! - `PUT  /repos/{o}/{r}/contents/{path}`              first file of an empty repo (the Git
 //!   Data API refuses empty repositories)
-//! - `GET  /repos/{o}/{r}`, `POST /user/repos`          `ensure_repo` / `create_private_repo`
+//! - `GET  /repos/{o}/{r}`, `POST /user/repos`          `ensure_repo` / `create_private_repo_at`
 //!
 //! The branch must already exist unless the repository is completely empty.
 
@@ -136,11 +136,6 @@ pub async fn create_private_repo_at(base: &str, token: &str, name: &str) -> Resu
     } else {
         Err(http_err(status, &body))
     }
-}
-
-/// Create a private repository named `name` for the authenticated user.
-pub async fn create_private_repo(token: &str, name: &str) -> Result<()> {
-    create_private_repo_at(DEFAULT_API_BASE, token, name).await
 }
 
 impl GitHubBackend {

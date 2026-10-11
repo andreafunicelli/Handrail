@@ -223,31 +223,10 @@ pub async fn delete_group(state: State<'_, AppState>, id: String) -> Result<()> 
     vault.delete::<Group>(&id).map(|_| ()).map_err(Error::from)
 }
 
-/// Secret metadata without the value: the UI never reads secrets back.
-#[derive(Serialize)]
-pub struct SecretMeta {
-    id: SecretId,
-    kind: SecretKind,
-    label: String,
-}
-
 #[tauri::command(rename_all = "snake_case")]
 pub async fn save_secret(state: State<'_, AppState>, secret: Secret) -> Result<SecretId> {
     put(&state, &secret).await?;
     Ok(secret.id)
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn list_secrets(state: State<'_, AppState>) -> Result<Vec<SecretMeta>> {
-    Ok(list::<Secret>(&state)
-        .await?
-        .into_iter()
-        .map(|s| SecretMeta {
-            id: s.id,
-            kind: s.kind,
-            label: s.label,
-        })
-        .collect())
 }
 
 #[tauri::command(rename_all = "snake_case")]

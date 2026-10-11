@@ -41,8 +41,6 @@ pub struct TermConfig {
     pub detect_timeout: Duration,
     /// Inject shell integration. When false, the session goes straight to Limited mode.
     pub inject: bool,
-    /// Shared output store (one per session if `None`).
-    pub output_store: Option<Arc<OutputStore>>,
     /// Bytes of head and of tail returned when output is truncated.
     pub excerpt_bytes: usize,
     /// Clear the screen after injecting the hook (local ConPTY sessions; see
@@ -64,7 +62,6 @@ impl Default for TermConfig {
             probe_quiescence: Duration::from_millis(400),
             detect_timeout: Duration::from_secs(3),
             inject: true,
-            output_store: None,
             excerpt_bytes: 4096,
             clear_after_inject: false,
             agent_target: true,
@@ -750,7 +747,7 @@ impl TermSession {
             nest_candidate: false,
             nesting: false,
         };
-        let store = cfg.output_store.clone().unwrap_or_default();
+        let store = Arc::<OutputStore>::default();
         let shared = Arc::new(Shared {
             transport,
             inner: Mutex::new(inner),
@@ -810,10 +807,6 @@ impl TermSession {
 
     pub fn policy(&self) -> Policy {
         self.s.inner.lock().unwrap().policy.clone()
-    }
-
-    pub fn output_store(&self) -> Arc<OutputStore> {
-        self.s.store.clone()
     }
 
     /// User keystrokes from the terminal UI.
