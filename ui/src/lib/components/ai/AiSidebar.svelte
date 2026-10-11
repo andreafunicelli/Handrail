@@ -21,7 +21,7 @@
     { key: "services", label: "tpl.services", text: "tpl.services.text" },
   ];
 
-  const session = $derived(sessions.activeSession);
+  const session = $derived(sessions.contextSession);
   const sid = $derived(session?.session_id ?? null);
   const chat = $derived(sid ? agent.chats[sid] : undefined);
   const brain = $derived(agent.brainFor(sid));

@@ -134,11 +134,12 @@ class Agent {
     );
   }
 
-  async send(sessionId: string, message: string) {
+  /** `display`: what the chat shows for the message when it carries context (file contents). */
+  async send(sessionId: string, message: string, display?: string) {
     const brain = this.brainFor(sessionId);
     if (!brain) return;
     const chat = this.chat(sessionId);
-    chat.items.push({ kind: "user", id: nid(), text: message });
+    chat.items.push({ kind: "user", id: nid(), text: display ?? message });
     chat.lastMessage = message;
     try {
       const { run_id } = await api.agentSend(sessionId, $state.snapshot(brain.brain) as Brain, message);

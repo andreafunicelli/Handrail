@@ -257,8 +257,8 @@ export function createMockApi(): Api {
       file("/root/.bashrc", 3106, 86400 * 200);
       dir("/etc", 86400 * 2);
       dir("/etc/nginx", 86400 * 2);
-      file("/etc/hostname", 9, 86400 * 300);
-      file("/etc/nginx/nginx.conf", 1482, 86400 * 2);
+      file("/etc/hostname", new TextEncoder().encode(textOf("/etc/hostname")).length, 86400 * 300);
+      file("/etc/nginx/nginx.conf", new TextEncoder().encode(textOf("/etc/nginx/nginx.conf")).length, 86400 * 2);
     }
     dir(`${home}/app`);
     dir(`${home}/logs`, 600);
@@ -273,6 +273,17 @@ export function createMockApi(): Api {
     files.set(`${home}/latest.log`, { kind: "file", size: 18_400_000, modified: now - 600, permissions: 0o120777, link: true });
     files.set(`${home}/old-release`, { kind: "symlink", size: 0, modified: now - 86400 * 40, permissions: 0o120777, link: true });
   }
+  /** Contents of the fake text files (others read as a one-line placeholder). */
+  const texts = new Map<string, string>([
+    [
+      "/etc/nginx/nginx.conf",
+      "user www-data;\nworker_processes auto;\npid /run/nginx.pid;\n\nevents {\n    worker_connections 768;\n}\n\nhttp {\n    sendfile on;\n    tcp_nopush on;\n    types_hash_max_size 2048;\n\n    include /etc/nginx/mime.types;\n    default_type application/octet-stream;\n\n    access_log /var/log/nginx/access.log;\n    error_log /var/log/nginx/error.log;\n\n    gzip off;\n\n    include /etc/nginx/conf.d/*.conf;\n    include /etc/nginx/sites-enabled/*;\n}\n",
+    ],
+    ["/etc/hostname", "dev-box\n"],
+  ]);
+  const textOf = (path: string) => texts.get(path) ?? `# ${baseName(path)}\n`;
+  /** Agent edit proposals waiting for the user. */
+  const pendingEdits = new Map<string, (r: { outcome: string; note: string | null }) => void>();
   /** Sessions whose root SFTP server runs (mock sudo password: anything but "wrong"). */
   const sudoed = new Set<string>();
   function sshShell(session_id: string, root = false, path = "", write = false) {
@@ -449,6 +460,7 @@ export function createMockApi(): Api {
       }
       return true;
     };
+    if (/nginx|gzip|config/i.test(message) && !sh.local) return proposeNginx();
     const wantsUptime = /uptime|load/i.test(message);
     const command = wantsUptime ? "uptime" : "df -h";
     const host = sh.info.host ?? "this host";
@@ -530,6 +542,41 @@ export function createMockApi(): Api {
 
     function finishCancelled() {
       ev({ type: "error", message: "Run cancelled — you took over the terminal.", retryable: false });
+      ev({ type: "done" });
+    }
+
+    /** Demo of propose_file_edit: turn gzip on in nginx.conf and wait for the user. */
+    async function proposeNginx() {
+      const path = "/etc/nginx/nginx.conf";
+      if (!(await stream(`I'll enable gzip compression in \`${path}\`. Here is the change for you to review.\n\n`))) return finishCancelled();
+      const original = textOf(path);
+      const proposed = original.replace("    gzip off;\n", "    gzip on;\n    gzip_comp_level 5;\n    gzip_types text/plain text/css application/json application/javascript;\n");
+      const call_id = uuid();
+      const input = { session_id, path, content: proposed, reason: "Enable gzip for text responses" };
+      ev({ type: "tool_call", call_id, name: "propose_file_edit", input });
+      const proposal_id = uuid();
+      const n = files.get(path)!;
+      const decided = new Promise<{ outcome: string; note: string | null }>((resolve) => pendingEdits.set(proposal_id, resolve));
+      emit("edit://proposal", {
+        proposal_id,
+        session_id,
+        path,
+        root: sudoed.has(session_id),
+        original,
+        stamp: { size: n.size, modified: n.modified },
+        proposed,
+        reason: input.reason,
+        actor_label: actor,
+      });
+      const r = await decided;
+      ev({ type: "tool_result", call_id, output: { outcome: r.outcome, path, note: r.note }, is_error: false });
+      await stream(
+        r.outcome === "saved"
+          ? "Saved. Check the syntax and reload nginx with `sudo nginx -t && sudo systemctl reload nginx`."
+          : r.outcome === "rejected"
+            ? `Understood, I left the file as it was${r.note ? ` (${r.note})` : ""}.`
+            : `The save failed: ${r.note ?? "unknown error"}.`,
+      );
       ev({ type: "done" });
     }
   }
@@ -789,6 +836,35 @@ export function createMockApi(): Api {
       await transfer(transfer_id, size);
       files.set(remote, { kind: "file", size, modified: Math.floor(Date.now() / 1000), permissions: 0o100644 });
       return remote;
+    },
+    async sftpReadText(session_id, path, root = false) {
+      sshShell(session_id, root, path);
+      const n = files.get(path);
+      if (!n) throw fail("not_found", `No such file: ${path}`);
+      if (n.kind !== "file") throw fail("invalid", `${path} is not a file`);
+      if (/\.(gz|zip|tar|png|jpg|bin)$/.test(path)) throw fail("invalid", `${path} is a binary file`);
+      const text = textOf(path);
+      return { text, stamp: { size: n.size, modified: n.modified } };
+    },
+    async sftpWriteText(session_id, path, text, expected, backup, root = false) {
+      sshShell(session_id, root, path, true);
+      await sleep(150);
+      const n = files.get(path);
+      const current = n ? { size: n.size, modified: n.modified } : null;
+      if (JSON.stringify(current) !== JSON.stringify(expected)) throw fail("busy", "changed_on_server");
+      if (backup && n) {
+        texts.set(`${path}.bak`, textOf(path));
+        files.set(`${path}.bak`, { ...n });
+      }
+      texts.set(path, text);
+      const modified = Math.max(Math.floor(Date.now() / 1000), (n?.modified ?? 0) + 1);
+      const node = { kind: "file" as const, size: new TextEncoder().encode(text).length, modified, permissions: n?.permissions ?? 0o100644 };
+      files.set(path, node);
+      return { size: node.size, modified: node.modified };
+    },
+    async editProposalDecide(proposal_id, outcome, note) {
+      pendingEdits.get(proposal_id)?.({ outcome, note });
+      pendingEdits.delete(proposal_id);
     },
     async pickFiles() {
       return ["/Users/dev/Desktop/report.pdf"];

@@ -1,5 +1,9 @@
 import type {
   FileEntry,
+  FileStamp,
+  TextFile,
+  EditProposal,
+  EditOutcome,
   TransferProgress,
   Snippet,
   S3Account,
@@ -47,6 +51,9 @@ export interface EventMap {
   "session://host_key": HostKeyEvent;
   "session://auth_prompt": AuthPromptEvent;
   "transfer://progress": TransferProgress;
+  "edit://proposal": EditProposal;
+  /** A proposal ended without the user (agent cancelled or timed out): drop its diff. */
+  "edit://resolved": string;
   "approval://requested": ApprovalRequest;
   "agent://event": AgentEventEnvelope;
   "sync://status": SyncStatus;
@@ -107,6 +114,16 @@ export interface Api {
   sftpDownload(sessionId: string, path: string, transferId: string, root?: boolean): Promise<string>;
   /** Upload a local file into `dir`; resolves with the remote path. */
   sftpUpload(sessionId: string, localPath: string, dir: string, transferId: string, root?: boolean): Promise<string>;
+  /** UTF-8 text up to 5 MB (binary files are refused). */
+  sftpReadText(sessionId: string, path: string, root?: boolean): Promise<TextFile>;
+  /**
+   * Save in place. `expected`: the stamp from the read (null for a new file); a file changed
+   * since rejects with `{ kind: "busy", message: "changed_on_server" }`. `backup` copies the
+   * current file to `<path>.bak` first.
+   */
+  sftpWriteText(sessionId: string, path: string, text: string, expected: FileStamp | null, backup: boolean, root?: boolean): Promise<FileStamp>;
+  /** Answer an agent's proposed edit (after saving it, when accepted). */
+  editProposalDecide(proposalId: string, outcome: EditOutcome, note: string | null): Promise<void>;
   /** Native file picker; empty when cancelled. */
   pickFiles(): Promise<string[]>;
 

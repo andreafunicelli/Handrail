@@ -217,6 +217,30 @@ export interface FileEntry {
   /** Unix mode bits (type and permissions). */
   permissions: number | null;
 }
+/** What a file looked like when read; a save compares it to notice changes made meanwhile. */
+export interface FileStamp {
+  size: number;
+  modified: number | null;
+}
+export interface TextFile {
+  text: string;
+  stamp: FileStamp;
+}
+/** An agent's proposed new contents for a file, shown as a diff (event "edit://proposal"). */
+export interface EditProposal {
+  proposal_id: string;
+  session_id: SessionId;
+  path: string;
+  /** Read through the root SFTP server; saving must use it too. */
+  root: boolean;
+  /** Current contents; null for a new file. */
+  original: string | null;
+  stamp: FileStamp | null;
+  proposed: string;
+  reason: string | null;
+  actor_label: string;
+}
+export type EditOutcome = "saved" | "rejected" | "failed";
 export interface TransferProgress {
   transfer_id: string;
   done: number;

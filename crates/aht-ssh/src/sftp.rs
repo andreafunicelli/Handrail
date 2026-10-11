@@ -37,6 +37,14 @@ pub struct RemoteEntry {
     pub permissions: Option<u32>,
 }
 
+/// What a file looked like when read, to notice someone else changing it before a save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileStamp {
+    pub size: u64,
+    /// Seconds since the Unix epoch.
+    pub modified: Option<u32>,
+}
+
 /// An SFTP session on one SSH connection.
 pub struct Sftp {
     session: SftpSession,
@@ -340,6 +348,57 @@ impl Sftp {
         }
         dst.close().await.map_err(io_err)?;
         Ok(done)
+    }
+
+    /// Size and modification time of `path` (following links).
+    pub async fn stamp(&self, path: &str) -> Result<FileStamp> {
+        let m = self.session.metadata(path).await.map_err(sftp_err)?;
+        Ok(FileStamp {
+            size: m.size.unwrap_or(0),
+            modified: m.mtime,
+        })
+    }
+
+    /// The whole file, refusing files over `limit` bytes.
+    pub async fn read_all(&self, path: &str, limit: u64) -> Result<Vec<u8>> {
+        let mut f = self.session.open(path).await.map_err(sftp_err)?;
+        let size = f.metadata().await.map_err(sftp_err)?.size.unwrap_or(0);
+        if size > limit {
+            return Err(Error::Invalid(format!(
+                "{path} is {size} bytes; files over {limit} bytes are not opened"
+            )));
+        }
+        let mut out = Vec::with_capacity(size as usize);
+        let mut buf = vec![0u8; CHUNK];
+        let read = async {
+            loop {
+                let n = f.read(&mut buf).await?;
+                if n == 0 {
+                    return Ok(());
+                }
+                out.extend_from_slice(&buf[..n]);
+                if out.len() as u64 > limit {
+                    return Err(std::io::Error::other(format!(
+                        "{path} grew past {limit} bytes"
+                    )));
+                }
+            }
+        }
+        .await;
+        let _ = f.close().await;
+        read.map_err(io_err)?;
+        Ok(out)
+    }
+
+    /// Replace the contents of `path` in place (created if missing). Writing into the existing
+    /// file keeps its owner and permissions, unlike writing a copy and renaming it.
+    pub async fn write_all(&self, path: &str, data: &[u8]) -> Result<()> {
+        let mut f = self.session.create(path).await.map_err(sftp_err)?;
+        for chunk in data.chunks(CHUNK) {
+            f.write_all(chunk).await.map_err(io_err)?;
+        }
+        f.close().await.map_err(io_err)?;
+        Ok(())
     }
 
     pub async fn close(&self) {

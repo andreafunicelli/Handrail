@@ -12,8 +12,9 @@ use aht_core::model::{
     SshAuth,
 };
 use aht_core::terminal::{
-    Actor, CommandResult, ConnectionSummary, ControlKey, OutputChunk, RunCommandRequest,
-    SessionInfo, TerminalTools, Transport, TransportEvent,
+    Actor, CommandResult, ConnectionSummary, ControlKey, FileEditOutcome, FileEditRequest,
+    FileEditResult, OutputChunk, RunCommandRequest, SessionInfo, TerminalTools, Transport,
+    TransportEvent,
 };
 use aht_core::{ApprovalId, ConnectionId, Error, OutputId, Result, SessionId};
 use aht_harness::{HeadlessRun, LaunchContext, LaunchMode, LaunchSpec};
@@ -67,12 +68,15 @@ struct HarnessChat {
 type LoginAnswers = Option<Vec<Zeroizing<String>>>;
 
 type PendingApprovals = HashMap<ApprovalId, (SessionId, oneshot::Sender<ApprovalDecision>)>;
+/// File edits an agent proposed, by proposal id: the file's path and where the answer goes.
+type PendingEdits = HashMap<String, (String, oneshot::Sender<FileEditResult>)>;
 
 #[derive(Default)]
 pub struct TerminalHub {
     app: std::sync::OnceLock<AppHandle>,
     sessions: RwLock<HashMap<SessionId, SessionEntry>>,
     approvals: std::sync::Mutex<PendingApprovals>,
+    edits: std::sync::Mutex<PendingEdits>,
     /// Sessions an agent opened itself (via `open_session`), added to its scope.
     grants: std::sync::Mutex<HashMap<String, HashSet<SessionId>>>,
     host_keys: Mutex<HashMap<String, oneshot::Sender<bool>>>,
@@ -929,6 +933,140 @@ impl TerminalTools for Tools {
             .send_keys(&self.scoped(actor), &keys)
             .await
     }
+
+    async fn propose_file_edit(
+        &self,
+        actor: &Actor,
+        req: FileEditRequest,
+    ) -> Result<FileEditResult> {
+        let actor = self.scoped(actor);
+        if !actor.may_access(req.session_id) {
+            return Err(Error::Denied("session outside the actor's scope".into()));
+        }
+        propose_edit(&self.app, &actor, req).await
+    }
+}
+
+// ---------- file edits proposed by agents ----------
+
+/// Largest file an agent may propose.
+const MAX_PROPOSED_FILE: usize = 1024 * 1024;
+const EDIT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// Shown in the editor as a diff against the current file.
+#[derive(Clone, Serialize)]
+struct EditProposal {
+    proposal_id: String,
+    session_id: SessionId,
+    path: String,
+    /// Proposed through the root (sudo) SFTP server: saving needs it too.
+    root: bool,
+    /// Current contents and stamp; `None` for a new file.
+    original: Option<String>,
+    stamp: Option<crate::sftp::Stamp>,
+    proposed: String,
+    reason: Option<String>,
+    actor_label: String,
+}
+
+/// Removes a pending edit when its wait ends for any reason; the UI then drops its diff.
+struct EditGuard<'a> {
+    app: &'a AppHandle,
+    id: String,
+}
+
+impl Drop for EditGuard<'_> {
+    fn drop(&mut self) {
+        if hub(self.app)
+            .edits
+            .lock()
+            .unwrap()
+            .remove(&self.id)
+            .is_some()
+        {
+            let _ = self.app.emit("edit://resolved", self.id.clone());
+        }
+    }
+}
+
+async fn propose_edit(
+    app: &AppHandle,
+    actor: &Actor,
+    req: FileEditRequest,
+) -> Result<FileEditResult> {
+    if !req.path.starts_with('/') {
+        return Err(Error::Invalid("path must be absolute".into()));
+    }
+    if req.content.len() > MAX_PROPOSED_FILE {
+        return Err(Error::Invalid("files over 1 MiB cannot be proposed".into()));
+    }
+    let state = app.state::<AppState>();
+    // Read (and later save) as root when the user's file browser runs as root.
+    let root = hub(app)
+        .sftp
+        .lock()
+        .await
+        .contains_key(&(req.session_id, true));
+    let sftp = crate::sftp::client(&state, req.session_id, Some(root)).await?;
+    let (original, stamp) = match crate::sftp::read_text(&sftp, &req.path).await {
+        Ok(t) => (Some(t.text), Some(t.stamp)),
+        Err(Error::NotFound(_)) => (None, None),
+        Err(e) => return Err(e),
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = oneshot::channel();
+    hub(app)
+        .edits
+        .lock()
+        .unwrap()
+        .insert(id.clone(), (req.path.clone(), tx));
+    let _guard = EditGuard {
+        app,
+        id: id.clone(),
+    };
+    let _ = app.emit(
+        "edit://proposal",
+        EditProposal {
+            proposal_id: id,
+            session_id: req.session_id,
+            path: req.path.clone(),
+            root,
+            original,
+            stamp,
+            proposed: req.content,
+            reason: req.reason,
+            actor_label: actor.label.clone(),
+        },
+    );
+    let rejected = |note: &str| FileEditResult {
+        outcome: FileEditOutcome::Rejected,
+        path: req.path.clone(),
+        note: Some(note.into()),
+    };
+    Ok(match tokio::time::timeout(EDIT_TIMEOUT, rx).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => rejected("cancelled"),
+        Err(_) => rejected("no answer within 30 minutes"),
+    })
+}
+
+/// The user's answer to a proposed edit (after saving, for an accepted one).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn edit_proposal_decide(
+    state: tauri::State<'_, AppState>,
+    proposal_id: String,
+    outcome: FileEditOutcome,
+    note: Option<String>,
+) -> Result<()> {
+    let pending = state.terminal.edits.lock().unwrap().remove(&proposal_id);
+    if let Some((path, tx)) = pending {
+        let _ = tx.send(FileEditResult {
+            outcome,
+            path,
+            note: note.filter(|n| !n.trim().is_empty()),
+        });
+    }
+    Ok(())
 }
 
 // ---------- agents ----------

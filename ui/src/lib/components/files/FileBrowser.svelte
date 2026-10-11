@@ -10,7 +10,10 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
   import { ui } from "../../stores/ui.svelte";
-  import { isFolder, needsSudoPassword, type FileBackend } from "../../util/fileBackends";
+  import { editable, isFolder, type FileBackend } from "../../util/fileBackends";
+  import { editors } from "../../stores/editors.svelte";
+  import { sessions } from "../../stores/sessions.svelte";
+  import { sudo } from "../../stores/sudo.svelte";
   import { joinPath, modeString, parentDir, validName } from "../../util/files";
   import { formatBytes, relativeTime } from "../../util/time";
 
@@ -25,8 +28,6 @@
     void base.key;
     rootFs = null;
   });
-  /** The sudo password dialog. */
-  let sudoAsk = $state<{ password: string; error: string | null; busy: boolean } | null>(null);
 
   let path = $state("");
   let pathInput = $state("");
@@ -67,29 +68,19 @@
       rootFs = null;
       return refresh();
     }
-    await becomeRoot(null);
+    await becomeRoot();
   }
 
   /** Start the root SFTP server; asks for the sudo password when sudo needs one. */
-  async function becomeRoot(password: string | null) {
-    if (!base.asRoot) return;
+  async function becomeRoot() {
     try {
-      const r = await base.asRoot(password);
+      const r = await sudo.elevate(base);
+      if (!r) return;
       rootFs = r;
-      sudoAsk = null;
       await go(wanted || path || (await r.home()));
     } catch (e) {
-      if (password === null && needsSudoPassword(e)) sudoAsk = { password: "", error: null, busy: false };
-      else if (sudoAsk) sudoAsk = { password: "", error: errorMessage(e), busy: false };
-      else toasts.error(e);
+      toasts.error(e);
     }
-  }
-
-  function submitSudo(ev: SubmitEvent) {
-    ev.preventDefault();
-    if (!sudoAsk?.password) return;
-    sudoAsk.busy = true;
-    void becomeRoot(sudoAsk.password);
   }
 
   onMount(async () => {
@@ -103,7 +94,17 @@
 
   function open(e: FileEntry) {
     if (e.kind === "dir") void go(e.path);
+    else if (editable(fs, e)) void edit(e);
     else void download(e);
+  }
+
+  /** Open a text file in the editor (as root while the browser is). */
+  async function edit(e: FileEntry) {
+    try {
+      sessions.openEditor(await editors.open(fs, e.path));
+    } catch (err) {
+      toasts.error(err);
+    }
   }
 
   async function download(e: FileEntry) {
@@ -165,6 +166,7 @@
       x: ev.clientX,
       y: ev.clientY,
       items: [
+        ...(isFile && fs.readText ? [{ label: t("files.edit"), icon: "edit" as const, action: () => edit(e) }] : []),
         isFile ? { label: t("files.download"), icon: "download", action: () => download(e) } : { label: t("files.open"), icon: "folder", action: () => go(e.path) },
         { label: t("files.copyPath"), icon: "copy", action: () => void navigator.clipboard?.writeText(e.path).catch(() => {}) },
         "sep",
@@ -258,22 +260,6 @@
 </div>
 
 {#if menu}<ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />{/if}
-
-{#if sudoAsk}
-  {@const sa = sudoAsk}
-  <Modal label={t("files.sudoTitle")} onclose={() => (sudoAsk = null)} width="380px">
-    <form class="dialog" onsubmit={submitSudo}>
-      <h2>{t("files.sudoTitle")}</h2>
-      <p class="hint">{t("files.sudoBody")}</p>
-      <input class="input" type="password" bind:value={sa.password} aria-label={t("files.sudoPassword")} autocomplete="off" data-autofocus />
-      {#if sa.error}<p class="err-line" role="alert">{sa.error}</p>{/if}
-      <div class="actions">
-        <button type="button" class="btn ghost" onclick={() => (sudoAsk = null)}>{t("common.cancel")}</button>
-        <button class="btn primary" disabled={!sa.password || sa.busy}>{t("files.sudoGo")}</button>
-      </div>
-    </form>
-  </Modal>
-{/if}
 
 {#if naming}
   {@const n = naming}
@@ -486,15 +472,5 @@
   }
   .who.asroot {
     color: var(--warn);
-  }
-  .hint {
-    margin: 0;
-    font-size: var(--fs-meta);
-    color: var(--muted);
-  }
-  .err-line {
-    margin: 0;
-    font-size: var(--fs-meta);
-    color: var(--danger);
   }
 </style>

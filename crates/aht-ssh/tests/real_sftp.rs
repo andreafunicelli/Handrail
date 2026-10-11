@@ -103,6 +103,23 @@ async fn real_sftp_round_trip() {
     }
     sftp.remove(&join(&remote_dir, "sub"), true).await.unwrap();
 
+    // Text editing: write in place, read back, shorter content truncates, size limit holds.
+    let conf = join(&remote_dir, "app.conf");
+    sftp.write_all(&conf, b"listen = 80\nworkers = 4\n")
+        .await
+        .unwrap();
+    assert_eq!(sftp.stamp(&conf).await.unwrap().size, 24);
+    sftp.write_all(&conf, b"listen = 8080\n").await.unwrap();
+    assert_eq!(
+        sftp.read_all(&conf, 1024).await.unwrap(),
+        b"listen = 8080\n"
+    );
+    assert!(
+        sftp.read_all(&renamed, 1024).await.is_err(),
+        "over the limit"
+    );
+    sftp.remove(&conf, false).await.unwrap();
+
     // A missing file is NotFound and leaves no partial local file.
     let missing = dir.path().join("missing.bin");
     let err = sftp

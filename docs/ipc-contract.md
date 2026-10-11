@@ -46,6 +46,19 @@ SFTP runs on the SSH connection of an open SSH session (no second login); local 
 - `sftp_download({ session_id, path, transfer_id }) -> local path` (into Downloads, never
   overwrites), `sftp_upload({ session_id, local_path, dir, transfer_id }) -> remote path`
 - Event `transfer://progress` (SFTP and S3) `{ transfer_id, done, total }` (at most ten a second, plus the last)
+- Every `sftp_*` command takes `root?: bool`: use the session's root server, started by
+  `sftp_sudo({ session_id, password? })` (sudo on its own channel: `sudo -n`, then the connection's
+  saved login password, else it rejects with `auth`/`sudo_password_required` and the UI asks; the
+  password is used once and never stored)
+- Editor: `sftp_read_text({ session_id, path, root? }) -> { text, stamp: { size, modified } }`
+  (UTF-8 up to 5 MB), `sftp_write_text({ session_id, path, text, expected, backup, root? }) ->
+  stamp` (in place; `busy`/`changed_on_server` when the file changed since `expected`; `backup`
+  copies it to `<path>.bak` first)
+- Agent tool `propose_file_edit { session_id, path, content, reason? }` (built-in agent and MCP):
+  event `edit://proposal` `{ proposal_id, session_id, path, root, original, stamp, proposed,
+  reason, actor_label }`, answered with `edit_proposal_decide({ proposal_id, outcome:
+  "saved"|"rejected"|"failed", note? })` after the UI saved it; `edit://resolved` (id) when the
+  agent stopped waiting
 - Upload paths come from the native file dialog (`tauri-plugin-dialog`, `dialog:allow-open` only).
 
 ## S3
