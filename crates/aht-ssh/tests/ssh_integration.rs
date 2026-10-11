@@ -527,6 +527,42 @@ async fn keyboard_interactive_auth() {
     );
 }
 
+/// Answers wrong first, then right; records the instructions shown each time.
+struct KiRetry(Mutex<Vec<String>>);
+
+#[async_trait]
+impl KeyboardInteractiveHandler for KiRetry {
+    async fn respond(
+        &self,
+        _name: &str,
+        instr: &str,
+        _prompts: &[KiPrompt],
+    ) -> Option<Vec<Zeroizing<String>>> {
+        let mut seen = self.0.lock().unwrap();
+        seen.push(instr.to_string());
+        let answer = if seen.len() == 1 { "wrong" } else { PASSWORD };
+        Some(vec![Zeroizing::new(answer.to_string())])
+    }
+}
+
+#[tokio::test]
+async fn keyboard_interactive_retries_after_a_wrong_answer() {
+    let srv = start_server(vec![], false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let ki = Arc::new(KiRetry(Mutex::new(Vec::new())));
+    let auth = AuthMaterial::KeyboardInteractive(ki.clone());
+    SshConnection::connect(&params(srv.addr, auth), trusting(&dir))
+        .await
+        .unwrap();
+    assert_eq!(
+        *ki.0.lock().unwrap(),
+        vec![
+            "".to_string(),
+            "Permission denied, please try again.".to_string()
+        ]
+    );
+}
+
 #[tokio::test]
 async fn host_key_new_known_changed() {
     let srv = start_server(vec![], false).await;

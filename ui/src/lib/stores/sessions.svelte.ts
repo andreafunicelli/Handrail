@@ -1,5 +1,6 @@
 import { api } from "../api";
-import type { HostKeyEvent, SessionInfo } from "../api/types";
+import type { AuthPromptEvent, HostKeyEvent, SessionInfo } from "../api/types";
+import { errorMessage } from "../api/errors";
 import { b64ToBytes } from "../util/b64";
 import { uuid } from "../util/id";
 import {
@@ -34,11 +35,28 @@ export interface Workspace {
 const COLS = 120;
 const ROWS = 32;
 
+/** A pane whose SSH connection is still logging in. Its layout leaf holds `pending:<ref>`. */
+export interface PendingConnection {
+  ref: string;
+  connectionId: string;
+  label: string;
+  /** user@host, for "Connecting to …". */
+  target: string;
+  /** A login question waiting for the user. */
+  prompt: AuthPromptEvent | null;
+  error: string | null;
+}
+
+const PENDING = "pending:";
+export const isPending = (sessionId: string) => sessionId.startsWith(PENDING);
+export const pendingRef = (sessionId: string) => sessionId.slice(PENDING.length);
+
 export class Sessions {
   infos = $state<Record<string, SessionInfo>>({});
   tabs = $state<Tab[]>([]);
   activeTabId = $state<string | null>(null);
   hostKeys = $state<HostKeyEvent[]>([]);
+  pending = $state<Record<string, PendingConnection>>({});
   /** Label of the last agent that typed into each session (for the "Agent running" banner). */
   lastActor = $state<Record<string, string>>({});
   workspaces = $state<Workspace[]>(load("workspaces", []));
@@ -47,7 +65,8 @@ export class Sessions {
   activeSessionId = $derived.by(() => {
     const tab = this.activeTab;
     if (!tab) return null;
-    return (findLeaf(tab.layout, tab.activeLeaf) ?? leaves(tab.layout)[0])?.sessionId ?? null;
+    const id = (findLeaf(tab.layout, tab.activeLeaf) ?? leaves(tab.layout)[0])?.sessionId ?? null;
+    return id && !isPending(id) ? id : null;
   });
   activeSession = $derived(this.activeSessionId ? (this.infos[this.activeSessionId] ?? null) : null);
 
@@ -67,20 +86,78 @@ export class Sessions {
       this.lastActor[e.session_id] = e.actor_label;
     });
     await api.on("session://host_key", (e) => this.hostKeys.push(e));
+    await api.on("session://auth_prompt", (e) => {
+      const p = this.pending[e.prompt_ref];
+      if (p) this.pending[e.prompt_ref] = { ...p, prompt: e };
+      else void api.answerAuthPrompt(e.request_id, null);
+    });
+  }
+
+  /** Log in to `connectionId` into the pane holding `pending:<ref>`, then swap in the session. */
+  private async connect(ref: string, connectionId: string): Promise<SessionInfo | null> {
+    const c = connections.byId.get(connectionId);
+    this.pending[ref] = {
+      ref,
+      connectionId,
+      label: c?.name ?? connectionId,
+      target: c ? `${c.user}@${c.host}` : connectionId,
+      prompt: null,
+      error: null,
+    };
+    try {
+      const info = await api.openSession(connectionId, COLS, ROWS, ref);
+      if (!this.pending[ref]) {
+        // The pane was closed while logging in.
+        void api.closeSession(info.session_id).catch(() => {});
+        return null;
+      }
+      this.infos[info.session_id] = info;
+      this.swapSession(PENDING + ref, info.session_id);
+      delete this.pending[ref];
+      return info;
+    } catch (e) {
+      const p = this.pending[ref];
+      if (p) this.pending[ref] = { ...p, prompt: null, error: errorMessage(e) };
+      return null;
+    }
+  }
+
+  /** Try a failed login again in the same pane. */
+  retry(ref: string) {
+    const p = this.pending[ref];
+    if (p) void this.connect(ref, p.connectionId);
+  }
+
+  /** Answer the pane's login prompt (`null` cancels the login). */
+  async answerAuth(ref: string, answers: string[] | null) {
+    const p = this.pending[ref];
+    if (!p?.prompt) return;
+    const id = p.prompt.request_id;
+    this.pending[ref] = { ...p, prompt: null };
+    await api.answerAuthPrompt(id, answers);
+  }
+
+  private swapSession(from: string, to: string) {
+    this.tabs = this.tabs.map((t) => ({
+      ...t,
+      layout: mapLeaves(t.layout, (l) => (l.sessionId === from ? { ...l, sessionId: to } : l)),
+    }));
   }
 
   /** Replace a disconnected session in place with a fresh one for the same connection. */
   async reconnect(sessionId: string) {
     const old = this.infos[sessionId];
     if (!old) return;
-    const info = old.connection_id
-      ? await api.openSession(old.connection_id, COLS, ROWS)
-      : await api.openLocalSession(null, COLS, ROWS);
+    if (old.connection_id) {
+      const ref = uuid();
+      this.swapSession(sessionId, PENDING + ref);
+      this.dropSession(sessionId);
+      await this.connect(ref, old.connection_id);
+      return;
+    }
+    const info = await api.openLocalSession(null, COLS, ROWS);
     this.infos[info.session_id] = info;
-    this.tabs = this.tabs.map((t) => ({
-      ...t,
-      layout: mapLeaves(t.layout, (l) => (l.sessionId === sessionId ? { ...l, sessionId: info.session_id } : l)),
-    }));
+    this.swapSession(sessionId, info.session_id);
     this.dropSession(sessionId);
   }
 
@@ -92,9 +169,9 @@ export class Sessions {
   /** Open a saved connection: new tab, or a split next to the active pane. */
   async open(connectionId: string, split?: SplitDir) {
     connections.touch(connectionId);
-    const info = await api.openSession(connectionId, COLS, ROWS);
-    this.place(info, split);
-    return info;
+    const ref = uuid();
+    this.placeLeaf(PENDING + ref, split);
+    return this.connect(ref, connectionId);
   }
 
   async openLocal(shell: string | null = null, split?: SplitDir) {
@@ -106,7 +183,11 @@ export class Sessions {
   /** Put a freshly opened session into the layout. */
   place(info: SessionInfo, split?: SplitDir) {
     this.infos[info.session_id] = info;
-    const node = leaf(info.session_id);
+    this.placeLeaf(info.session_id, split);
+  }
+
+  private placeLeaf(sessionId: string, split?: SplitDir) {
+    const node = leaf(sessionId);
     const tab = this.activeTab;
     if (split && tab) {
       this.updateTab(tab.id, (t) => ({ ...t, layout: splitLeaf(t.layout, t.activeLeaf, node, split), activeLeaf: node.id }));
@@ -135,6 +216,13 @@ export class Sessions {
   }
 
   private dropSession(sessionId: string) {
+    if (isPending(sessionId)) {
+      const ref = pendingRef(sessionId);
+      const p = this.pending[ref];
+      delete this.pending[ref];
+      if (p?.prompt) void api.answerAuthPrompt(p.prompt.request_id, null);
+      return;
+    }
     void api.closeSession(sessionId).catch(() => {});
     terminals.dispose(sessionId);
     delete this.infos[sessionId];
@@ -194,8 +282,8 @@ export class Sessions {
 
   tabTitle(tab: Tab): string {
     const ls = leaves(tab.layout);
-    const first = this.infos[(findLeaf(tab.layout, tab.activeLeaf) ?? ls[0]).sessionId];
-    const title = first?.title ?? "…";
+    const id = (findLeaf(tab.layout, tab.activeLeaf) ?? ls[0]).sessionId;
+    const title = this.infos[id]?.title ?? (isPending(id) ? this.pending[pendingRef(id)]?.label : null) ?? "…";
     return ls.length > 1 ? `${title} +${ls.length - 1}` : title;
   }
 
@@ -225,19 +313,25 @@ export class Sessions {
     if (!ws) return;
     for (const layout of ws.tabs) {
       const mapping = new Map<string, string>();
+      const logins: [string, string][] = [];
       for (const l of leaves(layout)) {
-        const ref = l.sessionId;
-        const info =
-          ref === "local" || !connections.byId.has(ref)
-            ? await api.openLocalSession(null, COLS, ROWS)
-            : await api.openSession(ref, COLS, ROWS);
-        this.infos[info.session_id] = info;
-        mapping.set(l.id, info.session_id);
+        const conn = l.sessionId;
+        if (conn === "local" || !connections.byId.has(conn)) {
+          const info = await api.openLocalSession(null, COLS, ROWS);
+          this.infos[info.session_id] = info;
+          mapping.set(l.id, info.session_id);
+        } else {
+          const ref = uuid();
+          logins.push([ref, conn]);
+          mapping.set(l.id, PENDING + ref);
+        }
       }
       const fresh = mapLeaves(layout, (l) => ({ ...leaf(mapping.get(l.id)!) }));
       const t: Tab = { id: uuid(), layout: fresh, activeLeaf: leaves(fresh)[0].id };
       this.tabs.push(t);
       this.activeTabId = t.id;
+      // Each pane logs in on its own (and may ask for a password).
+      for (const [ref, conn] of logins) void this.connect(ref, conn);
     }
   }
 }

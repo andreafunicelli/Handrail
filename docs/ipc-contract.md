@@ -7,6 +7,8 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 ## Vault
 - `vault_status() -> { initialized: bool, locked: bool }`
 - `vault_create({ password }) -> { secret_key: string }` — Secret Key shown once (Emergency Kit)
+- `open_url({ url }) -> ()` — opens an https link in the default browser (the webview ignores
+  `target="_blank"`); anything but plain https is refused
 - `save_emergency_kit({ contents }) -> string` — writes `Handrail Emergency Kit.txt` to Downloads
   (never overwrites; owner-only on Unix) and returns the path. The webview cannot save `blob:` downloads.
 - `vault_unlock({ password, secret_key? }) -> void` (secret_key needed only on a new device)

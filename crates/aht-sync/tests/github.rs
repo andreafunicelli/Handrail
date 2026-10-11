@@ -327,14 +327,27 @@ fn path_regex_blobs() -> wiremock::matchers::PathRegexMatcher {
 }
 
 #[tokio::test]
-async fn repo_exists_is_true_false_or_an_error() {
-    for (status, want) in [(200, Some(true)), (404, Some(false)), (401, None)] {
-        let s = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/repos/me/vault"))
-            .respond_with(ResponseTemplate::new(status).set_body_json(json!({})))
-            .mount(&s)
-            .await;
-        assert_eq!(backend(&s).repo_exists().await.ok(), want, "{status}");
-    }
+async fn current_name_follows_a_rename() {
+    let s = MockServer::start().await;
+    // GitHub answers the old name with the renamed repository.
+    Mock::given(method("GET"))
+        .and(path("/repos/me/vault"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "name": "handrail-vault",
+            "owner": { "login": "me" },
+        })))
+        .mount(&s)
+        .await;
+    assert_eq!(
+        backend(&s).current_name().await.unwrap(),
+        Some(("me".to_string(), "handrail-vault".to_string()))
+    );
+
+    let gone = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/me/vault"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({})))
+        .mount(&gone)
+        .await;
+    assert_eq!(backend(&gone).current_name().await.unwrap(), None);
 }

@@ -193,6 +193,17 @@ export interface HostKeyEvent {
   /** Contract addition (optional): key algorithm, e.g. "ssh-ed25519". */
   key_type?: string;
 }
+/** The server asks something while logging in (password, OTP) for a connection without saved
+ *  credentials. Answer with `answerAuthPrompt`, one answer per prompt. */
+export interface AuthPromptEvent {
+  request_id: string;
+  /** The `promptRef` passed to `openSession`. */
+  prompt_ref: string;
+  name: string;
+  /** Shown above the prompts, e.g. "Permission denied, please try again." */
+  instructions: string;
+  prompts: { prompt: string; echo: boolean }[];
+}
 export interface AgentEventEnvelope {
   run_id: string;
   session_id: SessionId;

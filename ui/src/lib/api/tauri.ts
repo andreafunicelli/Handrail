@@ -27,7 +27,9 @@ export function createTauriApi(): Api {
     deleteGroup: (id) => invoke("delete_group", { id }),
     saveSecret: (secret) => invoke("save_secret", { secret }),
 
-    openSession: (connection_id, cols, rows) => invoke("open_session", { connection_id, cols, rows }),
+    openSession: (connection_id, cols, rows, prompt_ref) =>
+      invoke("open_session", { connection_id, cols, rows, prompt_ref: prompt_ref ?? null }),
+    answerAuthPrompt: (request_id, answers) => invoke("auth_prompt_answer", { request_id, answers }),
     openLocalSession: (shell, cols, rows) => invoke("open_local_session", { shell, cols, rows }),
     sessionWrite: (session_id, data_b64) => invoke("session_write", { session_id, data_b64 }),
     sessionResize: (session_id, cols, rows) => invoke("session_resize", { session_id, cols, rows }),
@@ -104,6 +106,7 @@ export function createTauriApi(): Api {
       });
     },
     restartApp: () => invoke("restart_app"),
+    openUrl: (url) => invoke("open_url", { url }),
     syncSetAuto: (enabled) => invoke("sync_set_auto", { enabled }),
     syncDisconnect: () => invoke("sync_disconnect"),
     syncFolderPresets: () => invoke("sync_folder_presets"),

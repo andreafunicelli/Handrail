@@ -195,7 +195,7 @@ pub async fn list_models(state: State<'_, AppState>, provider_id: String) -> Res
 
 const SYNC_TOKEN_KEY: &str = "sync.github_token";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SyncConfig {
     Github {
@@ -393,13 +393,12 @@ pub async fn sync_configure_github_poll(state: State<'_, AppState>) -> Result<Po
     *state.github_device.lock().await = None;
     let owner = github_login(&token).await?;
     // Accounts set up before the rename keep their existing vault repository.
+    // `current_name` also resolves a legacy repository the user has since renamed.
     let legacy = GitHubBackend::new(&owner, LEGACY_VAULT_REPO, "main", &token);
-    let repo = if legacy.repo_exists().await.map_err(Error::from)? {
-        LEGACY_VAULT_REPO
-    } else {
-        VAULT_REPO
-    }
-    .to_string();
+    let repo = match legacy.current_name().await.map_err(Error::from)? {
+        Some((_, name)) => name,
+        None => VAULT_REPO.to_string(),
+    };
     let backend = GitHubBackend::new(&owner, &repo, "main", &token);
     backend.ensure_repo().await.map_err(Error::from)?;
     store_token(&state, token).await?;
@@ -488,6 +487,35 @@ pub async fn sync_configure_folder(state: State<'_, AppState>, path: PathBuf) ->
     configure(&state, SyncConfig::Folder { path }).await
 }
 
+/// A GitHub vault repository renamed on github.com (e.g. aihubterm-vault → handrail-vault)
+/// keeps answering reads under the old name, but writes fail; switch to the current name.
+async fn follow_github_rename(state: &AppState, cfg: SyncConfig) -> Result<SyncConfig> {
+    let SyncConfig::Github {
+        owner,
+        repo,
+        branch,
+    } = &cfg
+    else {
+        return Ok(cfg);
+    };
+    let probe = GitHubBackend::new(owner, repo, branch, github_token(state).await?);
+    match probe.current_name().await.map_err(Error::from)? {
+        Some((new_owner, new_repo)) if (&new_owner, &new_repo) != (owner, repo) => {
+            tracing::info!(from = %format!("{owner}/{repo}"), to = %format!("{new_owner}/{new_repo}"), "GitHub vault repository was renamed");
+            Ok(SyncConfig::Github {
+                owner: new_owner,
+                repo: new_repo,
+                branch: branch.clone(),
+            })
+        }
+        Some(_) => Ok(cfg),
+        None => Err(Error::NotFound(format!(
+            "GitHub repository {owner}/{repo} not found. If it was deleted or this account lost \
+             access, connect GitHub again in Settings › Sync."
+        ))),
+    }
+}
+
 async fn backend(state: &AppState, cfg: &SyncConfig) -> Result<Box<dyn SyncBackend>> {
     Ok(match cfg {
         SyncConfig::Folder { path } => Box::new(FolderBackend::new(path.clone())),
@@ -508,10 +536,16 @@ async fn backend(state: &AppState, cfg: &SyncConfig) -> Result<Box<dyn SyncBacke
 /// The user then unlocks with master password + Secret Key.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sync_join(state: State<'_, AppState>) -> Result<()> {
-    let f = load_sync(&state);
+    let mut f = load_sync(&state);
     let cfg = f
         .config
+        .clone()
         .ok_or_else(|| Error::Invalid("sync not configured".into()))?;
+    let cfg = follow_github_rename(&state, cfg).await?;
+    if f.config.as_ref() != Some(&cfg) {
+        f.config = Some(cfg.clone());
+        save_sync(&state, &f)?;
+    }
     let b = backend(&state, &cfg).await?;
     let manifest = aht_sync::fetch_manifest(b.as_ref())
         .await
@@ -554,6 +588,9 @@ async fn sync_round(state: &AppState, f: &mut SyncFile) -> Result<SyncReport> {
         .config
         .clone()
         .ok_or_else(|| Error::Invalid("sync not configured".into()))?;
+    let cfg = follow_github_rename(state, cfg).await?;
+    // Saved with the rest of `f` by the caller.
+    f.config = Some(cfg.clone());
     let b = backend(state, &cfg).await?;
     // Persist a token obtained before the vault was unlocked on this device.
     // Take the token on its own line: holding this guard across store_token would deadlock.

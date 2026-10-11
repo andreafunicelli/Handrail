@@ -13,6 +13,7 @@ import type {
   HarnessKind,
   HarnessProfile,
   HostKeyEvent,
+  AuthPromptEvent,
   GithubDeviceStart,
   GithubPoll,
   ImportPreview,
@@ -40,6 +41,7 @@ export interface EventMap {
   "session://state": SessionInfo;
   "session://agent_mark": AgentMarkEvent;
   "session://host_key": HostKeyEvent;
+  "session://auth_prompt": AuthPromptEvent;
   "approval://requested": ApprovalRequest;
   "agent://event": AgentEventEnvelope;
   "sync://status": SyncStatus;
@@ -68,7 +70,11 @@ export interface Api {
   saveSecret(secret: Secret): Promise<SecretId>;
 
   // sessions
-  openSession(connectionId: string, cols: number, rows: number): Promise<SessionInfo>;
+  /** `promptRef` lets a connection without saved credentials ask for them while logging in
+   *  ("session://auth_prompt" events carry it back). */
+  openSession(connectionId: string, cols: number, rows: number, promptRef?: string): Promise<SessionInfo>;
+  /** Answer a login prompt; `null` cancels the login. */
+  answerAuthPrompt(requestId: string, answers: string[] | null): Promise<void>;
   openLocalSession(shell: string | null, cols: number, rows: number): Promise<SessionInfo>;
   sessionWrite(sessionId: string, dataB64: string): Promise<void>;
   sessionResize(sessionId: string, cols: number, rows: number): Promise<void>;
@@ -128,6 +134,8 @@ export interface Api {
    *  while the size is unknown. On Windows the installer then closes and restarts the app. */
   installUpdate(progress: (fraction: number | null) => void): Promise<void>;
   restartApp(): Promise<void>;
+  /** Opens an https link in the default browser (the webview ignores target="_blank"). */
+  openUrl(url: string): Promise<void>;
 
   // misc
   getSetting<T = unknown>(key: string): Promise<T | null>;
