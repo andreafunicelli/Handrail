@@ -36,6 +36,9 @@ pub struct AppState {
     /// Held for a whole sync round and while sync settings change: one sync at a time.
     pub sync_lock: Mutex<()>,
     pub terminal: crate::terminal::TerminalHub,
+    /// S3 clients by account id (they hold the decrypted secret): replaced when the account or
+    /// its secret changes, cleared when the vault locks.
+    pub s3: Mutex<HashMap<String, Arc<aht_s3::S3Client>>>,
 }
 
 impl AppState {
@@ -51,6 +54,7 @@ impl AppState {
             pending_github_token: Mutex::new(None),
             sync_lock: Mutex::new(()),
             terminal: crate::terminal::TerminalHub::default(),
+            s3: Mutex::new(HashMap::new()),
             paths,
         })
     }

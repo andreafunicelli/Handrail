@@ -16,7 +16,7 @@
 
 ## What it does
 
-- **Connections:** SSH connections live in nested groups. You can search them, give each environment a color and use jump hosts (ProxyJump). SFTP and MySQL are coming next.
+- **Connections:** SSH connections live in nested groups. You can search them, give each environment a color and use jump hosts (ProxyJump). MySQL is coming next.
 - **The agent types into the terminal you are looking at.** No hidden shell: every command shows up in your tab, and you can take over at any time (Esc).
 - **Approvals:**
   - Three modes: *Ask all*, *Ask writes* (reads run, writes wait for you) or *Auto*. You can approve, edit or deny each command.
@@ -34,7 +34,10 @@
   - Or through any folder (Syncthing, a network share).
   - Only ciphertext leaves the device. Sync runs automatically after edits and every few minutes.
 - **Import** from `~/.ssh/config`, PuTTY, MobaXterm, mRemoteNG, WinSCP, SecureCRT and Tabby.
-- **Keyboard-first:** a command palette (Ctrl/⌘ K), split panes, snippets and tabs.
+- **Files over SFTP:** browse, upload, download, rename and delete on any SSH session, over the same login.
+- **S3 buckets:** Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO or any S3-compatible store, in the same file browser. Keys stay in the vault.
+- **Snippets:** saved commands with `{{placeholders}}`, plus suggested read-only diagnostics (disk, memory, ports, logs, TLS expiry) to run or keep.
+- **Keyboard-first:** a command palette (Ctrl/⌘ K), split panes and tabs.
 - **Updates itself:** it checks for new releases and installs one when you click "Update and restart".
 
 ## A tour

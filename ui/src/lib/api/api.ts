@@ -1,4 +1,8 @@
 import type {
+  FileEntry,
+  TransferProgress,
+  Snippet,
+  S3Account,
   AgentEventEnvelope,
   AgentMarkEvent,
   ApprovalDecision,
@@ -42,6 +46,7 @@ export interface EventMap {
   "session://agent_mark": AgentMarkEvent;
   "session://host_key": HostKeyEvent;
   "session://auth_prompt": AuthPromptEvent;
+  "transfer://progress": TransferProgress;
   "approval://requested": ApprovalRequest;
   "agent://event": AgentEventEnvelope;
   "sync://status": SyncStatus;
@@ -88,6 +93,36 @@ export interface Api {
   saveApprovalSettings(settings: ApprovalSettings): Promise<void>;
 
   // providers / harnesses / agent
+  // files (SFTP on an SSH session's connection)
+  sftpHome(sessionId: string): Promise<string>;
+  sftpList(sessionId: string, path: string): Promise<FileEntry[]>;
+  sftpMkdir(sessionId: string, path: string): Promise<void>;
+  sftpRename(sessionId: string, from: string, to: string): Promise<void>;
+  sftpRemove(sessionId: string, path: string, isDir: boolean): Promise<void>;
+  /** Download into the Downloads folder; resolves with the local path. Progress: "transfer://progress". */
+  sftpDownload(sessionId: string, path: string, transferId: string): Promise<string>;
+  /** Upload a local file into `dir`; resolves with the remote path. */
+  sftpUpload(sessionId: string, localPath: string, dir: string, transferId: string): Promise<string>;
+  /** Native file picker; empty when cancelled. */
+  pickFiles(): Promise<string[]>;
+
+  listS3Accounts(): Promise<S3Account[]>;
+  /** `secretKey` replaces the stored secret access key when given. */
+  saveS3Account(account: S3Account, secretKey: string | null): Promise<S3Account>;
+  deleteS3Account(id: string): Promise<void>;
+  /** S3 paths are "/bucket/folder/file"; "/" lists the buckets. */
+  s3Home(accountId: string): Promise<string>;
+  s3List(accountId: string, path: string): Promise<FileEntry[]>;
+  s3Mkdir(accountId: string, path: string): Promise<void>;
+  /** Files only: S3 folders are key prefixes. */
+  s3Rename(accountId: string, from: string, to: string, isDir: boolean): Promise<void>;
+  s3Remove(accountId: string, path: string, isDir: boolean): Promise<void>;
+  s3Download(accountId: string, path: string, transferId: string): Promise<string>;
+  s3Upload(accountId: string, localPath: string, dir: string, transferId: string): Promise<string>;
+
+  listSnippets(): Promise<Snippet[]>;
+  saveSnippet(snippet: Snippet): Promise<Snippet>;
+  deleteSnippet(id: string): Promise<void>;
   listProviders(): Promise<Provider[]>;
   saveProvider(provider: Provider, apiKey?: string): Promise<Provider>;
   deleteProvider(id: string): Promise<void>;

@@ -51,6 +51,8 @@ id_type!(GroupId);
 id_type!(SecretId);
 id_type!(ProviderId);
 id_type!(HarnessProfileId);
+id_type!(SnippetId);
+id_type!(S3AccountId);
 id_type!(SessionId);
 id_type!(OutputId);
 id_type!(ApprovalId);

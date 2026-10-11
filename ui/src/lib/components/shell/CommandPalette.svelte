@@ -8,6 +8,9 @@
   import { groupPath } from "../../util/tree";
   import { needsTypedConfirm } from "../../util/approval";
   import { connections, blankConnection } from "../../stores/connections.svelte";
+  import { snippets } from "../../stores/snippets.svelte";
+  import { s3 } from "../../stores/s3.svelte";
+  import { s3Where } from "../../util/s3";
   import { sessions } from "../../stores/sessions.svelte";
   import { agent } from "../../stores/agent.svelte";
   import { settings } from "../../stores/settings.svelte";
@@ -65,6 +68,13 @@
           },
         });
       }
+    if (sid && sessions.activeSession?.connection_id)
+      out.push({ id: "files", label: t("files.open.tooltip"), hint: sessions.activeSession.title, icon: "folder", group: "actions", run: () => sessions.openFiles(sid) });
+    if (sid)
+      for (const sn of snippets.sorted)
+        out.push({ id: "sn:" + sn.id, label: t("palette.snippet", { name: sn.name }), hint: sn.command, icon: "snippet", group: "actions", run: () => snippets.use(sn, true) });
+    for (const a of s3.sorted)
+      out.push({ id: "s3:" + a.id, label: t("palette.s3", { name: a.name }), hint: s3Where(a), icon: "bucket", group: "actions", run: () => sessions.openS3(a.id) });
     for (const w of sessions.workspaces)
       out.push({ id: "w:" + w.id, label: t("palette.workspace", { name: w.name }), icon: "layout", group: "actions", run: () => sessions.openWorkspace(w.id) });
     for (const p of pages)

@@ -1,6 +1,8 @@
 mod autosync;
 mod cmd_misc;
 mod cmd_vault;
+mod s3;
+mod sftp;
 mod state;
 mod terminal;
 
@@ -78,7 +80,7 @@ fn migrate_legacy_data_dir(dir: &std::path::Path) {
 }
 
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     builder
@@ -114,6 +116,12 @@ pub fn run() {
             cmd_vault::save_group,
             cmd_vault::delete_group,
             cmd_vault::save_secret,
+            cmd_vault::list_snippets,
+            cmd_vault::save_snippet,
+            cmd_vault::delete_snippet,
+            cmd_vault::list_s3_accounts,
+            cmd_vault::save_s3_account,
+            cmd_vault::delete_s3_account,
             cmd_vault::list_providers,
             cmd_vault::save_provider,
             cmd_vault::delete_provider,
@@ -146,6 +154,20 @@ pub fn run() {
             terminal::approval_decide,
             terminal::host_key_decision,
             terminal::auth_prompt_answer,
+            sftp::sftp_home,
+            sftp::sftp_list,
+            sftp::sftp_mkdir,
+            sftp::sftp_rename,
+            sftp::sftp_remove,
+            sftp::sftp_download,
+            sftp::sftp_upload,
+            s3::s3_home,
+            s3::s3_list,
+            s3::s3_mkdir,
+            s3::s3_rename,
+            s3::s3_remove,
+            s3::s3_download,
+            s3::s3_upload,
             terminal::open_session,
             terminal::open_local_session,
             terminal::session_write,

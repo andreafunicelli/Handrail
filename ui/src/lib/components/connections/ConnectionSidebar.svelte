@@ -9,7 +9,9 @@
   import { fuzzyFilter } from "../../util/fuzzy";
   import { parseQuickConnect } from "../../util/quickconnect";
   import { groupPath, type FolderNode } from "../../util/tree";
-  import type { Connection, SessionState } from "../../api/types";
+  import type { Connection, S3Account, SessionState } from "../../api/types";
+  import { blankS3Account, s3 } from "../../stores/s3.svelte";
+  import { s3Where } from "../../util/s3";
 
   let query = $state("");
   let quick = $state("");
@@ -21,6 +23,29 @@
   let creatingFolder = $state<{ parent: string | null } | null>(null);
   let folderName = $state("");
   let dropTarget = $state<string | null>(null);
+  /** Which list the sidebar shows. */
+  let kind = $state<"ssh" | "s3">("ssh");
+
+  const s3Results = $derived(query.trim() ? fuzzyFilter(s3.list, query, (a) => [a.name, a.endpoint, a.bucket ?? "", a.region]) : s3.sorted);
+
+  function s3Menu(e: MouseEvent, a: S3Account) {
+    e.preventDefault();
+    menu = {
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { label: t("s3.open"), icon: "folder", action: () => sessions.openS3(a.id) },
+        { label: t("common.edit"), icon: "edit", action: () => s3.edit(a) },
+        "sep",
+        { label: t("common.delete"), icon: "trash", danger: true, action: () => removeS3(a) },
+      ],
+    };
+  }
+
+  async function removeS3(a: S3Account) {
+    const ok = await ui.ask(t("s3.deleteTitle", { name: a.name }), { body: t("s3.deleteBody"), confirmLabel: t("common.delete"), danger: true });
+    if (ok) await s3.remove(a.id).catch(toasts.error);
+  }
 
   const results = $derived(
     query.trim()
@@ -319,11 +344,47 @@
   </div>
 
   <div class="kinds" role="tablist">
-    <button role="tab" aria-selected="true" class="kind on">SSH</button>
+    <button role="tab" aria-selected={kind === "ssh"} class="kind" class:on={kind === "ssh"} onclick={() => (kind = "ssh")}>SSH</button>
+    <button role="tab" aria-selected={kind === "s3"} class="kind" class:on={kind === "s3"} onclick={() => (kind = "s3")}>S3</button>
     <button role="tab" aria-selected="false" class="kind" disabled>MySQL <span class="pill">{t("sidebar.soon")}</span></button>
-    <button role="tab" aria-selected="false" class="kind" disabled>SFTP <span class="pill">{t("sidebar.soon")}</span></button>
   </div>
 
+  {#if kind === "s3"}
+    <div class="tree" role="tree" aria-label={t("s3.accounts")}>
+      {#each s3Results as a (a.id)}
+        <div
+          class="row"
+          data-row
+          role="treeitem"
+          aria-selected="false"
+          tabindex="0"
+          style:--depth={0}
+          title={s3Where(a)}
+          ondblclick={() => sessions.openS3(a.id)}
+          onclick={() => ui.narrow && sessions.openS3(a.id)}
+          onkeydown={(e) => e.key === "Enter" && sessions.openS3(a.id)}
+          oncontextmenu={(e) => s3Menu(e, a)}
+        >
+          <Icon name="bucket" size={13} />
+          <span class="name">{a.name}</span>
+          <span class="meta">{s3Where(a)}</span>
+        </div>
+      {:else}
+        {#if query.trim()}
+          <p class="empty-line">{t("sidebar.noResults", { q: query })}</p>
+        {:else}
+          <div class="empty">
+            <Icon name="bucket" size={20} />
+            <strong>{t("s3.empty.title")}</strong>
+            <p>{t("s3.empty.body")}</p>
+            <div class="empty-actions">
+              <button class="btn sm primary" onclick={() => s3.edit(blankS3Account(), true)}>{t("s3.new")}</button>
+            </div>
+          </div>
+        {/if}
+      {/each}
+    </div>
+  {:else}
   <div
     class="tree"
     role="tree"
@@ -356,6 +417,7 @@
       {/if}
     {/if}
   </div>
+  {/if}
 
   <form class="quick" onsubmit={submitQuick}>
     <Icon name="bolt" size={13} />
@@ -380,6 +442,7 @@
     items={[
       { label: t("sidebar.newConnection"), icon: "server", action: () => ui.edit(blankConnection(), true) },
       { label: t("sidebar.newFolder"), icon: "folderPlus", action: () => startFolder(null) },
+      { label: t("s3.new"), icon: "bucket", action: () => s3.edit(blankS3Account(), true) },
       "sep",
       { label: t("sidebar.empty.import"), icon: "import", action: () => ui.openSettings("import") },
     ]}
@@ -405,6 +468,7 @@
   }
   .search {
     flex: 1;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 7px;

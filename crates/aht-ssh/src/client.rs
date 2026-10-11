@@ -130,13 +130,13 @@ impl client::Handler for ClientHandler {
     }
 }
 
-fn net(e: impl std::fmt::Display) -> Error {
+pub(crate) fn net(e: impl std::fmt::Display) -> Error {
     Error::Network(e.to_string())
 }
 
 /// An authenticated SSH connection (possibly tunnelled through jump hosts).
 pub struct SshConnection {
-    handle: Handle<ClientHandler>,
+    pub(crate) handle: Handle<ClientHandler>,
     /// Jump-hop connections; must outlive `handle`.
     _hops: Vec<Handle<ClientHandler>>,
     lost: SharedSlot<String>,

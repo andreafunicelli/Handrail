@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { Api } from "./api";
 import type { ApprovalSettings } from "./types";
 import { errorMessage } from "./errors";
@@ -43,6 +44,30 @@ export function createTauriApi(): Api {
       (await invoke<ApprovalSettings | null>("get_setting", { key: APPROVALS_KEY })) ?? DEFAULT_APPROVALS,
     saveApprovalSettings: (settings) => invoke("set_setting", { key: APPROVALS_KEY, value: settings }),
 
+    sftpHome: (session_id) => invoke("sftp_home", { session_id }),
+    sftpList: (session_id, path) => invoke("sftp_list", { session_id, path }),
+    sftpMkdir: (session_id, path) => invoke("sftp_mkdir", { session_id, path }),
+    sftpRename: (session_id, from, to) => invoke("sftp_rename", { session_id, from, to }),
+    sftpRemove: (session_id, path, is_dir) => invoke("sftp_remove", { session_id, path, is_dir }),
+    sftpDownload: (session_id, path, transfer_id) => invoke("sftp_download", { session_id, path, transfer_id }),
+    sftpUpload: (session_id, local_path, dir, transfer_id) => invoke("sftp_upload", { session_id, local_path, dir, transfer_id }),
+    async pickFiles() {
+      const picked = await openDialog({ multiple: true, directory: false });
+      return picked == null ? [] : Array.isArray(picked) ? picked : [picked];
+    },
+    listS3Accounts: () => invoke("list_s3_accounts"),
+    saveS3Account: (account, secret_key) => invoke("save_s3_account", { account, secret_key }),
+    deleteS3Account: (id) => invoke("delete_s3_account", { id }),
+    s3Home: (account_id) => invoke("s3_home", { account_id }),
+    s3List: (account_id, path) => invoke("s3_list", { account_id, path }),
+    s3Mkdir: (account_id, path) => invoke("s3_mkdir", { account_id, path }),
+    s3Rename: (account_id, from, to, is_dir) => invoke("s3_rename", { account_id, from, to, is_dir }),
+    s3Remove: (account_id, path, is_dir) => invoke("s3_remove", { account_id, path, is_dir }),
+    s3Download: (account_id, path, transfer_id) => invoke("s3_download", { account_id, path, transfer_id }),
+    s3Upload: (account_id, local_path, dir, transfer_id) => invoke("s3_upload", { account_id, local_path, dir, transfer_id }),
+    listSnippets: () => invoke("list_snippets"),
+    saveSnippet: (snippet) => invoke("save_snippet", { snippet }),
+    deleteSnippet: (id) => invoke("delete_snippet", { id }),
     listProviders: () => invoke("list_providers"),
     saveProvider: (provider, api_key) => invoke("save_provider", { provider, api_key: api_key || null }),
     deleteProvider: (id) => invoke("delete_provider", { id }),

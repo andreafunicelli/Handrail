@@ -98,6 +98,65 @@ describe("mock api", () => {
     expect(asked).toEqual(["", "Permission denied, please try again."]);
   });
 
+  it("saves, lists and deletes snippets", async () => {
+    const api = createMockApi();
+    const before = await api.listSnippets();
+    const s = await api.saveSnippet({ id: "s-1", name: "Uptime", command: "uptime", description: "", tags: [] });
+    expect((await api.listSnippets()).length).toBe(before.length + 1);
+    await api.saveSnippet({ ...s, command: "uptime -p" });
+    expect((await api.listSnippets()).find((x) => x.id === "s-1")?.command).toBe("uptime -p");
+    await expect(api.saveSnippet({ ...s, name: " " })).rejects.toMatchObject({ kind: "invalid" });
+    await api.deleteSnippet("s-1");
+    expect(await api.listSnippets()).toEqual(before);
+  });
+
+  it("browses, transfers and edits files over SFTP", async () => {
+    const api = createMockApi();
+    const conn = (await api.listConnections()).find((c) => c.auth.type !== "prompt")!;
+    const s = await api.openSession(conn.id, 80, 24);
+    const home = await api.sftpHome(s.session_id);
+    const listing = await api.sftpList(s.session_id, home);
+    expect(listing.map((e) => e.name)).toContain("logs");
+    expect(listing.find((e) => e.name === "current")).toMatchObject({ kind: "dir", link: true });
+    expect(listing.find((e) => e.name === "latest.log")).toMatchObject({ kind: "file", link: true });
+    await expect(api.sftpRemove(s.session_id, `${home}/current`, true)).rejects.toBeTruthy();
+    const seen: number[] = [];
+    await api.on("transfer://progress", (p) => seen.push(p.done));
+    const remote = await api.sftpUpload(s.session_id, "/tmp/x.bin", home, "t1");
+    expect(remote).toBe(`${home}/x.bin`);
+    expect(seen.at(-1)).toBeGreaterThan(0);
+    await api.sftpMkdir(s.session_id, `${home}/dir`);
+    await api.sftpRename(s.session_id, remote, `${home}/dir/y.bin`);
+    await expect(api.sftpRemove(s.session_id, `${home}/dir`, true)).rejects.toBeTruthy();
+    await api.sftpRemove(s.session_id, `${home}/dir/y.bin`, false);
+    await api.sftpRemove(s.session_id, `${home}/dir`, true);
+    await expect(api.sftpList(s.session_id, `${home}/dir`)).rejects.toMatchObject({ kind: "not_found" });
+    const local = await api.openLocalSession(null, 80, 24);
+    await expect(api.sftpHome(local.session_id)).rejects.toMatchObject({ kind: "invalid" });
+  });
+
+  it("keeps S3 accounts and browses buckets like the backend", async () => {
+    const api = createMockApi();
+    const [r2] = await api.listS3Accounts();
+    expect(await api.s3Home(r2.id)).toBe("/backups");
+    const aws = (await api.listS3Accounts()).find((a) => !a.bucket)!;
+    expect(await api.s3Home(aws.id)).toBe("/");
+    expect((await api.s3List(aws.id, "/")).map((e) => e.name)).toContain("backups");
+    const top = await api.s3List(r2.id, "/backups");
+    expect(top.map((e) => `${e.kind}:${e.name}`)).toEqual(["dir:db", "dir:site", "file:README.txt"]);
+    const up = await api.s3Upload(r2.id, "/tmp/new.txt", "/backups/db", "t1");
+    expect(up).toBe("/backups/db/new.txt");
+    await api.s3Rename(r2.id, up, "/backups/db/renamed.txt", false);
+    await expect(api.s3Rename(r2.id, "/backups/db", "/backups/x", true)).rejects.toMatchObject({ kind: "invalid" });
+    await expect(api.s3Remove(r2.id, "/backups/db", true)).rejects.toMatchObject({ kind: "invalid" });
+    await api.s3Mkdir(r2.id, "/backups/empty");
+    await api.s3Remove(r2.id, "/backups/empty", true);
+    await expect(api.s3Mkdir(r2.id, "/newbucket")).rejects.toMatchObject({ kind: "invalid" });
+    await expect(api.saveS3Account({ ...r2, id: "x", secret: null }, null)).rejects.toMatchObject({ kind: "invalid" });
+    await api.deleteS3Account(r2.id);
+    expect((await api.listS3Accounts()).some((a) => a.id === r2.id)).toBe(false);
+  });
+
   it("opens only https links", async () => {
     const api = createMockApi();
     await expect(api.openUrl("javascript:alert(1)")).rejects.toThrow();

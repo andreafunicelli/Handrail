@@ -9,6 +9,9 @@ import { joinArgs, splitArgs } from "./args";
 import { formatBytes, relativeTime } from "./time";
 import { syncChangedVault } from "../stores/vaultData";
 import type { SyncStatus } from "../api/types";
+import { joinPath, modeString, parentDir, validName } from "./files";
+import { SUGGESTED_SNIPPETS, fillPlaceholders, placeholders, snippetInput } from "./snippets";
+import { presetOf, s3Where } from "./s3";
 
 describe("fuzzy", () => {
   it("matches subsequences and rejects non-matches", () => {
@@ -186,5 +189,63 @@ describe("syncChangedVault", () => {
     expect(syncChangedVault(st(1), st(2, 2, 0, { last_error: "offline" }))).toBe(false);
     // The listener started after the sync had begun: still reloads.
     expect(syncChangedVault(null, st(2, 2))).toBe(true);
+  });
+});
+
+describe("snippets", () => {
+  it("finds placeholders once, in order, and leaves Go templates alone", () => {
+    expect(placeholders("ssh {{ user }}@{{host}} -p {{port}} # {{host}}")).toEqual(["user", "host", "port"]);
+    expect(placeholders('docker ps --format "{{.Names}}"')).toEqual([]);
+  });
+  it("fills placeholders", () => {
+    expect(fillPlaceholders("journalctl -u {{service}} -n {{ n }}", { service: "nginx", n: "50" })).toBe("journalctl -u nginx -n 50");
+    expect(fillPlaceholders('docker ps --format "{{.Names}}" {{x}}', {})).toBe('docker ps --format "{{.Names}}" ');
+  });
+  it("types lines with Enter only when running", () => {
+    expect(snippetInput("uptime\n", true, false)).toBe("uptime\r");
+    expect(snippetInput("cd /tmp\nls", true, false)).toBe("cd /tmp\rls\r");
+    expect(snippetInput("uptime", false, false)).toBe("uptime");
+  });
+  it("never presses Enter when inserting a multi-line snippet", () => {
+    expect(snippetInput("cd /tmp\nrm -rf x\n", false, true)).toBe("\x1b[200~cd /tmp\rrm -rf x\x1b[201~");
+    expect(snippetInput("cd /tmp\nls", false, false)).toBeNull();
+    expect(snippetInput("a\n\x1b[201~rm -rf /", false, true)).toBe("\x1b[200~a\rrm -rf /\x1b[201~");
+  });
+  it("suggests unique names", () => {
+    const names = SUGGESTED_SNIPPETS.map((s) => s.name);
+    expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+describe("files", () => {
+  it("formats modes like ls -l", () => {
+    expect(modeString(0o40755)).toBe("drwxr-xr-x");
+    expect(modeString(0o100600)).toBe("-rw-------");
+    expect(modeString(0o120777)).toBe("lrwxrwxrwx");
+    expect(modeString(null)).toBe("");
+  });
+  it("walks paths", () => {
+    expect(parentDir("/home/me/logs")).toBe("/home/me");
+    expect(parentDir("/home")).toBe("/");
+    expect(parentDir("/")).toBe("/");
+    expect(joinPath("/", "etc")).toBe("/etc");
+    expect(joinPath("/home/me", "a")).toBe("/home/me/a");
+  });
+  it("accepts only single path segments as names", () => {
+    expect(validName("notes.txt")).toBe(true);
+    for (const bad of ["", " ", ".", "..", "a/b"]) expect(validName(bad)).toBe(false);
+  });
+});
+
+describe("s3 helpers", () => {
+  const base = { id: "a", name: "x", region: "eu-west-1", access_key_id: "k", secret: null, path_style: false };
+  it("describes where an account points", () => {
+    expect(s3Where({ ...base, endpoint: "", bucket: null })).toBe("s3.eu-west-1");
+    expect(s3Where({ ...base, endpoint: "https://acct.r2.cloudflarestorage.com/", bucket: " logs " })).toBe("logs · acct.r2.cloudflarestorage.com");
+  });
+  it("recognises presets from the endpoint", () => {
+    expect(presetOf({ ...base, endpoint: "", bucket: null }).id).toBe("aws");
+    expect(presetOf({ ...base, endpoint: "https://x.r2.cloudflarestorage.com", bucket: null }).id).toBe("r2");
+    expect(presetOf({ ...base, endpoint: "http://10.0.0.5:9000", bucket: null }).id).toBe("other");
   });
 });

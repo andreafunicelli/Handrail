@@ -12,6 +12,7 @@ data-encoding = "2"
 hmac = "0.13"
 portable-pty = "0.9"
 russh = { version = "0.64", default-features = false, features = ["flate2", "ring", "rsa"] }
+russh-sftp = "3.0.1"
 sha1 = "0.11"
 tokio.workspace = true
 tracing.workspace = true

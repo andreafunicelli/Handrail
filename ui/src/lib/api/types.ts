@@ -195,6 +195,51 @@ export interface HostKeyEvent {
 }
 /** The server asks something while logging in (password, OTP) for a connection without saved
  *  credentials. Answer with `answerAuthPrompt`, one answer per prompt. */
+/** One entry of a remote folder (SFTP). */
+export interface FileEntry {
+  name: string;
+  path: string;
+  /** For a symlink, its target's kind ("symlink" when the target is missing). */
+  kind: "dir" | "file" | "symlink" | "other";
+  /** A symbolic link: open follows it, delete removes only the link. */
+  link: boolean;
+  size: number;
+  /** Seconds since the Unix epoch. */
+  modified: number | null;
+  /** Unix mode bits (type and permissions). */
+  permissions: number | null;
+}
+export interface TransferProgress {
+  transfer_id: string;
+  done: number;
+  total: number;
+}
+
+/** S3 or S3-compatible storage credentials; the secret key stays in the backend. */
+export interface S3Account {
+  id: Uuid;
+  name: string;
+  /** Service URL for S3-compatible stores; empty for AWS. */
+  endpoint: string;
+  /** "auto" for Cloudflare R2. */
+  region: string;
+  /** Open this bucket directly instead of the bucket list. */
+  bucket: string | null;
+  access_key_id: string;
+  /** Vault id of the stored secret access key. */
+  secret: Uuid | null;
+  path_style: boolean;
+}
+
+/** A saved command; `{{name}}` placeholders are asked for when it runs. */
+export interface Snippet {
+  id: Uuid;
+  name: string;
+  command: string;
+  description: string;
+  tags: string[];
+}
+
 export interface AuthPromptEvent {
   request_id: string;
   /** The `promptRef` passed to `openSession`. */

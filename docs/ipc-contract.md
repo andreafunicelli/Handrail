@@ -34,6 +34,34 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
 - Event `approval://requested` `ApprovalRequest`; answer `approval_decide({ approval_id, decision })`
 - `set_approval_mode({ session_id, mode })`
 
+## Files (SFTP)
+SFTP runs on the SSH connection of an open SSH session (no second login); local sessions refuse.
+- `sftp_home({ session_id }) -> string`, `sftp_list({ session_id, path }) -> FileEntry[]`
+  (`{ name, path, kind: "dir"|"file"|"symlink"|"other", size, modified, permissions }`, folders first)
+- `sftp_mkdir({ session_id, path })`, `sftp_rename({ session_id, from, to })`,
+  `sftp_remove({ session_id, path, is_dir })` (empty folders only)
+- `sftp_download({ session_id, path, transfer_id }) -> local path` (into Downloads, never
+  overwrites), `sftp_upload({ session_id, local_path, dir, transfer_id }) -> remote path`
+- Event `transfer://progress` (SFTP and S3) `{ transfer_id, done, total }` (at most ten a second, plus the last)
+- Upload paths come from the native file dialog (`tauri-plugin-dialog`, `dialog:allow-open` only).
+
+## S3
+Accounts are vault items; the secret access key is a vault secret and never comes back over IPC.
+- `list_s3_accounts() -> S3Account[]`, `save_s3_account({ account, secret_key? })` (a key replaces
+  the stored one), `delete_s3_account({ id })` (also deletes the secret)
+- Paths are `/bucket/folder/file`; `/` lists the buckets. `s3_home({ account_id })`,
+  `s3_list({ account_id, path }) -> FileEntry[]`, `s3_mkdir` (an empty `folder/` object),
+  `s3_rename({ account_id, from, to, is_dir })` (files only: copy + delete),
+  `s3_remove({ account_id, path, is_dir })` (empty folders only), `s3_download`, `s3_upload`
+  (single PUT, up to 5 GiB) with the same arguments and progress events as SFTP.
+- SigV4-signed requests to AWS (virtual-hosted, bucket region discovered with HEAD) or any
+  S3-compatible endpoint (path-style optional).
+
+## Snippets
+- `list_snippets()`, `save_snippet({ snippet })` (name and command required), `delete_snippet({ id })`.
+  Vault item type `snippet` `{ id, name, command, description, tags }`; `{{name}}` placeholders are
+  filled in by the UI before the command is typed into the terminal.
+
 ## Providers, harnesses, agent
 - `list_providers()`, `save_provider({ provider, api_key? })`, `delete_provider({ id })`,
   `list_models({ provider_id }) -> string[]`

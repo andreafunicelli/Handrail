@@ -1,5 +1,7 @@
 use aht_core::model::*;
-use aht_core::{ConnectionId, GroupId, HarnessProfileId, ProviderId, SecretId};
+use aht_core::{
+    ConnectionId, GroupId, HarnessProfileId, ProviderId, S3AccountId, SecretId, SnippetId,
+};
 use aht_vault::*;
 use serde_json::json;
 use std::path::Path;
@@ -156,6 +158,53 @@ fn tampered_manifest_key_check_is_wrong_credentials() {
         v.unlock(PW, &sk),
         Err(VaultError::WrongCredentials)
     ));
+}
+
+#[test]
+fn snippets_round_trip_and_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut v, sk) = new_vault(dir.path());
+    let snip = Snippet {
+        id: SnippetId::new(),
+        name: "Disk usage".into(),
+        command: "df -h {{path}}".into(),
+        description: "Free space per filesystem".into(),
+        tags: vec!["disk".into()],
+    };
+    v.put(&snip).unwrap();
+    drop(v);
+    let mut v = Vault::open(dir.path()).unwrap();
+    v.unlock(PW, &sk).unwrap();
+    assert_eq!(v.list::<Snippet>().unwrap(), vec![snip.clone()]);
+    // Older entries without the optional fields still load.
+    let bare: Snippet = serde_json::from_value(json!({
+        "id": SnippetId::new(), "name": "uptime", "command": "uptime"
+    }))
+    .unwrap();
+    assert!(bare.description.is_empty() && bare.tags.is_empty());
+    v.delete::<Snippet>(&snip.id.to_string()).unwrap();
+    assert!(v.list::<Snippet>().unwrap().is_empty());
+}
+
+#[test]
+fn s3_accounts_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut v, sk) = new_vault(dir.path());
+    let acct = S3Account {
+        id: S3AccountId::new(),
+        name: "Backups".into(),
+        endpoint: "https://acct.r2.cloudflarestorage.com".into(),
+        region: "auto".into(),
+        bucket: Some("backups".into()),
+        access_key_id: "AKID".into(),
+        secret: Some(SecretId::new()),
+        path_style: false,
+    };
+    v.put(&acct).unwrap();
+    drop(v);
+    let mut v = Vault::open(dir.path()).unwrap();
+    v.unlock(PW, &sk).unwrap();
+    assert_eq!(v.list::<S3Account>().unwrap(), vec![acct]);
 }
 
 #[test]

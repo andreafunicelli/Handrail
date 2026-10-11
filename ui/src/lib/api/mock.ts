@@ -12,6 +12,9 @@ import type {
   ImportPreview,
   Provider,
   SessionInfo,
+  Snippet,
+  S3Account,
+  FileEntry,
   SyncStatus,
   ConflictView,
   SnapshotInfo,
@@ -106,7 +109,15 @@ function seed() {
       model: null,
     },
   ];
-  return { groups, connections, providers, profiles };
+  const snippets: Snippet[] = [
+    { id: uuid(), name: "Restart nginx", command: "sudo systemctl restart nginx", description: "", tags: ["nginx"] },
+    { id: uuid(), name: "Tail app log", command: "tail -f /var/log/{{app}}/current.log", description: "Follow an app's log", tags: ["logs"] },
+  ];
+  const s3Accounts: S3Account[] = [
+    { id: uuid(), name: "Backups (R2)", endpoint: "https://acct.r2.cloudflarestorage.com", region: "auto", bucket: "backups", access_key_id: "r2-key", secret: uuid(), path_style: false },
+    { id: uuid(), name: "AWS production", endpoint: "", region: "eu-west-1", bucket: null, access_key_id: "AKIA…", secret: uuid(), path_style: false },
+  ];
+  return { groups, connections, providers, profiles, snippets, s3Accounts };
 }
 
 // ---------- fake shell ----------
@@ -230,6 +241,81 @@ export function createMockApi(): Api {
   ];
   const syncEvent = () => emit("sync://status", structuredClone(sync));
   const authPrompts = new Map<string, (answers: string[] | null) => void>();
+  // ---- fake remote file system (one for all SSH sessions) ----
+  type FsNode = { kind: "dir" | "file" | "symlink"; size: number; modified: number; permissions: number; link?: boolean };
+  const files = new Map<string, FsNode>();
+  const parentOf = (p: string) => p.replace(/\/[^/]+$/, "") || "/";
+  const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
+  function seedFiles(home: string) {
+    if (files.has(home)) return;
+    const now = Math.floor(Date.now() / 1000);
+    const dir = (p: string, age = 3600) => files.set(p, { kind: "dir", size: 4096, modified: now - age, permissions: 0o40755 });
+    const file = (p: string, size: number, age = 7200, mode = 0o100644) => files.set(p, { kind: "file", size, modified: now - age, permissions: mode });
+    for (const p of ["/", "/home", home]) dir(p, 86400 * 30);
+    dir(`${home}/app`);
+    dir(`${home}/logs`, 600);
+    file(`${home}/.bashrc`, 3771, 86400 * 90);
+    file(`${home}/deploy.sh`, 1290, 86400, 0o100755);
+    file(`${home}/app/docker-compose.yml`, 2048);
+    file(`${home}/app/.env`, 412, 86400 * 3, 0o100600);
+    file(`${home}/logs/app.log`, 18_400_000, 60);
+    file(`${home}/logs/app.log.1.gz`, 2_100_000, 86400);
+    // Symlinks carry their target's kind, as the backend reports them.
+    files.set(`${home}/current`, { kind: "dir", size: 4096, modified: now - 600, permissions: 0o120777, link: true });
+    files.set(`${home}/latest.log`, { kind: "file", size: 18_400_000, modified: now - 600, permissions: 0o120777, link: true });
+    files.set(`${home}/old-release`, { kind: "symlink", size: 0, modified: now - 86400 * 40, permissions: 0o120777, link: true });
+  }
+  function sshShell(session_id: string) {
+    const sh = shells.get(session_id);
+    if (!sh) throw fail("not_found", `session ${session_id}`);
+    if (sh.local) throw fail("invalid", "files are only available for SSH sessions");
+    const home = `/home/${sh.info.user}`;
+    seedFiles(home);
+    return { sh, home };
+  }
+  async function transfer(transfer_id: string, total: number) {
+    for (let i = 0; i <= 10; i++) {
+      emit("transfer://progress", { transfer_id, done: Math.round((total * i) / 10), total });
+      await sleep(60);
+    }
+  }
+  // ---- fake object store: bucket -> key -> object (shared by every account) ----
+  type S3Obj = { size: number; modified: number };
+  const buckets = new Map<string, { created: number; objects: Map<string, S3Obj> }>();
+  {
+    const now = Math.floor(Date.now() / 1000);
+    const bucket = (name: string, keys: [string, number, number][]) =>
+      buckets.set(name, { created: now - 86400 * 400, objects: new Map(keys.map(([k, size, age]) => [k, { size, modified: now - age }])) });
+    bucket("backups", [
+      ["db/", 0, 86400],
+      ["db/2026-10-10.sql.gz", 48_200_000, 86400],
+      ["db/2026-10-11.sql.gz", 48_900_000, 3600],
+      ["site/", 0, 86400 * 9],
+      ["site/www.tar.zst", 12_400_000, 86400 * 9],
+      ["README.txt", 512, 86400 * 60],
+    ]);
+    bucket("static-assets", [["logo.svg", 4096, 86400 * 30], ["css/app.css", 22_000, 7200]]);
+  }
+  function s3Account(id: string) {
+    const a = db.s3Accounts.find((x) => x.id === id);
+    if (!a) throw fail("not_found", `S3 account ${id}`);
+    return a;
+  }
+  function s3Split(path: string) {
+    const [bucket = "", ...rest] = path.split("/").filter(Boolean);
+    return { bucket, key: rest.join("/") };
+  }
+  function s3Bucket(name: string) {
+    const b = buckets.get(name);
+    if (!b) throw fail("not_found", "NoSuchBucket: The specified bucket does not exist");
+    return b;
+  }
+  function s3Object(path: string) {
+    const { bucket, key } = s3Split(path);
+    if (!bucket) throw fail("invalid", "open a bucket first");
+    if (!key) throw fail("invalid", "buckets are created and deleted in your provider's console");
+    return { b: s3Bucket(bucket), bucket, key };
+  }
   const fail = (kind: string, message: string) => Object.assign(new Error(message), { kind, message });
   let githubPolls = 0;
 
@@ -607,6 +693,158 @@ export function createMockApi(): Api {
     },
     async saveApprovalSettings(s) {
       approvalSettings = structuredClone(s);
+    },
+
+    async sftpHome(session_id) {
+      return sshShell(session_id).home;
+    },
+    async sftpList(session_id, path) {
+      sshShell(session_id);
+      const node = files.get(path);
+      if (!node) throw fail("not_found", `No such file: ${path}`);
+      if (node.kind !== "dir") throw fail("invalid", `${path} is not a folder`);
+      return [...files.entries()]
+        .filter(([p]) => p !== path && parentOf(p) === path)
+        .map(([p, n]) => ({ name: baseName(p), path: p, kind: n.kind, link: !!n.link, size: n.size, modified: n.modified, permissions: n.permissions }))
+        .sort((a, b) => Number(b.kind === "dir") - Number(a.kind === "dir") || a.name.localeCompare(b.name));
+    },
+    async sftpMkdir(session_id, path) {
+      sshShell(session_id);
+      if (files.has(path)) throw fail("other", "SFTP: already exists");
+      if (files.get(parentOf(path))?.kind !== "dir") throw fail("not_found", "No such file");
+      files.set(path, { kind: "dir", size: 4096, modified: Math.floor(Date.now() / 1000), permissions: 0o40755 });
+    },
+    async sftpRename(session_id, from, to) {
+      sshShell(session_id);
+      if (!files.has(from)) throw fail("not_found", "No such file");
+      if (files.has(to)) throw fail("other", "SFTP: already exists");
+      for (const [p, n] of [...files.entries()])
+        if (p === from || p.startsWith(from + "/")) {
+          files.delete(p);
+          files.set(to + p.slice(from.length), n);
+        }
+    },
+    async sftpRemove(session_id, path, is_dir) {
+      sshShell(session_id);
+      const n = files.get(path);
+      if (!n) throw fail("not_found", "No such file");
+      if (is_dir && n.link) throw fail("other", "SFTP: Failure (not a folder)");
+      if (is_dir && [...files.keys()].some((p) => parentOf(p) === path && p !== path)) throw fail("other", "SFTP: Failure (folder not empty)");
+      files.delete(path);
+    },
+    async sftpDownload(session_id, path, transfer_id) {
+      sshShell(session_id);
+      const n = files.get(path);
+      if (!n || n.kind !== "file") throw fail("not_found", "No such file");
+      await transfer(transfer_id, n.size);
+      return `~/Downloads/${baseName(path)}`;
+    },
+    async sftpUpload(session_id, localPath, dir, transfer_id) {
+      sshShell(session_id);
+      const size = 250_000 + Math.floor(Math.random() * 4_000_000);
+      await transfer(transfer_id, size);
+      const remote = `${dir === "/" ? "" : dir}/${baseName(localPath)}`;
+      files.set(remote, { kind: "file", size, modified: Math.floor(Date.now() / 1000), permissions: 0o100644 });
+      return remote;
+    },
+    async pickFiles() {
+      return ["/Users/dev/Desktop/report.pdf"];
+    },
+
+    async listS3Accounts() {
+      return structuredClone(db.s3Accounts);
+    },
+    async saveS3Account(a, secretKey) {
+      if (!a.name.trim() || !a.access_key_id.trim()) throw fail("invalid", "an S3 account needs a name and an access key ID");
+      const saved = { ...structuredClone(a), secret: secretKey?.trim() ? (a.secret ?? uuid()) : a.secret };
+      if (!saved.secret) throw fail("invalid", "an S3 account needs a secret access key");
+      const i = db.s3Accounts.findIndex((x) => x.id === a.id);
+      if (i >= 0) db.s3Accounts[i] = saved;
+      else db.s3Accounts.push(saved);
+      return structuredClone(saved);
+    },
+    async deleteS3Account(id) {
+      db.s3Accounts = db.s3Accounts.filter((a) => a.id !== id);
+    },
+    async s3Home(accountId) {
+      const b = s3Account(accountId).bucket?.trim();
+      return b ? `/${b}` : "/";
+    },
+    async s3List(accountId, path) {
+      s3Account(accountId);
+      await sleep(80);
+      const { bucket, key } = s3Split(path);
+      if (!bucket)
+        return [...buckets.entries()].map(([name, b]) => ({ name, path: `/${name}`, kind: "dir" as const, link: false, size: 0, modified: b.created, permissions: null }));
+      const prefix = key ? key + "/" : "";
+      const folders = new Set<string>();
+      const out: FileEntry[] = [];
+      for (const [k, o] of s3Bucket(bucket).objects) {
+        if (!k.startsWith(prefix) || k === prefix) continue;
+        const rest = k.slice(prefix.length);
+        const slash = rest.indexOf("/");
+        if (slash >= 0) folders.add(rest.slice(0, slash));
+        else out.push({ name: rest, path: `/${bucket}/${k}`, kind: "file", link: false, size: o.size, modified: o.modified, permissions: null });
+      }
+      const dirs = [...folders].sort().map((name) => ({ name, path: `/${bucket}/${prefix}${name}`, kind: "dir" as const, link: false, size: 0, modified: null, permissions: null }));
+      return [...dirs, ...out.sort((a, b) => a.name.localeCompare(b.name))];
+    },
+    async s3Mkdir(accountId, path) {
+      s3Account(accountId);
+      const { b, key } = s3Object(path);
+      b.objects.set(key + "/", { size: 0, modified: Math.floor(Date.now() / 1000) });
+    },
+    async s3Rename(accountId, from, to, isDir) {
+      s3Account(accountId);
+      if (isDir) throw fail("invalid", "S3 folders cannot be renamed: every object inside would have to be copied");
+      const src = s3Object(from);
+      const dst = s3Object(to);
+      if (src.bucket !== dst.bucket) throw fail("invalid", "a rename stays in the same bucket");
+      const o = src.b.objects.get(src.key);
+      if (!o) throw fail("not_found", "NoSuchKey: The specified key does not exist.");
+      src.b.objects.delete(src.key);
+      src.b.objects.set(dst.key, o);
+    },
+    async s3Remove(accountId, path, isDir) {
+      s3Account(accountId);
+      const { b, key } = s3Object(path);
+      if (isDir) {
+        if ([...b.objects.keys()].some((k) => k.startsWith(key + "/") && k !== key + "/")) throw fail("invalid", "the folder is not empty");
+        b.objects.delete(key + "/");
+      } else b.objects.delete(key);
+    },
+    async s3Download(accountId, path, transfer_id) {
+      s3Account(accountId);
+      const { b, key } = s3Object(path);
+      const o = b.objects.get(key);
+      if (!o) throw fail("not_found", "NoSuchKey: The specified key does not exist.");
+      await transfer(transfer_id, o.size);
+      return `~/Downloads/${baseName(key)}`;
+    },
+    async s3Upload(accountId, localPath, dir, transfer_id) {
+      s3Account(accountId);
+      const { bucket, key } = s3Split(dir);
+      if (!bucket) throw fail("invalid", "open a bucket first");
+      const b = s3Bucket(bucket);
+      const size = 250_000 + Math.floor(Math.random() * 4_000_000);
+      await transfer(transfer_id, size);
+      const k = (key ? key + "/" : "") + baseName(localPath);
+      b.objects.set(k, { size, modified: Math.floor(Date.now() / 1000) });
+      return `/${bucket}/${k}`;
+    },
+
+    async listSnippets() {
+      return structuredClone(db.snippets);
+    },
+    async saveSnippet(s) {
+      if (!s.name.trim() || !s.command.trim()) throw fail("invalid", "a snippet needs a name and a command");
+      const i = db.snippets.findIndex((x) => x.id === s.id);
+      if (i >= 0) db.snippets[i] = structuredClone(s);
+      else db.snippets.push(structuredClone(s));
+      return structuredClone(s);
+    },
+    async deleteSnippet(id) {
+      db.snippets = db.snippets.filter((s) => s.id !== id);
     },
 
     async listProviders() {

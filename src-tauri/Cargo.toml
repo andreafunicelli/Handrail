@@ -14,6 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -27,6 +28,7 @@ aht-providers.workspace = true
 aht-harness.workspace = true
 aht-sync.workspace = true
 aht-import.workspace = true
+aht-s3.workspace = true
 aht-vault.workspace = true
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 base64 = "0.23.1"

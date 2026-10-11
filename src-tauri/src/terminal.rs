@@ -39,6 +39,8 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STA
 
 struct SessionEntry {
     term: Arc<TermSession>,
+    /// The SSH connection behind an SSH session (for SFTP on the same login).
+    ssh: Option<Arc<aht_ssh::SshConnection>>,
     /// MCP tokens bound to harnesses launched from (or in) this session; revoked on close.
     tokens: Vec<McpToken>,
     temp_files: Vec<PathBuf>,
@@ -80,6 +82,8 @@ pub struct TerminalHub {
     agents: Mutex<HashMap<String, Arc<Mutex<aht_agent::Agent>>>>,
     harness_chats: Mutex<HashMap<(SessionId, String), HarnessChat>>,
     runs: Mutex<HashMap<String, Run>>,
+    /// SFTP sessions opened on SSH sessions' connections (file browser).
+    pub(crate) sftp: Mutex<HashMap<SessionId, Arc<aht_ssh::Sftp>>>,
 }
 
 impl TerminalHub {
@@ -98,6 +102,18 @@ impl TerminalHub {
             .get(&id)
             .map(|e| e.term.clone())
             .ok_or_else(|| Error::NotFound(format!("session {id}")))
+    }
+
+    /// The SSH connection of an SSH session.
+    pub async fn ssh_connection(&self, id: SessionId) -> Result<Arc<aht_ssh::SshConnection>> {
+        self.sessions
+            .read()
+            .await
+            .get(&id)
+            .ok_or_else(|| Error::NotFound(format!("session {id}")))?
+            .ssh
+            .clone()
+            .ok_or_else(|| Error::Invalid("files are only available for SSH sessions".into()))
     }
 
     fn revoke(&self, token: &McpToken) {
@@ -262,6 +278,7 @@ async fn register(
         id,
         SessionEntry {
             term,
+            ssh: None,
             tokens,
             temp_files,
         },
@@ -584,7 +601,12 @@ pub async fn open_ssh(
         },
         ..TermConfig::default()
     };
-    Ok(register(app, Arc::new(shell), events, cfg, vec![], vec![]).await)
+    let ssh = shell.connection().clone();
+    let info = register(app, Arc::new(shell), events, cfg, vec![], vec![]).await;
+    if let Some(e) = hub(app).sessions.write().await.get_mut(&info.session_id) {
+        e.ssh = Some(ssh);
+    }
+    Ok(info)
 }
 
 async fn open_local(
@@ -690,6 +712,9 @@ pub async fn session_resize(
 pub async fn close_session(state: tauri::State<'_, AppState>, session_id: SessionId) -> Result<()> {
     let hub = &state.terminal;
     let entry = hub.sessions.write().await.remove(&session_id);
+    if let Some(sftp) = hub.sftp.lock().await.remove(&session_id) {
+        sftp.close().await;
+    }
     let pending: Vec<_> = {
         let mut map = hub.approvals.lock().unwrap();
         let ids: Vec<_> = map
