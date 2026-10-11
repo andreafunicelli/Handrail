@@ -1,5 +1,5 @@
 //! Round trip against a real S3-compatible server. Runs when `HANDRAIL_S3_TEST` names an
-//! endpoint (CI starts MinIO): `HANDRAIL_S3_TEST=http://127.0.0.1:9000`, with
+//! endpoint (CI starts versitygw): `HANDRAIL_S3_TEST=http://127.0.0.1:9000`, with
 //! `HANDRAIL_S3_KEY`, `HANDRAIL_S3_SECRET` and the existing bucket `HANDRAIL_S3_BUCKET`.
 
 use aht_core::Error;
