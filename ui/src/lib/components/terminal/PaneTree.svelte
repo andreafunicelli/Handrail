@@ -6,7 +6,9 @@
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import type { LayoutNode, SplitDir } from "../../util/layout";
-  import { filesSession, isFiles, isPending, pendingRef, sessions } from "../../stores/sessions.svelte";
+  import { filesSession, isFiles, isPending, isS3, pendingRef, s3AccountOf, sessions } from "../../stores/sessions.svelte";
+  import { s3 } from "../../stores/s3.svelte";
+  import { s3Backend, sftpBackend } from "../../util/fileBackends";
   import { toasts } from "../../stores/toasts.svelte";
 
   let { node, tabId, multi = false }: { node: LayoutNode; tabId: string; multi?: boolean } = $props();
@@ -112,7 +114,11 @@
     {/if}
     <div class="pane-body">
       {#if isFiles(node.sessionId)}
-        <FileBrowser sessionId={filesSession(node.sessionId)} />
+        {@const sid = filesSession(node.sessionId)}
+        <FileBrowser fs={sftpBackend(sid)} label={`${sessions.infos[sid]?.user ?? ""}@${sessions.infos[sid]?.host ?? ""}`} />
+      {:else if isS3(node.sessionId)}
+        {@const id = s3AccountOf(node.sessionId)}
+        <FileBrowser fs={s3Backend(id)} label={s3.byId(id)?.name ?? "S3"} />
       {:else if isPending(node.sessionId)}
         <ConnectingPane ref={pendingRef(node.sessionId)} {focused} onclose={() => sessions.closePane(tabId, node.id)} />
       {:else}

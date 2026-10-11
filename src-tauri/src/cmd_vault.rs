@@ -1,7 +1,9 @@
 //! Vault lifecycle and stored records (connections, groups, secrets, providers, profiles).
 
 use crate::state::{err, AppState};
-use aht_core::model::{Connection, Group, HarnessProfile, Provider, Secret, SecretKind, Snippet};
+use aht_core::model::{
+    Connection, Group, HarnessProfile, Provider, S3Account, Secret, SecretKind, Snippet,
+};
 use aht_core::{Error, Result, SecretId};
 use aht_vault::{
     ConflictRecord, KdfParams, SecretKey, Setting, SnapshotInfo, Vault, VaultItem, VaultStatus,
@@ -248,6 +250,61 @@ pub async fn save_snippet(state: State<'_, AppState>, snippet: Snippet) -> Resul
 #[tauri::command(rename_all = "snake_case")]
 pub async fn delete_snippet(state: State<'_, AppState>, id: String) -> Result<()> {
     delete::<Snippet>(&state, &id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_s3_accounts(state: State<'_, AppState>) -> Result<Vec<S3Account>> {
+    list(&state).await
+}
+
+/// Save an S3 account; `secret_key`, when given, replaces the stored secret access key.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn save_s3_account(
+    state: State<'_, AppState>,
+    mut account: S3Account,
+    secret_key: Option<String>,
+) -> Result<S3Account> {
+    if account.name.trim().is_empty() || account.access_key_id.trim().is_empty() {
+        return Err(Error::Invalid(
+            "an S3 account needs a name and an access key ID".into(),
+        ));
+    }
+    if let Some(value) = secret_key.filter(|k| !k.trim().is_empty()) {
+        let id = account.secret.unwrap_or_default();
+        let secret = Secret {
+            id,
+            kind: SecretKind::ApiKey,
+            label: format!("{} S3 secret key", account.name),
+            value: value.trim().to_string(),
+        };
+        put(&state, &secret).await?;
+        account.secret = Some(id);
+    }
+    if account.secret.is_none() {
+        return Err(Error::Invalid(
+            "an S3 account needs a secret access key".into(),
+        ));
+    }
+    put(&state, &account).await?;
+    state.s3.lock().await.remove(&account.id.to_string());
+    Ok(account)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn delete_s3_account(state: State<'_, AppState>, id: String) -> Result<()> {
+    state.s3.lock().await.remove(&id);
+    let mut vault = state.vault.lock().await;
+    if let Some(a) = vault.get::<S3Account>(&id).map_err(Error::from)? {
+        if let Some(key) = a.secret {
+            vault
+                .delete::<Secret>(&key.to_string())
+                .map_err(Error::from)?;
+        }
+    }
+    vault
+        .delete::<S3Account>(&id)
+        .map(|_| ())
+        .map_err(Error::from)
 }
 
 #[tauri::command(rename_all = "snake_case")]

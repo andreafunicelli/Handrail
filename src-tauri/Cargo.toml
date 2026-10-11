@@ -28,6 +28,7 @@ aht-providers.workspace = true
 aht-harness.workspace = true
 aht-sync.workspace = true
 aht-import.workspace = true
+aht-s3.workspace = true
 aht-vault.workspace = true
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 base64 = "0.23.1"

@@ -11,6 +11,7 @@ import { syncChangedVault } from "../stores/vaultData";
 import type { SyncStatus } from "../api/types";
 import { joinPath, modeString, parentDir, validName } from "./files";
 import { SUGGESTED_SNIPPETS, fillPlaceholders, placeholders, snippetInput } from "./snippets";
+import { presetOf, s3Where } from "./s3";
 
 describe("fuzzy", () => {
   it("matches subsequences and rejects non-matches", () => {
@@ -227,5 +228,18 @@ describe("files", () => {
   it("accepts only single path segments as names", () => {
     expect(validName("notes.txt")).toBe(true);
     for (const bad of ["", " ", ".", "..", "a/b"]) expect(validName(bad)).toBe(false);
+  });
+});
+
+describe("s3 helpers", () => {
+  const base = { id: "a", name: "x", region: "eu-west-1", access_key_id: "k", secret: null, path_style: false };
+  it("describes where an account points", () => {
+    expect(s3Where({ ...base, endpoint: "", bucket: null })).toBe("s3.eu-west-1");
+    expect(s3Where({ ...base, endpoint: "https://acct.r2.cloudflarestorage.com/", bucket: " logs " })).toBe("logs · acct.r2.cloudflarestorage.com");
+  });
+  it("recognises presets from the endpoint", () => {
+    expect(presetOf({ ...base, endpoint: "", bucket: null }).id).toBe("aws");
+    expect(presetOf({ ...base, endpoint: "https://x.r2.cloudflarestorage.com", bucket: null }).id).toBe("r2");
+    expect(presetOf({ ...base, endpoint: "http://10.0.0.5:9000", bucket: null }).id).toBe("other");
   });
 });

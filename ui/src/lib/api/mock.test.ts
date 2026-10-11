@@ -117,7 +117,7 @@ describe("mock api", () => {
     const home = await api.sftpHome(s.session_id);
     expect((await api.sftpList(s.session_id, home)).map((e) => e.name)).toContain("logs");
     const seen: number[] = [];
-    await api.on("sftp://progress", (p) => seen.push(p.done));
+    await api.on("transfer://progress", (p) => seen.push(p.done));
     const remote = await api.sftpUpload(s.session_id, "/tmp/x.bin", home, "t1");
     expect(remote).toBe(`${home}/x.bin`);
     expect(seen.at(-1)).toBeGreaterThan(0);
@@ -129,6 +129,28 @@ describe("mock api", () => {
     await expect(api.sftpList(s.session_id, `${home}/dir`)).rejects.toMatchObject({ kind: "not_found" });
     const local = await api.openLocalSession(null, 80, 24);
     await expect(api.sftpHome(local.session_id)).rejects.toMatchObject({ kind: "invalid" });
+  });
+
+  it("keeps S3 accounts and browses buckets like the backend", async () => {
+    const api = createMockApi();
+    const [r2] = await api.listS3Accounts();
+    expect(await api.s3Home(r2.id)).toBe("/backups");
+    const aws = (await api.listS3Accounts()).find((a) => !a.bucket)!;
+    expect(await api.s3Home(aws.id)).toBe("/");
+    expect((await api.s3List(aws.id, "/")).map((e) => e.name)).toContain("backups");
+    const top = await api.s3List(r2.id, "/backups");
+    expect(top.map((e) => `${e.kind}:${e.name}`)).toEqual(["dir:db", "dir:site", "file:README.txt"]);
+    const up = await api.s3Upload(r2.id, "/tmp/new.txt", "/backups/db", "t1");
+    expect(up).toBe("/backups/db/new.txt");
+    await api.s3Rename(r2.id, up, "/backups/db/renamed.txt", false);
+    await expect(api.s3Rename(r2.id, "/backups/db", "/backups/x", true)).rejects.toMatchObject({ kind: "invalid" });
+    await expect(api.s3Remove(r2.id, "/backups/db", true)).rejects.toMatchObject({ kind: "invalid" });
+    await api.s3Mkdir(r2.id, "/backups/empty");
+    await api.s3Remove(r2.id, "/backups/empty", true);
+    await expect(api.s3Mkdir(r2.id, "/newbucket")).rejects.toMatchObject({ kind: "invalid" });
+    await expect(api.saveS3Account({ ...r2, id: "x", secret: null }, null)).rejects.toMatchObject({ kind: "invalid" });
+    await api.deleteS3Account(r2.id);
+    expect((await api.listS3Accounts()).some((a) => a.id === r2.id)).toBe(false);
   });
 
   it("opens only https links", async () => {

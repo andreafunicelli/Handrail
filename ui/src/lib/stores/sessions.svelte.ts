@@ -18,6 +18,7 @@ import {
 import { load, save } from "../util/storage";
 import { terminals } from "../terminal/host";
 import { connections } from "./connections.svelte";
+import { s3 } from "./s3.svelte";
 
 export interface Tab {
   id: string;
@@ -55,8 +56,12 @@ export const pendingRef = (sessionId: string) => sessionId.slice(PENDING.length)
 const FILES = "files:";
 export const isFiles = (leafSession: string) => leafSession.startsWith(FILES);
 export const filesSession = (leafSession: string) => leafSession.slice(FILES.length);
+/** An S3 browser pane holds `s3:<account id>`. */
+const S3 = "s3:";
+export const isS3 = (leafSession: string) => leafSession.startsWith(S3);
+export const s3AccountOf = (leafSession: string) => leafSession.slice(S3.length);
 /** Whether a leaf shows a live terminal (not a connecting pane or a file browser). */
-const isTerminal = (leafSession: string) => !isPending(leafSession) && !isFiles(leafSession);
+const isTerminal = (leafSession: string) => !isPending(leafSession) && !isFiles(leafSession) && !isS3(leafSession);
 
 export class Sessions {
   infos = $state<Record<string, SessionInfo>>({});
@@ -239,8 +244,18 @@ export class Sessions {
     }
   }
 
+  /** Open an S3 account's browser: focus it if open, else a new tab (or a split). */
+  openS3(accountId: string, split?: SplitDir) {
+    const leafSession = S3 + accountId;
+    for (const t of this.tabs) {
+      const existing = findLeafBySession(t.layout, leafSession);
+      if (existing) return this.focus(t.id, existing.id);
+    }
+    this.placeLeaf(leafSession, split);
+  }
+
   private dropSession(sessionId: string) {
-    if (isFiles(sessionId)) return;
+    if (isFiles(sessionId) || isS3(sessionId)) return;
     if (isPending(sessionId)) {
       const ref = pendingRef(sessionId);
       const p = this.pending[ref];
@@ -316,6 +331,7 @@ export class Sessions {
   paneTitle(leafSession: string): string {
     if (isPending(leafSession)) return this.pending[pendingRef(leafSession)]?.label ?? "…";
     if (isFiles(leafSession)) return `Files · ${this.infos[filesSession(leafSession)]?.title ?? "…"}`;
+    if (isS3(leafSession)) return `S3 · ${s3.byId(s3AccountOf(leafSession))?.name ?? "…"}`;
     return this.infos[leafSession]?.title ?? "…";
   }
 
@@ -327,11 +343,12 @@ export class Sessions {
   // ---- workspaces ----
   saveWorkspace(name: string) {
     // File browsers are not saved; a pane still logging in is saved as its connection.
+    const browser = (id: string) => isFiles(id) || isS3(id);
     const connOf = (id: string) =>
       (isPending(id) ? this.pending[pendingRef(id)]?.connectionId : this.infos[id]?.connection_id) ?? "local";
     const tabs = this.tabs.flatMap((t) => {
       let layout: LayoutNode | null = t.layout;
-      for (const l of leaves(t.layout)) if (layout && isFiles(l.sessionId)) layout = removeLeaf(layout, l.id);
+      for (const l of leaves(t.layout)) if (layout && browser(l.sessionId)) layout = removeLeaf(layout, l.id);
       return layout ? [mapLeaves(layout, (l) => ({ ...l, sessionId: connOf(l.sessionId) }))] : [];
     });
     const ws: Workspace = { id: uuid(), name, tabs: $state.snapshot(tabs) as LayoutNode[] };

@@ -102,6 +102,24 @@ jobs:
           echo "HANDRAIL_SSH_TEST=$(whoami)@127.0.0.1:22" >> "$GITHUB_ENV"
           echo "HANDRAIL_SSH_TEST_KEY=$RUNNER_TEMP/handrail_key" >> "$GITHUB_ENV"
 
+      # A real S3-compatible store for aht-s3/tests/real_s3.rs; the bucket is created with curl's
+      # own SigV4 signer, an independent check of ours.
+      - name: Start MinIO for the S3 test (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=handrail -e MINIO_ROOT_PASSWORD=handrail-ci-secret \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          for _ in $(seq 60); do curl -sf http://127.0.0.1:9000/minio/health/live && break; sleep 1; done
+          curl -sf -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user handrail:handrail-ci-secret \
+            http://127.0.0.1:9000/handrail-test
+          {
+            echo "HANDRAIL_S3_TEST=http://127.0.0.1:9000"
+            echo "HANDRAIL_S3_BUCKET=handrail-test"
+            echo "HANDRAIL_S3_KEY=handrail"
+            echo "HANDRAIL_S3_SECRET=handrail-ci-secret"
+          } >> "$GITHUB_ENV"
+
       - name: Test
         run: cargo test --workspace
 

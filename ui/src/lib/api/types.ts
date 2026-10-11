@@ -212,6 +212,22 @@ export interface TransferProgress {
   total: number;
 }
 
+/** S3 or S3-compatible storage credentials; the secret key stays in the backend. */
+export interface S3Account {
+  id: Uuid;
+  name: string;
+  /** Service URL for S3-compatible stores; empty for AWS. */
+  endpoint: string;
+  /** "auto" for Cloudflare R2. */
+  region: string;
+  /** Open this bucket directly instead of the bucket list. */
+  bucket: string | null;
+  access_key_id: string;
+  /** Vault id of the stored secret access key. */
+  secret: Uuid | null;
+  path_style: boolean;
+}
+
 /** A saved command; `{{name}}` placeholders are asked for when it runs. */
 export interface Snippet {
   id: Uuid;

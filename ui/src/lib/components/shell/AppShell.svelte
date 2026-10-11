@@ -16,7 +16,9 @@
   import UpdateBanner from "./UpdateBanner.svelte";
   import SnippetsPanel from "../snippets/SnippetsPanel.svelte";
   import SnippetDialogs from "../snippets/SnippetDialogs.svelte";
+  import S3AccountDialog from "../s3/S3AccountDialog.svelte";
   import { snippets } from "../../stores/snippets.svelte";
+  import { s3 } from "../../stores/s3.svelte";
   import { t } from "../../i18n";
   import { leaves } from "../../util/layout";
   import { agent } from "../../stores/agent.svelte";
@@ -41,7 +43,7 @@
   const settled = () => performance.now() - openedAt > 350;
 
   onMount(() => {
-    void Promise.all([connections.load(), snippets.load(), sessions.init(), agent.init()]).catch(toasts.error);
+    void Promise.all([connections.load(), snippets.load(), s3.load(), sessions.init(), agent.init()]).catch(toasts.error);
     updates.start();
 
     // Background syncs change the vault behind the UI: refresh the cached items when one pulled.
@@ -175,6 +177,7 @@
 {#if ui.settingsPage}<Settings />{/if}
 {#if ui.paletteOpen}<CommandPalette />{/if}
 <SnippetDialogs />
+<S3AccountDialog />
 {#if sessions.hostKeys[0]}{#key sessions.hostKeys[0].request_id}<HostKeyDialog req={sessions.hostKeys[0]} />{/key}{/if}
 
 {#if ui.saveWorkspaceOpen}

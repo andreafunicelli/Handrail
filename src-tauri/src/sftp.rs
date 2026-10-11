@@ -13,14 +13,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Serialize)]
 pub struct FileEntry {
-    name: String,
-    path: String,
+    pub(crate) name: String,
+    pub(crate) path: String,
     /// "dir" | "file" | "symlink" | "other"
-    kind: &'static str,
-    size: u64,
+    pub(crate) kind: &'static str,
+    pub(crate) size: u64,
     /// Seconds since the Unix epoch.
-    modified: Option<u32>,
-    permissions: Option<u32>,
+    pub(crate) modified: Option<u32>,
+    pub(crate) permissions: Option<u32>,
 }
 
 impl From<RemoteEntry> for FileEntry {
@@ -61,7 +61,10 @@ async fn sftp(state: &AppState, session_id: SessionId) -> Result<Arc<Sftp>> {
 }
 
 /// Progress events for `transfer_id`, at most ten a second plus the final one.
-fn reporter(app: &AppHandle, transfer_id: String) -> impl FnMut(u64, u64) + Send {
+pub(crate) fn reporter(
+    app: &AppHandle,
+    transfer_id: String,
+) -> impl FnMut(u64, u64) + Send + 'static {
     let app = app.clone();
     let mut last: Option<Instant> = None;
     move |done, total| {
@@ -69,7 +72,7 @@ fn reporter(app: &AppHandle, transfer_id: String) -> impl FnMut(u64, u64) + Send
         if due || done == total {
             last = Some(Instant::now());
             let _ = app.emit(
-                "sftp://progress",
+                "transfer://progress",
                 ProgressEvent {
                     transfer_id: transfer_id.clone(),
                     done,
@@ -127,7 +130,7 @@ pub async fn sftp_remove(
 }
 
 /// `dir/name`, or `dir/stem (2).ext`… when taken.
-fn free_local_path(dir: &Path, name: &str) -> PathBuf {
+pub(crate) fn free_local_path(dir: &Path, name: &str) -> PathBuf {
     let first = dir.join(name);
     if !first.exists() {
         return first;
@@ -143,12 +146,29 @@ fn free_local_path(dir: &Path, name: &str) -> PathBuf {
 }
 
 /// A remote file name safe to use as a local file name.
-fn local_name(remote: &str) -> Result<String> {
+pub(crate) fn local_name(remote: &str) -> Result<String> {
     let name = remote.rsplit('/').next().unwrap_or_default();
     if name.is_empty() || name == "." || name == ".." || name.contains(['\\', '\0']) {
         return Err(Error::Invalid(format!("cannot download {remote}")));
     }
     Ok(name.to_string())
+}
+
+/// The Downloads folder, or home when there is none.
+pub(crate) fn downloads(app: &AppHandle) -> Result<PathBuf> {
+    app.path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(err)
+}
+
+/// The file name of a local path picked in the file dialog.
+pub(crate) fn picked_name(local: &Path) -> Result<String> {
+    local
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+        .ok_or_else(|| Error::Invalid("not a file".into()))
 }
 
 /// Download a remote file into the Downloads folder; returns the local path.
@@ -161,12 +181,7 @@ pub async fn sftp_download(
     transfer_id: String,
 ) -> Result<String> {
     let s = sftp(&state, session_id).await?;
-    let dir = app
-        .path()
-        .download_dir()
-        .or_else(|_| app.path().home_dir())
-        .map_err(err)?;
-    let local = free_local_path(&dir, &local_name(&path)?);
+    let local = free_local_path(&downloads(&app)?, &local_name(&path)?);
     s.download(&path, &local, reporter(&app, transfer_id))
         .await?;
     Ok(local.display().to_string())
@@ -182,11 +197,7 @@ pub async fn sftp_upload(
     dir: String,
     transfer_id: String,
 ) -> Result<String> {
-    let name = local_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| Error::Invalid("not a file".into()))?
-        .to_string();
+    let name = picked_name(&local_path)?;
     let s = sftp(&state, session_id).await?;
     let remote = aht_ssh::sftp::join(&dir, &name);
     s.upload(&local_path, &remote, reporter(&app, transfer_id))

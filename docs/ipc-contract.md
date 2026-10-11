@@ -42,8 +42,20 @@ SFTP runs on the SSH connection of an open SSH session (no second login); local 
   `sftp_remove({ session_id, path, is_dir })` (empty folders only)
 - `sftp_download({ session_id, path, transfer_id }) -> local path` (into Downloads, never
   overwrites), `sftp_upload({ session_id, local_path, dir, transfer_id }) -> remote path`
-- Event `sftp://progress` `{ transfer_id, done, total }` (at most ten a second, plus the last)
+- Event `transfer://progress` (SFTP and S3) `{ transfer_id, done, total }` (at most ten a second, plus the last)
 - Upload paths come from the native file dialog (`tauri-plugin-dialog`, `dialog:allow-open` only).
+
+## S3
+Accounts are vault items; the secret access key is a vault secret and never comes back over IPC.
+- `list_s3_accounts() -> S3Account[]`, `save_s3_account({ account, secret_key? })` (a key replaces
+  the stored one), `delete_s3_account({ id })` (also deletes the secret)
+- Paths are `/bucket/folder/file`; `/` lists the buckets. `s3_home({ account_id })`,
+  `s3_list({ account_id, path }) -> FileEntry[]`, `s3_mkdir` (an empty `folder/` object),
+  `s3_rename({ account_id, from, to, is_dir })` (files only: copy + delete),
+  `s3_remove({ account_id, path, is_dir })` (empty folders only), `s3_download`, `s3_upload`
+  (single PUT, up to 5 GiB) with the same arguments and progress events as SFTP.
+- SigV4-signed requests to AWS (virtual-hosted, bucket region discovered with HEAD) or any
+  S3-compatible endpoint (path-style optional).
 
 ## Snippets
 - `list_snippets()`, `save_snippet({ snippet })` (name and command required), `delete_snippet({ id })`.

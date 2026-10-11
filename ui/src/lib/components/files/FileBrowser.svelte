@@ -7,15 +7,15 @@
   import { api } from "../../api";
   import { errorMessage } from "../../api/errors";
   import type { FileEntry } from "../../api/types";
-  import { sessions } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
   import { ui } from "../../stores/ui.svelte";
+  import type { FileBackend } from "../../util/fileBackends";
   import { joinPath, modeString, parentDir, validName } from "../../util/files";
   import { formatBytes, relativeTime } from "../../util/time";
 
-  /** SFTP browser on the connection of SSH session `sessionId`. */
-  let { sessionId }: { sessionId: string } = $props();
+  /** Browser for one remote file system; `label` names it (user@host, account name). */
+  let { fs, label }: { fs: FileBackend; label: string } = $props();
 
   let path = $state("");
   let pathInput = $state("");
@@ -27,14 +27,14 @@
   /** Name dialog for "New folder" or "Rename". */
   let naming = $state<{ mode: "mkdir" | "rename"; entry?: FileEntry; value: string } | null>(null);
 
-  const info = $derived(sessions.infos[sessionId]);
-  const mine = $derived(transfers.list.filter((x) => x.sessionId === sessionId));
+  const mine = $derived(transfers.list.filter((x) => x.backend === fs.key));
+  const writable = $derived(fs.writable(path));
 
   async function go(to: string) {
     loading = true;
     error = null;
     try {
-      entries = await api.sftpList(sessionId, to);
+      entries = await fs.list(to);
       path = to;
       pathInput = to;
       selected = null;
@@ -49,7 +49,7 @@
 
   onMount(async () => {
     try {
-      await go(await api.sftpHome(sessionId));
+      await go(await fs.home());
     } catch (e) {
       error = errorMessage(e);
       loading = false;
@@ -63,7 +63,7 @@
 
   async function download(e: FileEntry) {
     try {
-      const local = await transfers.download(sessionId, e.path);
+      const local = await transfers.download(fs, e.path);
       toasts.success(t("files.downloaded", { path: local }));
     } catch (err) {
       toasts.error(err);
@@ -75,7 +75,7 @@
     const dir = path;
     for (const p of picked) {
       try {
-        await transfers.upload(sessionId, p, dir);
+        await transfers.upload(fs, p, dir);
       } catch (e) {
         toasts.error(e);
       }
@@ -91,7 +91,7 @@
     });
     if (!ok) return;
     try {
-      await api.sftpRemove(sessionId, e.path, e.kind === "dir");
+      await fs.remove(e);
       await refresh();
     } catch (err) {
       toasts.error(err);
@@ -104,8 +104,8 @@
     if (!n || !validName(n.value)) return;
     naming = null;
     try {
-      if (n.mode === "mkdir") await api.sftpMkdir(sessionId, joinPath(path, n.value.trim()));
-      else if (n.entry) await api.sftpRename(sessionId, n.entry.path, joinPath(parentDir(n.entry.path), n.value.trim()));
+      if (n.mode === "mkdir") await fs.mkdir(joinPath(path, n.value.trim()));
+      else if (n.entry) await fs.rename(n.entry, joinPath(parentDir(n.entry.path), n.value.trim()));
       await refresh();
     } catch (err) {
       toasts.error(err);
@@ -123,15 +123,15 @@
         isFile ? { label: t("files.download"), icon: "download", action: () => download(e) } : { label: t("files.open"), icon: "folder", action: () => go(e.path) },
         { label: t("files.copyPath"), icon: "copy", action: () => void navigator.clipboard?.writeText(e.path).catch(() => {}) },
         "sep",
-        { label: t("files.rename"), icon: "edit", action: () => (naming = { mode: "rename", entry: e, value: e.name }) },
-        { label: t("common.delete"), icon: "trash", danger: true, action: () => remove(e) },
+        { label: t("files.rename"), icon: "edit", disabled: !writable || !fs.canRename(e), action: () => (naming = { mode: "rename", entry: e, value: e.name }) },
+        { label: t("common.delete"), icon: "trash", danger: true, disabled: !writable, action: () => remove(e) },
       ],
     };
   }
 
   function rowKey(ev: KeyboardEvent, e: FileEntry) {
     if (ev.key === "Enter") open(e);
-    if (ev.key === "Delete") void remove(e);
+    if (ev.key === "Delete" && writable) void remove(e);
     if (ev.key === "Backspace") void go(parentDir(path));
   }
 
@@ -149,8 +149,8 @@
       <input class="input mono path" bind:value={pathInput} aria-label={t("files.path")} spellcheck="false" />
     </form>
     <button class="icon-btn" title={t("files.refresh")} aria-label={t("files.refresh")} onclick={refresh}><Icon name="refresh" size={14} /></button>
-    <button class="icon-btn" title={t("files.newFolder")} aria-label={t("files.newFolder")} disabled={!path} onclick={() => (naming = { mode: "mkdir", value: "" })}><Icon name="plus" size={14} /></button>
-    <button class="btn sm" disabled={!path} onclick={upload}><Icon name="upload" size={13} />{t("files.upload")}</button>
+    <button class="icon-btn" title={t("files.newFolder")} aria-label={t("files.newFolder")} disabled={!writable} onclick={() => (naming = { mode: "mkdir", value: "" })}><Icon name="plus" size={14} /></button>
+    <button class="btn sm" disabled={!writable} onclick={upload}><Icon name="upload" size={13} />{t("files.upload")}</button>
   </div>
   <nav class="crumbs" aria-label={t("files.path")}>
     {#each crumbs as c, i (c.path)}
@@ -158,7 +158,7 @@
       <button class="crumb" onclick={() => go(c.path)}>{c.name}</button>
     {/each}
     <span class="grow"></span>
-    <span class="who">{info?.user}@{info?.host}</span>
+    <span class="who">{label}</span>
   </nav>
 
   <div class="list" role="grid" aria-busy={loading}>
@@ -202,7 +202,7 @@
           {/if}
         </div>
       {/each}
-      <button class="btn sm ghost clear" onclick={() => transfers.clear(sessionId)}>{t("files.clearTransfers")}</button>
+      <button class="btn sm ghost clear" onclick={() => transfers.clear(fs.key)}>{t("files.clearTransfers")}</button>
     </div>
   {/if}
 </div>

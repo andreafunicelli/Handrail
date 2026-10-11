@@ -1,10 +1,12 @@
 import { api } from "../api";
 import { errorMessage } from "../api/errors";
+import type { FileBackend } from "../util/fileBackends";
 import { uuid } from "../util/id";
 
 export interface Transfer {
   id: string;
-  sessionId: string;
+  /** `FileBackend.key` of the browser that started it. */
+  backend: string;
   direction: "up" | "down";
   name: string;
   done: number;
@@ -14,7 +16,7 @@ export interface Transfer {
   result: string | null;
 }
 
-/** File transfers of every file browser, with progress from "sftp://progress". */
+/** File transfers of every file browser, with progress from "transfer://progress". */
 class Transfers {
   list = $state<Transfer[]>([]);
   private listening = false;
@@ -22,15 +24,15 @@ class Transfers {
   private async listen() {
     if (this.listening) return;
     this.listening = true;
-    await api.on("sftp://progress", (p) => {
+    await api.on("transfer://progress", (p) => {
       const t = this.list.find((x) => x.id === p.transfer_id);
       if (t && t.state === "running") Object.assign(t, { done: p.done, total: p.total });
     });
   }
 
-  private async run(sessionId: string, direction: Transfer["direction"], name: string, go: (id: string) => Promise<string>) {
+  private async run(backend: string, direction: Transfer["direction"], name: string, go: (id: string) => Promise<string>) {
     await this.listen();
-    const t: Transfer = { id: uuid(), sessionId, direction, name, done: 0, total: 0, state: "running", result: null };
+    const t: Transfer = { id: uuid(), backend, direction, name, done: 0, total: 0, state: "running", result: null };
     this.list.push(t);
     const live = this.list[this.list.length - 1];
     try {
@@ -45,19 +47,19 @@ class Transfers {
     return live.result;
   }
 
-  download(sessionId: string, path: string) {
+  download(fs: FileBackend, path: string) {
     const name = path.split("/").pop() ?? path;
-    return this.run(sessionId, "down", name, (id) => api.sftpDownload(sessionId, path, id));
+    return this.run(fs.key, "down", name, (id) => fs.download(path, id));
   }
 
-  upload(sessionId: string, localPath: string, dir: string) {
+  upload(fs: FileBackend, localPath: string, dir: string) {
     const name = localPath.split(/[\\/]/).pop() ?? localPath;
-    return this.run(sessionId, "up", name, (id) => api.sftpUpload(sessionId, localPath, dir, id));
+    return this.run(fs.key, "up", name, (id) => fs.upload(localPath, dir, id));
   }
 
-  /** Forget finished transfers of a session. */
-  clear(sessionId: string) {
-    this.list = this.list.filter((t) => t.sessionId !== sessionId || t.state === "running");
+  /** Forget the finished transfers of one browser. */
+  clear(backend: string) {
+    this.list = this.list.filter((t) => t.backend !== backend || t.state === "running");
   }
 }
 

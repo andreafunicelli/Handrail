@@ -55,6 +55,16 @@ export function createTauriApi(): Api {
       const picked = await openDialog({ multiple: true, directory: false });
       return picked == null ? [] : Array.isArray(picked) ? picked : [picked];
     },
+    listS3Accounts: () => invoke("list_s3_accounts"),
+    saveS3Account: (account, secret_key) => invoke("save_s3_account", { account, secret_key }),
+    deleteS3Account: (id) => invoke("delete_s3_account", { id }),
+    s3Home: (account_id) => invoke("s3_home", { account_id }),
+    s3List: (account_id, path) => invoke("s3_list", { account_id, path }),
+    s3Mkdir: (account_id, path) => invoke("s3_mkdir", { account_id, path }),
+    s3Rename: (account_id, from, to, is_dir) => invoke("s3_rename", { account_id, from, to, is_dir }),
+    s3Remove: (account_id, path, is_dir) => invoke("s3_remove", { account_id, path, is_dir }),
+    s3Download: (account_id, path, transfer_id) => invoke("s3_download", { account_id, path, transfer_id }),
+    s3Upload: (account_id, local_path, dir, transfer_id) => invoke("s3_upload", { account_id, local_path, dir, transfer_id }),
     listSnippets: () => invoke("list_snippets"),
     saveSnippet: (snippet) => invoke("save_snippet", { snippet }),
     deleteSnippet: (id) => invoke("delete_snippet", { id }),
