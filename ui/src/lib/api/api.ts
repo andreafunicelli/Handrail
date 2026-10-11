@@ -33,6 +33,9 @@ import type {
   SecretId,
   SessionDataEvent,
   SessionInfo,
+  ServerStats,
+  TunnelStatus,
+  TunnelsEvent,
   ConflictView,
   FolderPreset,
   SnapshotInfo,
@@ -50,6 +53,8 @@ export interface EventMap {
   "session://agent_mark": AgentMarkEvent;
   "session://host_key": HostKeyEvent;
   "session://auth_prompt": AuthPromptEvent;
+  /** A session's tunnels finished starting (each running or failed). */
+  "session://tunnels": TunnelsEvent;
   "transfer://progress": TransferProgress;
   "edit://proposal": EditProposal;
   /** A proposal ended without the user (agent cancelled or timed out): drop its diff. */
@@ -91,6 +96,10 @@ export interface Api {
   sessionWrite(sessionId: string, dataB64: string): Promise<void>;
   sessionResize(sessionId: string, cols: number, rows: number): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
+  /** The connection's port forwards in this session; see "session://tunnels". */
+  sessionTunnels(sessionId: string): Promise<TunnelStatus[]>;
+  /** CPU, memory, disk, load and uptime of an SSH session's server (takes about half a second). */
+  sessionStats(sessionId: string): Promise<ServerStats>;
   hostKeyDecision(requestId: string, accept: boolean): Promise<void>;
 
   // approvals

@@ -18,6 +18,8 @@ interface Prefs {
   editorMinimap: boolean;
   editorGuides: boolean;
   editorFontSize: number;
+  /** The bar under SSH terminals: server load and tunnels. */
+  sessionBar: boolean;
 }
 
 const DEFAULTS: Prefs = {
@@ -33,6 +35,7 @@ const DEFAULTS: Prefs = {
   editorMinimap: true,
   editorGuides: true,
   editorFontSize: 13,
+  sessionBar: true,
 };
 
 /** Local, per-device UI preferences (persisted to localStorage). */
@@ -49,6 +52,7 @@ class Settings {
   editorMinimap = $state(DEFAULTS.editorMinimap);
   editorGuides = $state(DEFAULTS.editorGuides);
   editorFontSize = $state(DEFAULTS.editorFontSize);
+  sessionBar = $state(DEFAULTS.sessionBar);
   systemDark = $state(true);
 
   resolvedTheme = $derived<"dark" | "light">(this.theme === "system" ? (this.systemDark ? "dark" : "light") : this.theme);
@@ -72,6 +76,7 @@ class Settings {
     this.editorMinimap = p.editorMinimap;
     this.editorGuides = p.editorGuides;
     this.editorFontSize = p.editorFontSize;
+    this.sessionBar = p.sessionBar;
     if (typeof window !== "undefined" && window.matchMedia) {
       const mq = window.matchMedia("(prefers-color-scheme: dark)");
       this.systemDark = mq.matches;
@@ -92,6 +97,7 @@ class Settings {
           editorMinimap: this.editorMinimap,
           editorGuides: this.editorGuides,
           editorFontSize: this.editorFontSize,
+          sessionBar: this.sessionBar,
         } satisfies Prefs);
       });
       $effect(() => {

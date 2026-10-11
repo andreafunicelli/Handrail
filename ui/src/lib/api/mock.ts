@@ -18,6 +18,7 @@ import type {
   SyncStatus,
   ConflictView,
   SnapshotInfo,
+  TunnelStatus,
 } from "./types";
 import { b64ToStr, strToB64 } from "../util/b64";
 import { uuid } from "../util/id";
@@ -42,6 +43,7 @@ function conn(p: Partial<Connection> & Pick<Connection, "name" | "host">): Conne
     approval_mode: null,
     local_shell: null,
     notes: "",
+    tunnels: [],
     ...p,
   };
 }
@@ -58,7 +60,18 @@ function seed() {
     bastion,
     conn({ name: "web-01", host: "10.0.1.11", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"] }),
     conn({ name: "web-02", host: "10.0.1.12", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"] }),
-    conn({ name: "legacy-db", host: "10.0.2.40", env: "prod", group_id: prodEu.id, user: "postgres", tags: ["postgres"] }),
+    conn({
+      name: "legacy-db",
+      host: "10.0.2.40",
+      env: "prod",
+      group_id: prodEu.id,
+      user: "postgres",
+      tags: ["postgres"],
+      tunnels: [
+        { kind: "local", bind_host: "127.0.0.1", bind_port: 15432, dest_host: "127.0.0.1", dest_port: 5432, enabled: true },
+        { kind: "dynamic", bind_host: "127.0.0.1", bind_port: 1080, dest_host: "", dest_port: 0, enabled: true },
+      ],
+    }),
     conn({ name: "api-staging", host: "api.staging.acme.io", env: "staging", group_id: staging.id, tags: ["api"] }),
     conn({ name: "edge-proxy", host: "edge.staging.acme.io", env: "staging", group_id: staging.id, port: 2222 }),
     conn({ name: "dev-box", host: "192.168.1.50", env: "dev", group_id: dev.id, user: "andrea" }),
@@ -206,6 +219,9 @@ export function createMockApi(): Api {
   const cancelled = new Set<string>();
   const trusted = new Set<string>();
   const previews = new Map<string, ImportPreview>();
+  const tunnelState = new Map<string, TunnelStatus[]>();
+  /** Per session: a slowly drifting load, so the stats bar moves. */
+  const load = new Map<string, number>();
   let approvalSettings: ApprovalSettings = {
     default_mode: "confirm_all",
     deny_list: ["shutdown", "reboot"],
@@ -703,7 +719,42 @@ export function createMockApi(): Api {
         false,
       );
       void boot(sh, c);
+      const sid = sh.info.session_id;
+      const enabled = (c.tunnels ?? []).filter((x) => x.enabled);
+      tunnelState.set(sid, enabled.map((tunnel) => ({ tunnel, port: null, error: null })));
+      if (enabled.length)
+        setTimeout(() => {
+          // Ports below 1024 need admin rights on this computer (not for remote forwards).
+          const tunnels = enabled.map((tunnel) =>
+            tunnel.kind !== "remote" && tunnel.bind_port > 0 && tunnel.bind_port < 1024
+              ? { tunnel, port: null, error: `cannot listen on ${tunnel.bind_host}:${tunnel.bind_port}: Permission denied` }
+              : { tunnel, port: tunnel.bind_port || 40000 + Math.floor(Math.random() * 20000), error: null },
+          );
+          tunnelState.set(sid, tunnels);
+          emit("session://tunnels", { session_id: sid, tunnels });
+        }, 500);
       return sh.info;
+    },
+    async sessionTunnels(session_id) {
+      return structuredClone(tunnelState.get(session_id) ?? []);
+    },
+    async sessionStats(session_id) {
+      const sh = shells.get(session_id);
+      if (!sh || sh.local || sh.info.state === "disconnected") throw fail("not_found", `session ${session_id}`);
+      await sleep(500);
+      const l = Math.min(0.95, Math.max(0.03, (load.get(session_id) ?? 0.12) + (Math.random() - 0.5) * 0.1));
+      load.set(session_id, l);
+      const GB = 1024 ** 3;
+      return {
+        cpu: l * 100,
+        cores: 4,
+        mem_used: Math.round((2.1 + l * 3) * GB),
+        mem_total: 8 * GB,
+        disk_used: Math.round(31.4 * GB),
+        disk_total: 50 * GB,
+        load1: +(l * 4).toFixed(2),
+        uptime_s: 3 * 86400 + 4 * 3600,
+      };
     },
     async answerAuthPrompt(request_id, answers) {
       authPrompts.get(request_id)?.(answers);
@@ -757,6 +808,8 @@ export function createMockApi(): Api {
     async sessionResize() {},
     async closeSession(session_id) {
       shells.delete(session_id);
+      tunnelState.delete(session_id);
+      load.delete(session_id);
     },
     async hostKeyDecision(request_id, accept) {
       pendingHostKeys.get(request_id)?.(accept);

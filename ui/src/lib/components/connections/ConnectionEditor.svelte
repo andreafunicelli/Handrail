@@ -10,12 +10,13 @@
   import { ui } from "../../stores/ui.svelte";
   import { groupPath } from "../../util/tree";
   import { uuid } from "../../util/id";
+  import { newTunnel, tunnelProblem } from "../../util/tunnels";
 
   let { connection, isNew }: { connection: Connection; isNew: boolean } = $props();
 
   // Local editable copy (the prop is already a detached clone made by ui.edit).
   // svelte-ignore state_referenced_locally
-  let c = $state(connection);
+  let c = $state({ ...connection, tunnels: connection.tunnels ?? [] });
   let authType = $state<"password" | "key" | "agent" | "prompt">(c.auth.type);
   let password = $state("");
   let keyText = $state("");
@@ -29,7 +30,8 @@
   const hasSavedKey = c.auth.type === "key";
   const envs: Environment[] = ["none", "dev", "staging", "prod"];
   const jumpCandidates = $derived(connections.list.filter((x) => x.id !== c.id && x.kind === "ssh"));
-  const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536);
+  const tunnelsOk = $derived(c.tunnels.every((x) => !tunnelProblem(x)));
+  const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk);
 
   onMount(() => sheet.querySelector<HTMLInputElement>("input")?.focus());
 
@@ -50,6 +52,7 @@
       out.host = out.host.trim();
       out.user = out.user.trim();
       out.tags = tagsText.split(",").map((s) => s.trim()).filter(Boolean);
+      out.tunnels = out.tunnels.map((x) => ({ ...x, bind_host: x.bind_host.trim(), dest_host: x.kind === "dynamic" ? "" : x.dest_host.trim(), dest_port: x.kind === "dynamic" ? 0 : x.dest_port }));
       if (out.env === "prod" && out.approval_mode === "auto") out.approval_mode = null;
       if (authType === "password") {
         if (password) out.auth = { type: "password", secret: await secret("password", password, `${out.name} password`) };
@@ -174,6 +177,45 @@
           {/each}
         </div>
       {/if}
+    </fieldset>
+
+    <fieldset class="field">
+      <legend class="label">{t("editor.tunnels")}</legend>
+      {#each c.tunnels as x, i (i)}
+        {@const problem = tunnelProblem(x)}
+        <div class="tunnel" class:off={!x.enabled}>
+          <div class="trow">
+            <select class="select sm" bind:value={x.kind} aria-label={t("editor.tunnelKind")}>
+              {#each ["local", "remote", "dynamic"] as const as k (k)}<option value={k}>{t(`editor.tunnel.${k}`)}</option>{/each}
+            </select>
+            <label class="on"><input type="checkbox" bind:checked={x.enabled} />{t("editor.tunnelOn")}</label>
+            <span class="grow"></span>
+            <button type="button" class="icon-btn" aria-label={t("editor.tunnelRemove")} title={t("editor.tunnelRemove")} onclick={() => c.tunnels.splice(i, 1)}><Icon name="trash" size={13} /></button>
+          </div>
+          <div class="trow">
+            <span class="tl">{t(x.kind === "remote" ? "editor.tunnelListenServer" : "editor.tunnelListenHere")}</span>
+            <input class="input mono sm host" class:bad={problem === "bind"} bind:value={x.bind_host} aria-label={t("editor.tunnelBindHost")} spellcheck="false" />
+            <span class="colon">:</span>
+            <input class="input mono sm num" class:bad={problem === "bind"} type="number" min="0" max="65535" bind:value={x.bind_port} aria-label={t("editor.tunnelBindPort")} />
+          </div>
+          {#if x.kind !== "dynamic"}
+            <div class="trow">
+              <span class="tl">{t(x.kind === "remote" ? "editor.tunnelToHere" : "editor.tunnelToServer")}</span>
+              <input class="input mono sm host" class:bad={problem === "dest"} bind:value={x.dest_host} aria-label={t("editor.tunnelDestHost")} spellcheck="false" />
+              <span class="colon">:</span>
+              <input class="input mono sm num" class:bad={problem === "dest"} type="number" min="1" max="65535" bind:value={x.dest_port} aria-label={t("editor.tunnelDestPort")} />
+            </div>
+          {/if}
+          <p class="hint">
+            {t(`editor.tunnelHint.${x.kind}`)}
+            {#if x.bind_host.trim() === "0.0.0.0" || x.bind_host.trim() === "::"}<span class="warn">{t("editor.tunnelOpen")}</span>{/if}
+          </p>
+        </div>
+      {/each}
+      <div class="row-actions">
+        <button type="button" class="btn sm" onclick={() => c.tunnels.push(newTunnel())}><Icon name="plus" size={13} />{t("editor.tunnelAdd")}</button>
+      </div>
+      {#if c.tunnels.length}<p class="hint">{t("editor.tunnelsNext")}</p>{/if}
     </fieldset>
 
     <fieldset class="field">
@@ -332,6 +374,62 @@
   }
   .hint {
     margin: 0;
+  }
+  .tunnel {
+    display: grid;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+  }
+  .tunnel.off {
+    opacity: 0.6;
+  }
+  .trow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tl {
+    width: 92px;
+    flex: none;
+    color: var(--muted);
+    font-size: var(--fs-small);
+  }
+  .tunnel .sm {
+    height: 26px;
+    font-size: 12px;
+  }
+  .tunnel .host {
+    flex: 1;
+    min-width: 0;
+  }
+  .tunnel .num {
+    width: 72px;
+    flex: none;
+  }
+  .tunnel .bad {
+    border-color: var(--danger);
+  }
+  .colon {
+    color: var(--faint);
+  }
+  .on {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--fs-small);
+    color: var(--muted);
+  }
+  .on input {
+    accent-color: var(--accent);
+  }
+  .tunnel .hint {
+    font-size: var(--fs-small);
+  }
+  .warn {
+    display: block;
+    color: var(--warn);
   }
   footer {
     display: flex;

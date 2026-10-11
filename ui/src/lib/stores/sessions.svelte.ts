@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { AuthPromptEvent, HostKeyEvent, SessionInfo } from "../api/types";
+import type { AuthPromptEvent, HostKeyEvent, SessionInfo, TunnelStatus } from "../api/types";
 import { errorMessage } from "../api/errors";
 import { b64ToBytes } from "../util/b64";
 import { uuid } from "../util/id";
@@ -95,6 +95,8 @@ export class Sessions {
   private wakers = new Map<string, () => void>();
   /** Label of the last agent that typed into each session (for the "Agent running" banner). */
   lastActor = $state<Record<string, string>>({});
+  /** Port forwards of SSH sessions whose connection has any. */
+  tunnels = $state<Record<string, TunnelStatus[]>>({});
   workspaces = $state<Workspace[]>(load("workspaces", []));
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
@@ -134,6 +136,9 @@ export class Sessions {
       this.lastActor[e.session_id] = e.actor_label;
     });
     await api.on("session://host_key", (e) => this.hostKeys.push(e));
+    await api.on("session://tunnels", (e) => {
+      if (this.infos[e.session_id]) this.tunnels[e.session_id] = e.tunnels;
+    });
     // An agent proposed a file edit: show the diff in the file's editor.
     await api.on("edit://proposal", (p) => this.openEditor(editors.propose(p)));
     await api.on("edit://resolved", (id) => editors.resolved(id));
@@ -165,6 +170,7 @@ export class Sessions {
       this.infos[info.session_id] = info;
       this.swapSession(PENDING + ref, info.session_id);
       delete this.pending[ref];
+      void this.loadTunnels(info.session_id);
       return info;
     } catch (e) {
       const p = this.pending[ref];
@@ -254,6 +260,8 @@ export class Sessions {
     terminals.peek(old)?.write(new TextEncoder().encode(`\r\n\x1b[2m── ${t("term.reconnectedLine")} ──\x1b[0m\r\n`));
     terminals.rekey(old, next.session_id);
     this.infos[next.session_id] = next;
+    void this.loadTunnels(next.session_id);
+    delete this.tunnels[old];
     this.swapSession(old, next.session_id);
     this.swapSession(FILES + old, FILES + next.session_id);
     agent.moveSession(old, next.session_id);
@@ -262,6 +270,13 @@ export class Sessions {
     delete this.reconnects[old];
     void api.closeSession(old).catch(() => {});
     delete this.infos[old];
+  }
+
+  /** The session's tunnels as they stand (the "session://tunnels" event brings the outcome). */
+  private async loadTunnels(sessionId: string) {
+    const list = await api.sessionTunnels(sessionId).catch(() => []);
+    // An event may have brought the started tunnels meanwhile.
+    if (list.length && this.infos[sessionId] && !this.tunnels[sessionId]?.some((x) => x.port || x.error)) this.tunnels[sessionId] = list;
   }
 
   /** Try now: skips the wait, or starts again after giving up. */
@@ -433,6 +448,7 @@ export class Sessions {
     void api.closeSession(sessionId).catch(() => {});
     terminals.dispose(sessionId);
     delete this.infos[sessionId];
+    delete this.tunnels[sessionId];
   }
 
   closeTab(id: string) {

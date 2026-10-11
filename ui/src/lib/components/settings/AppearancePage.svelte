@@ -21,6 +21,11 @@
   <span class="mono val">{settings.fontSize}px</span>
 </div>
 
+<label class="check">
+  <input type="checkbox" bind:checked={settings.sessionBar} />
+  <span>{t("app.sessionBar")}<span class="hint">{t("app.sessionBarHint")}</span></span>
+</label>
+
 <h3>{t("app.scheme")}</h3>
 <div class="schemes" role="radiogroup" aria-label={t("app.scheme")}>
   {#each SCHEMES as s (s.id)}
@@ -59,6 +64,21 @@
     font-size: 12px;
     color: var(--muted);
     min-width: 40px;
+  }
+  .check {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin-top: 16px;
+    max-width: 520px;
+  }
+  .check input {
+    margin-top: 3px;
+    accent-color: var(--accent);
+  }
+  .check .hint {
+    display: block;
+    margin-top: 2px;
   }
   .schemes {
     display: grid;

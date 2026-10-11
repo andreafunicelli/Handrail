@@ -35,6 +35,8 @@ export function createTauriApi(): Api {
     sessionWrite: (session_id, data_b64) => invoke("session_write", { session_id, data_b64 }),
     sessionResize: (session_id, cols, rows) => invoke("session_resize", { session_id, cols, rows }),
     closeSession: (session_id) => invoke("close_session", { session_id }),
+    sessionTunnels: (session_id) => invoke("session_tunnels", { session_id }),
+    sessionStats: (session_id) => invoke("session_stats", { session_id }),
     hostKeyDecision: (request_id, accept) => invoke("host_key_decision", { request_id, accept }),
 
     approvalDecide: (approval_id, decision) => invoke("approval_decide", { approval_id, decision }),
