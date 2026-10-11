@@ -45,7 +45,8 @@ struct TestServer {
 struct SrvHandler {
     st: SrvState,
     line: Vec<u8>,
-    forwarded: std::collections::HashSet<ChannelId>,
+    /// Session channels: only these echo (forwarded channels carry raw TCP bytes).
+    shells: std::collections::HashSet<ChannelId>,
 }
 
 impl server::Handler for SrvHandler {
@@ -104,10 +105,11 @@ impl server::Handler for SrvHandler {
 
     async fn channel_open_session(
         &mut self,
-        _channel: Channel<Msg>,
+        channel: Channel<Msg>,
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.shells.insert(channel.id());
         reply.accept().await;
         Ok(())
     }
@@ -133,13 +135,51 @@ impl server::Handler for SrvHandler {
         let Ok(mut tcp) = tokio::net::TcpStream::connect((host, port as u16)).await else {
             return Ok(());
         };
-        self.forwarded.insert(channel.id());
         reply.accept().await;
         tokio::spawn(async move {
             let mut stream = channel.into_stream();
             let _ = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await;
         });
         Ok(())
+    }
+
+    /// `ssh -R`: listen, and open a forwarded-tcpip channel for each connection.
+    async fn tcpip_forward(
+        &mut self,
+        address: &str,
+        port: &mut u32,
+        session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        if !self.st.allow_forward {
+            return Ok(false);
+        }
+        let Ok(l) = TcpListener::bind((address, *port as u16)).await else {
+            return Ok(false);
+        };
+        let bound = l.local_addr().unwrap().port() as u32;
+        *port = bound;
+        let handle = session.handle();
+        let addr = address.to_string();
+        tokio::spawn(async move {
+            while let Ok((mut tcp, peer)) = l.accept().await {
+                let Ok(ch) = handle
+                    .channel_open_forwarded_tcpip(
+                        addr.clone(),
+                        bound,
+                        peer.ip().to_string(),
+                        peer.port() as u32,
+                    )
+                    .await
+                else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut s = ch.into_stream();
+                    let _ = tokio::io::copy_bidirectional(&mut s, &mut tcp).await;
+                });
+            }
+        });
+        Ok(true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -209,7 +249,7 @@ impl server::Handler for SrvHandler {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if self.forwarded.contains(&channel) {
+        if !self.shells.contains(&channel) {
             return Ok(()); // forwarded bytes are handled by the stream task
         }
         session.data(channel, data.to_vec())?;
@@ -270,7 +310,7 @@ fn serve(
             let h = SrvHandler {
                 st: st.clone(),
                 line: Vec::new(),
-                forwarded: Default::default(),
+                shells: Default::default(),
             };
             let config = config.clone();
             tokio::spawn(async move {
@@ -780,6 +820,136 @@ async fn reconnect_gives_up_on_unreachable() {
     .await
     .unwrap_err();
     assert!(matches!(err, Error::Network(_)), "{err:?}");
+}
+
+/// A TCP server that echoes back what it receives; returns its port.
+async fn echo_server() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            tokio::spawn(async move {
+                let (mut r, mut w) = s.split();
+                let _ = tokio::io::copy(&mut r, &mut w).await;
+            });
+        }
+    });
+    port
+}
+
+async fn ping(stream: &mut tokio::net::TcpStream) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    stream.write_all(b"ping").await.unwrap();
+    let mut buf = [0u8; 4];
+    tokio::time::timeout(T, stream.read_exact(&mut buf))
+        .await
+        .expect("echo in time")
+        .unwrap();
+    assert_eq!(&buf, b"ping");
+}
+
+async fn forwarding_connection(srv: &TestServer, dir: &tempfile::TempDir) -> Arc<SshConnection> {
+    Arc::new(
+        SshConnection::connect(
+            &params(srv.addr, AuthMaterial::password(PASSWORD)),
+            trusting(dir),
+        )
+        .await
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn local_forward_reaches_the_destination_through_the_server() {
+    let srv = start_server(vec![], true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let conn = forwarding_connection(&srv, &dir).await;
+    let echo = echo_server().await;
+    let fwd = conn
+        .forward(&ForwardSpec::Local {
+            bind: ("127.0.0.1".into(), 0),
+            dest: ("127.0.0.1".into(), echo),
+        })
+        .await
+        .unwrap();
+    assert_ne!(fwd.port, 0);
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", fwd.port))
+        .await
+        .unwrap();
+    ping(&mut s).await;
+    // Stopping the forward stops listening.
+    let port = fwd.port;
+    drop(fwd);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn dynamic_forward_is_a_socks5_proxy() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let srv = start_server(vec![], true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let conn = forwarding_connection(&srv, &dir).await;
+    let echo = echo_server().await;
+    let fwd = conn
+        .forward(&ForwardSpec::Dynamic {
+            bind: ("127.0.0.1".into(), 0),
+        })
+        .await
+        .unwrap();
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", fwd.port))
+        .await
+        .unwrap();
+    s.write_all(&[5, 1, 0]).await.unwrap();
+    let mut hello = [0u8; 2];
+    s.read_exact(&mut hello).await.unwrap();
+    assert_eq!(hello, [5, 0]);
+    let host = b"localhost";
+    let mut req = vec![5, 1, 0, 3, host.len() as u8];
+    req.extend_from_slice(host);
+    req.extend_from_slice(&echo.to_be_bytes());
+    s.write_all(&req).await.unwrap();
+    let mut reply = [0u8; 10];
+    s.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply[..2], [5, 0]);
+    ping(&mut s).await;
+}
+
+#[tokio::test]
+async fn remote_forward_connects_back_to_this_computer() {
+    let srv = start_server(vec![], true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let conn = forwarding_connection(&srv, &dir).await;
+    let echo = echo_server().await;
+    let fwd = conn
+        .forward(&ForwardSpec::Remote {
+            bind: ("127.0.0.1".into(), 0),
+            dest: ("127.0.0.1".into(), echo),
+        })
+        .await
+        .unwrap();
+    assert_ne!(fwd.port, 0);
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", fwd.port))
+        .await
+        .unwrap();
+    ping(&mut s).await;
+}
+
+#[tokio::test]
+async fn remote_forward_refused_by_the_server() {
+    let srv = start_server(vec![], false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let conn = forwarding_connection(&srv, &dir).await;
+    let err = conn
+        .forward(&ForwardSpec::Remote {
+            bind: ("127.0.0.1".into(), 0),
+            dest: ("127.0.0.1".into(), 9),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Denied(_)), "{err:?}");
 }
 
 impl Drop for TestServer {

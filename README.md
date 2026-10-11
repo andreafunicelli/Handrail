@@ -35,10 +35,15 @@
   - Only ciphertext leaves the device. Sync runs automatically after edits and every few minutes.
 - **Import** from `~/.ssh/config`, PuTTY, MobaXterm, mRemoteNG, WinSCP, SecureCRT and Tabby.
 - **Files over SFTP:** browse, create, upload, download, rename and delete on any SSH session, over the same login (right-click a folder or the empty list for New file / New folder). Switch to **root** (through sudo) for system files.
+- **Copy between servers and S3:** send a file or a whole folder from one server to another (or to another folder of the same one), or a file between a server and an S3 bucket, without downloading it first. It streams over both connections, keeps permissions between servers, and asks before replacing anything.
 - **Code editor with the agent:** edit files on the server (as root too) in a VS Code–style editor: syntax highlighting for about 40 languages, minimap, indentation guides, multiple cursors, find and replace, go to line, word wrap, zoom, and a status bar for position, indentation, line endings and language. Saves check that the file didn't change on the server and keep a `.bak` of the original. Ask the agent about the file or a selection; its changes arrive as a diff you accept or reject.
 - **S3 buckets:** Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO or any S3-compatible store, in the same file browser. Keys stay in the vault.
 - **Snippets:** saved commands with `{{placeholders}}`, plus suggested read-only diagnostics (disk, memory, ports, logs, TLS expiry) to run or keep.
-- **Keyboard-first:** a command palette (Ctrl/⌘ K), split panes and tabs.
+- **Port forwarding:** local (`-L`), remote (`-R`) and SOCKS5 (`-D`) tunnels saved on a connection. They start with each session, come back after a reconnect, and show their state under the terminal (click one to copy its address).
+- **Server bar:** CPU, memory, disk, load and uptime of the server under each SSH terminal, read over the existing connection without typing anything into your shell (Linux servers; can be turned off).
+- **Type in all panes:** split a tab across several servers and type (or run a snippet) in all of them at once. Every pane that receives the input is outlined until you turn it off.
+- **Keys & passwords:** pick a saved key or password for many connections, and replace it once for all of them (e.g. when you rotate a key). Unused ones can be cleaned up.
+- **Keyboard-first:** a command palette (Ctrl/⌘ K), split panes and tabs, saved workspaces.
 - **Updates itself:** it checks for new releases and installs one when you click "Update and restart".
 
 ## A tour
@@ -118,10 +123,10 @@ Design spec: [`docs/superpowers/specs/2026-10-10-aihubterm-design.md`](docs/supe
 ### Installers and updates
 
 The **Release** workflow (`.github/workflows/release.yml`) builds a universal macOS `.dmg` and Windows `.exe`/`.msi` installers:
-- On every push to `main`, it publishes them as a GitHub Release named `v<major>.<minor>.<build number>`.
+- On every push to `main`, it publishes them as a GitHub Release named `v<major>.<minor>.<patch>`, the patch one past the last release of that major.minor (publishing runs go one at a time, so two never take the same number).
 - On pull requests, it attaches them as workflow artifacts.
 
-The version lives only in the workspace `Cargo.toml`, and CI stamps the build number into it.
+The major.minor lives only in the workspace `Cargo.toml` (currently 1.0); CI stamps the full version into it. Changing it there (e.g. to 1.1) restarts the patch at 0.
 
 Updates need two things:
 1. **An updater key pair** from `npx tauri signer generate`.
@@ -141,7 +146,7 @@ Existing installs carry over:
 
 ## Status
 
-Pre-release (v0.1). Before a public release:
+Version 1.x, released from `main`. Before a public release:
 - choose a license;
 - set up code signing and notarization;
 - confirm with Anthropic and OpenAI that the subscription integration complies with their terms.

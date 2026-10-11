@@ -11,6 +11,7 @@ import type {
   HarnessProfile,
   ImportPreview,
   Provider,
+  Secret,
   SessionInfo,
   Snippet,
   S3Account,
@@ -18,6 +19,7 @@ import type {
   SyncStatus,
   ConflictView,
   SnapshotInfo,
+  TunnelStatus,
 } from "./types";
 import { b64ToStr, strToB64 } from "../util/b64";
 import { uuid } from "../util/id";
@@ -42,6 +44,7 @@ function conn(p: Partial<Connection> & Pick<Connection, "name" | "host">): Conne
     approval_mode: null,
     local_shell: null,
     notes: "",
+    tunnels: [],
     ...p,
   };
 }
@@ -53,12 +56,30 @@ function seed() {
   const dev = g("Development", 2);
   const personal = g("Personal", 3);
   const groups = [prod, prodEu, staging, dev, personal];
-  const bastion = conn({ name: "bastion", host: "bastion.acme.io", env: "prod", group_id: prod.id, tags: ["jump"] });
+  // One deploy key shared by the production web servers.
+  const deployKey: Secret = { id: uuid(), kind: "private_key", label: "deploy key (ed25519)", value: "-----BEGIN OPENSSH PRIVATE KEY-----\n…" };
+  const dbPassword: Secret = { id: uuid(), kind: "password", label: "postgres password", value: "s3cret" };
+  const oldKey: Secret = { id: uuid(), kind: "private_key", label: "old laptop key", value: "-----BEGIN OPENSSH PRIVATE KEY-----\n…" };
+  const secrets = [deployKey, dbPassword, oldKey];
+  const keyAuth = { type: "key" as const, key: deployKey.id, passphrase: null };
+  const bastion = conn({ name: "bastion", host: "bastion.acme.io", env: "prod", group_id: prod.id, tags: ["jump"], auth: keyAuth });
   const connections: Connection[] = [
     bastion,
-    conn({ name: "web-01", host: "10.0.1.11", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"] }),
-    conn({ name: "web-02", host: "10.0.1.12", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"] }),
-    conn({ name: "legacy-db", host: "10.0.2.40", env: "prod", group_id: prodEu.id, user: "postgres", tags: ["postgres"] }),
+    conn({ name: "web-01", host: "10.0.1.11", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"], auth: keyAuth }),
+    conn({ name: "web-02", host: "10.0.1.12", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"], auth: keyAuth }),
+    conn({
+      name: "legacy-db",
+      host: "10.0.2.40",
+      env: "prod",
+      group_id: prodEu.id,
+      user: "postgres",
+      tags: ["postgres"],
+      auth: { type: "password", secret: dbPassword.id },
+      tunnels: [
+        { kind: "local", bind_host: "127.0.0.1", bind_port: 15432, dest_host: "127.0.0.1", dest_port: 5432, enabled: true },
+        { kind: "dynamic", bind_host: "127.0.0.1", bind_port: 1080, dest_host: "", dest_port: 0, enabled: true },
+      ],
+    }),
     conn({ name: "api-staging", host: "api.staging.acme.io", env: "staging", group_id: staging.id, tags: ["api"] }),
     conn({ name: "edge-proxy", host: "edge.staging.acme.io", env: "staging", group_id: staging.id, port: 2222 }),
     conn({ name: "dev-box", host: "192.168.1.50", env: "dev", group_id: dev.id, user: "andrea" }),
@@ -117,7 +138,7 @@ function seed() {
     { id: uuid(), name: "Backups (R2)", endpoint: "https://acct.r2.cloudflarestorage.com", region: "auto", bucket: "backups", access_key_id: "r2-key", secret: uuid(), path_style: false },
     { id: uuid(), name: "AWS production", endpoint: "", region: "eu-west-1", bucket: null, access_key_id: "AKIA…", secret: uuid(), path_style: false },
   ];
-  return { groups, connections, providers, profiles, snippets, s3Accounts };
+  return { groups, connections, providers, profiles, snippets, s3Accounts, secrets };
 }
 
 // ---------- fake shell ----------
@@ -206,6 +227,9 @@ export function createMockApi(): Api {
   const cancelled = new Set<string>();
   const trusted = new Set<string>();
   const previews = new Map<string, ImportPreview>();
+  const tunnelState = new Map<string, TunnelStatus[]>();
+  /** Per session: a slowly drifting load, so the stats bar moves. */
+  const load = new Map<string, number>();
   let approvalSettings: ApprovalSettings = {
     default_mode: "confirm_all",
     deny_list: ["shutdown", "reboot"],
@@ -668,7 +692,34 @@ export function createMockApi(): Api {
       for (const c of db.connections) if (c.group_id === id) c.group_id = null;
     },
     async saveSecret(secret) {
+      const i = db.secrets.findIndex((x) => x.id === secret.id);
+      if (i >= 0) db.secrets[i] = structuredClone(secret);
+      else db.secrets.push(structuredClone(secret));
       return secret.id;
+    },
+    async listSecrets() {
+      return db.secrets.map(({ id, kind, label }) => ({ id, kind, label }));
+    },
+    async updateSecret(id, label, value) {
+      const x = db.secrets.find((s) => s.id === id);
+      if (!x) throw fail("not_found", `secret ${id}`);
+      if (label !== null) {
+        if (!label.trim()) throw fail("invalid", "a saved secret needs a name");
+        x.label = label.trim();
+      }
+      if (value !== null) {
+        if (!value) throw fail("invalid", "the new value is empty");
+        x.value = value;
+      }
+    },
+    async deleteSecret(id) {
+      const users = [
+        ...db.connections.filter((c) => (c.auth.type === "password" && c.auth.secret === id) || (c.auth.type === "key" && (c.auth.key === id || c.auth.passphrase === id))).map((c) => c.name),
+        ...db.s3Accounts.filter((a) => a.secret === id).map((a) => a.name),
+        ...db.providers.filter((p) => p.api_key === id).map((p) => p.name),
+      ];
+      if (users.length) throw fail("invalid", `still used by ${users.join(", ")}`);
+      db.secrets = db.secrets.filter((s) => s.id !== id);
     },
 
     async openSession(connection_id, _cols, _rows, prompt_ref) {
@@ -703,7 +754,42 @@ export function createMockApi(): Api {
         false,
       );
       void boot(sh, c);
+      const sid = sh.info.session_id;
+      const enabled = (c.tunnels ?? []).filter((x) => x.enabled);
+      tunnelState.set(sid, enabled.map((tunnel) => ({ tunnel, port: null, error: null })));
+      if (enabled.length)
+        setTimeout(() => {
+          // Ports below 1024 need admin rights on this computer (not for remote forwards).
+          const tunnels = enabled.map((tunnel) =>
+            tunnel.kind !== "remote" && tunnel.bind_port > 0 && tunnel.bind_port < 1024
+              ? { tunnel, port: null, error: `cannot listen on ${tunnel.bind_host}:${tunnel.bind_port}: Permission denied` }
+              : { tunnel, port: tunnel.bind_port || 40000 + Math.floor(Math.random() * 20000), error: null },
+          );
+          tunnelState.set(sid, tunnels);
+          emit("session://tunnels", { session_id: sid, tunnels });
+        }, 500);
       return sh.info;
+    },
+    async sessionTunnels(session_id) {
+      return structuredClone(tunnelState.get(session_id) ?? []);
+    },
+    async sessionStats(session_id) {
+      const sh = shells.get(session_id);
+      if (!sh || sh.local || sh.info.state === "disconnected") throw fail("not_found", `session ${session_id}`);
+      await sleep(500);
+      const l = Math.min(0.95, Math.max(0.03, (load.get(session_id) ?? 0.12) + (Math.random() - 0.5) * 0.1));
+      load.set(session_id, l);
+      const GB = 1024 ** 3;
+      return {
+        cpu: l * 100,
+        cores: 4,
+        mem_used: Math.round((2.1 + l * 3) * GB),
+        mem_total: 8 * GB,
+        disk_used: Math.round(31.4 * GB),
+        disk_total: 50 * GB,
+        load1: +(l * 4).toFixed(2),
+        uptime_s: 3 * 86400 + 4 * 3600,
+      };
     },
     async answerAuthPrompt(request_id, answers) {
       authPrompts.get(request_id)?.(answers);
@@ -757,6 +843,8 @@ export function createMockApi(): Api {
     async sessionResize() {},
     async closeSession(session_id) {
       shells.delete(session_id);
+      tunnelState.delete(session_id);
+      load.delete(session_id);
     },
     async hostKeyDecision(request_id, accept) {
       pendingHostKeys.get(request_id)?.(accept);
@@ -845,6 +933,50 @@ export function createMockApi(): Api {
       await transfer(transfer_id, size);
       files.set(remote, { kind: "file", size, modified: Math.floor(Date.now() / 1000), permissions: 0o100644 });
       return remote;
+    },
+    async copyBetween(from, path, to, toDir, overwrite, transfer_id) {
+      const name = baseName(path);
+      const now = Math.floor(Date.now() / 1000);
+      if (from.kind === "s3" && to.kind === "s3") throw fail("invalid", "copying between S3 accounts is not supported: download the file and upload it");
+      if (to.kind === "sftp") {
+        const dest = `${toDir === "/" ? "" : toDir}/${name}`;
+        sshShell(to.session_id, to.root, dest, true);
+        if (from.kind === "s3") {
+          s3Account(from.account_id);
+          const { b, key } = s3Object(path);
+          const o = b.objects.get(key);
+          if (!o) throw fail("not_found", "NoSuchKey: The specified key does not exist.");
+          if (files.has(dest) && !overwrite) throw fail("busy", "exists");
+          await transfer(transfer_id, o.size);
+          files.set(dest, { kind: "file", size: o.size, modified: now, permissions: 0o100644 });
+          return dest;
+        }
+        sshShell(from.session_id, from.root, path);
+        if (!files.get(path)) throw fail("not_found", `No such file: ${path}`);
+        if (files.has(dest) && !overwrite) throw fail("busy", "exists");
+        const under = [...files.entries()].filter(([p]) => p === path || p.startsWith(path + "/"));
+        await transfer(transfer_id, under.reduce((n, [, f]) => n + (f.kind === "file" ? f.size : 0), 0));
+        for (const [p, f] of under) {
+          files.set(dest + p.slice(path.length), { ...f, link: false, modified: now });
+          if (texts.has(p)) texts.set(dest + p.slice(path.length), texts.get(p)!);
+        }
+        return dest;
+      }
+      // A server's file to S3.
+      if (from.kind !== "sftp") throw fail("invalid", "unsupported copy");
+      sshShell(from.session_id, from.root, path);
+      s3Account(to.account_id);
+      const f = files.get(path);
+      if (!f) throw fail("not_found", `No such file: ${path}`);
+      if (f.kind === "dir") throw fail("invalid", `${path} is a folder`);
+      const { bucket, key: prefix } = s3Split(toDir);
+      if (!bucket) throw fail("invalid", "open a bucket first");
+      const b = s3Bucket(bucket);
+      const k = (prefix ? prefix + "/" : "") + name;
+      if (b.objects.has(k) && !overwrite) throw fail("busy", "exists");
+      await transfer(transfer_id, f.size);
+      b.objects.set(k, { size: f.size, modified: now });
+      return `/${bucket}/${k}`;
     },
     async sftpReadText(session_id, path, root = false) {
       sshShell(session_id, root, path);

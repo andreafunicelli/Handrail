@@ -45,6 +45,9 @@ struct SessionEntry {
     /// MCP tokens bound to harnesses launched from (or in) this session; revoked on close.
     tokens: Vec<McpToken>,
     temp_files: Vec<PathBuf>,
+    /// The connection's port forwards; dropped (stopped) with the entry.
+    forwards: Vec<aht_ssh::Forward>,
+    tunnels: Vec<crate::tunnels::TunnelStatus>,
 }
 
 enum RunKind {
@@ -123,6 +126,16 @@ impl TerminalHub {
             .ssh
             .clone()
             .ok_or_else(|| Error::Invalid("files are only available for SSH sessions".into()))
+    }
+
+    /// How the port forwards of a session are doing.
+    pub(crate) async fn tunnels(&self, id: SessionId) -> Result<Vec<crate::tunnels::TunnelStatus>> {
+        self.sessions
+            .read()
+            .await
+            .get(&id)
+            .map(|e| e.tunnels.clone())
+            .ok_or_else(|| Error::NotFound(format!("session {id}")))
     }
 
     fn revoke(&self, token: &McpToken) {
@@ -290,6 +303,8 @@ async fn register(
             ssh: None,
             tokens,
             temp_files,
+            forwards: Vec::new(),
+            tunnels: Vec::new(),
         },
     );
     info
@@ -613,7 +628,21 @@ pub async fn open_ssh(
     let ssh = shell.connection().clone();
     let info = register(app, Arc::new(shell), events, cfg, vec![], vec![]).await;
     if let Some(e) = hub(app).sessions.write().await.get_mut(&info.session_id) {
-        e.ssh = Some(ssh);
+        e.ssh = Some(ssh.clone());
+        e.tunnels = crate::tunnels::starting(&conn.tunnels);
+    }
+    // In the background: a port still held by the previous session (reconnect) is waited for,
+    // and must not hold up the terminal.
+    if !conn.tunnels.is_empty() {
+        let (app, id, tunnels) = (app.clone(), info.session_id, conn.tunnels.clone());
+        tokio::spawn(async move {
+            let (forwards, status) = crate::tunnels::start(&ssh, &tunnels).await;
+            if let Some(e) = hub(&app).sessions.write().await.get_mut(&id) {
+                e.forwards = forwards;
+                e.tunnels = status.clone();
+                crate::tunnels::emit(&app, id, status);
+            }
+        });
     }
     Ok(info)
 }

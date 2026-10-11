@@ -1,15 +1,19 @@
 //! SSH client: connect (with ProxyJump), authenticate, open PTY shells and exec channels.
 
 use crate::auth::{AuthMaterial, KeyboardInteractiveHandler, KiPrompt};
+use crate::forward::{connect_forwarded, RemoteForwards};
 use crate::verify::{HostKeyDecision, HostKeyVerifier};
 use aht_core::terminal::{Transport, TransportEvent};
 use aht_core::{Error, Result};
 use async_trait::async_trait;
-use russh::client::{self, DisconnectReason, Handle, KeyboardInteractiveAuthResponse};
+use russh::client::{
+    self, ChannelOpenHandle, DisconnectReason, Handle, KeyboardInteractiveAuthResponse, Msg,
+    Session,
+};
 use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::{Algorithm, HashAlg, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};
-use russh::{ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
+use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -91,6 +95,7 @@ pub(crate) struct ClientHandler {
     verifier: Arc<dyn HostKeyVerifier>,
     decision: SharedSlot<HostKeyDecision>,
     lost: SharedSlot<String>,
+    remote: RemoteForwards,
 }
 
 impl client::Handler for ClientHandler {
@@ -128,6 +133,26 @@ impl client::Handler for ClientHandler {
             }
         }
     }
+
+    /// A connection to a port the server listens on for us (`ssh -R`).
+    #[allow(clippy::too_many_arguments)]
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> std::result::Result<(), Self::Error> {
+        // Not a port we asked for: dropping `reply` refuses the channel.
+        if let Some(dest) = self.remote.get(connected_address, connected_port) {
+            reply.accept().await;
+            connect_forwarded(channel, dest);
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn net(e: impl std::fmt::Display) -> Error {
@@ -140,6 +165,7 @@ pub struct SshConnection {
     /// Jump-hop connections; must outlive `handle`.
     _hops: Vec<Handle<ClientHandler>>,
     lost: SharedSlot<String>,
+    remote: RemoteForwards,
     label: String,
 }
 
@@ -165,6 +191,7 @@ impl SshConnection {
 
         let mut handles: Vec<Handle<ClientHandler>> = Vec::new();
         let mut last_lost = None;
+        let remote = RemoteForwards::default();
         for ep in &endpoints {
             let decision: SharedSlot<HostKeyDecision> = Default::default();
             let lost: SharedSlot<String> = Default::default();
@@ -174,6 +201,7 @@ impl SshConnection {
                 verifier: verifier.clone(),
                 decision: decision.clone(),
                 lost: lost.clone(),
+                remote: remote.clone(),
             };
             let prev = handles.last();
             let attempt = async {
@@ -219,8 +247,13 @@ impl SshConnection {
             handle,
             _hops: handles,
             lost: last_lost.expect("at least one endpoint"),
+            remote,
             label: format!("{}@{}:{}", params.user, params.host, params.port),
         })
+    }
+
+    pub(crate) fn remote_forwards(&self) -> &RemoteForwards {
+        &self.remote
     }
 
     pub fn is_closed(&self) -> bool {

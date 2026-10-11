@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { FileEntry, FileStamp, TextFile } from "../api/types";
+import type { FileEntry, FileStamp, Place, TextFile } from "../api/types";
 
 /** A real folder, not a link to one (deleting a link removes only the link). */
 export const isFolder = (e: FileEntry) => e.kind === "dir" && !e.link;
@@ -37,7 +37,22 @@ export interface FileBackend {
   asRoot?(password: string | null): Promise<FileBackend>;
   /** Leaving root mode (the root backend's counterpart of `asRoot`). */
   leaveRoot?(): Promise<void>;
+  /** This file system as one end of a copy (`api.copyBetween`). */
+  place: Place;
 }
+
+/**
+ * Whether `entry` of `from` can be copied to `to`: server to server (files and folders), and
+ * between a server and S3 (files). Not between S3 accounts.
+ */
+export function canCopy(from: FileBackend, entry: FileEntry, to: FileBackend): boolean {
+  if (from.kind === "s3" && to.kind === "s3") return false;
+  return from.kind === "sftp" && to.kind === "sftp" ? true : entry.kind === "file";
+}
+
+/** Copy `path` into `dir` of `dest`; resolves with the new path, rejects with `exists` (see `alreadyExists`). */
+export const copyBetween = (src: FileBackend, path: string, dest: FileBackend, dir: string, overwrite: boolean, transferId: string) =>
+  api.copyBetween(src.place, path, dest.place, dir, overwrite, transferId);
 
 export function sftpBackend(sessionId: string, root = false): FileBackend {
   return {
@@ -62,6 +77,7 @@ export function sftpBackend(sessionId: string, root = false): FileBackend {
       return sftpBackend(sessionId, true);
     },
     leaveRoot: root ? () => api.sftpRootOff(sessionId) : undefined,
+    place: { kind: "sftp", session_id: sessionId, root },
   };
 }
 
@@ -83,8 +99,12 @@ export function s3Backend(accountId: string): FileBackend {
     upload: (local, dir, id) => api.s3Upload(accountId, local, dir, id),
     writable: (dir) => dir.split("/").filter(Boolean).length > 0,
     canRename: (e) => e.kind !== "dir",
+    place: { kind: "s3", account_id: accountId },
   };
 }
+
+/** The error a copy rejects with when its destination name is taken. */
+export const alreadyExists = (e: unknown) => !!e && typeof e === "object" && (e as { message?: unknown }).message === "exists";
 
 /** The error a save rejects with when the file changed on the server since it was read. */
 export const changedOnServer = (e: unknown) =>

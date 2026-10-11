@@ -31,8 +31,13 @@ import type {
   ProviderTestResult,
   Secret,
   SecretId,
+  SecretInfo,
   SessionDataEvent,
   SessionInfo,
+  Place,
+  ServerStats,
+  TunnelStatus,
+  TunnelsEvent,
   ConflictView,
   FolderPreset,
   SnapshotInfo,
@@ -50,6 +55,8 @@ export interface EventMap {
   "session://agent_mark": AgentMarkEvent;
   "session://host_key": HostKeyEvent;
   "session://auth_prompt": AuthPromptEvent;
+  /** A session's tunnels finished starting (each running or failed). */
+  "session://tunnels": TunnelsEvent;
   "transfer://progress": TransferProgress;
   "edit://proposal": EditProposal;
   /** A proposal ended without the user (agent cancelled or timed out): drop its diff. */
@@ -80,6 +87,12 @@ export interface Api {
   saveGroup(group: Group): Promise<Group>;
   deleteGroup(id: string): Promise<void>;
   saveSecret(secret: Secret): Promise<SecretId>;
+  /** Saved secrets, without their values. */
+  listSecrets(): Promise<SecretInfo[]>;
+  /** Rename a secret, or replace its value (for everything that uses it). */
+  updateSecret(id: string, label: string | null, value: string | null): Promise<void>;
+  /** Rejects while a connection, S3 account or provider still uses it. */
+  deleteSecret(id: string): Promise<void>;
 
   // sessions
   /** `promptRef` lets a connection without saved credentials ask for them while logging in
@@ -91,6 +104,10 @@ export interface Api {
   sessionWrite(sessionId: string, dataB64: string): Promise<void>;
   sessionResize(sessionId: string, cols: number, rows: number): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
+  /** The connection's port forwards in this session; see "session://tunnels". */
+  sessionTunnels(sessionId: string): Promise<TunnelStatus[]>;
+  /** CPU, memory, disk, load and uptime of an SSH session's server (takes about half a second). */
+  sessionStats(sessionId: string): Promise<ServerStats>;
   hostKeyDecision(requestId: string, accept: boolean): Promise<void>;
 
   // approvals
@@ -116,6 +133,13 @@ export interface Api {
   sftpDownload(sessionId: string, path: string, transferId: string, root?: boolean): Promise<string>;
   /** Upload a local file into `dir`; resolves with the remote path. */
   sftpUpload(sessionId: string, localPath: string, dir: string, transferId: string, root?: boolean): Promise<string>;
+  /**
+   * Copy `path` from one file system into folder `toDir` of another: server to server (files
+   * and folders), S3 to a server or a server to S3 (files). Streamed, nothing saved locally.
+   * Resolves with the new path; rejects with `{ kind: "busy", message: "exists" }` when the
+   * name is taken, unless `overwrite`.
+   */
+  copyBetween(from: Place, path: string, to: Place, toDir: string, overwrite: boolean, transferId: string): Promise<string>;
   /** UTF-8 text up to 5 MB (binary files are refused). */
   sftpReadText(sessionId: string, path: string, root?: boolean): Promise<TextFile>;
   /**

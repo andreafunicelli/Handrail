@@ -149,3 +149,157 @@ async fn real_sftp_round_trip() {
     assert!(root.list("/root").await.is_ok());
     root.close().await;
 }
+
+#[tokio::test]
+async fn real_sftp_copy_between_connections() {
+    let Some((user, host, port, key)) = target() else {
+        eprintln!("HANDRAIL_SSH_TEST not set; skipping");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let verifier = Arc::new(StrictVerifier {
+        store: KnownHosts::new(dir.path().join("known_hosts")),
+        accept_new: true,
+    });
+    let params = SshParams::new(
+        host,
+        port,
+        user,
+        AuthMaterial::Key {
+            pem: zeroize::Zeroizing::new(key),
+            passphrase: None,
+        },
+    );
+    // Two logins, as two servers would be.
+    let a = SshConnection::connect(&params, verifier.clone())
+        .await
+        .unwrap();
+    let b = SshConnection::connect(&params, verifier).await.unwrap();
+    let (src, dst) = (a.open_sftp().await.unwrap(), b.open_sftp().await.unwrap());
+    let home = src.canonicalize(".").await.unwrap();
+    let base = join(&home, &format!("handrail-copy-{}", std::process::id()));
+    let out = a
+        .exec(&format!(
+            "mkdir -p '{base}/from/sub' '{base}/to' && head -c 700000 /dev/urandom > '{base}/from/sub/data.bin' \
+             && printf 'hi\\n' > '{base}/from/run.sh' && chmod 750 '{base}/from/run.sh' \
+             && ln -s sub '{base}/from/loop' && ln -s sub/data.bin '{base}/from/data-link' \
+             && chmod 555 '{base}/from/sub' && mkfifo '{base}/pipe'"
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        out.exit_status,
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let to = join(&base, "to/copied");
+    let mut last = (0, 0);
+    let n = src
+        .copy_to(&join(&base, "from"), &dst, &to, false, |d, t| last = (d, t))
+        .await
+        .unwrap();
+    // data.bin, its link (copied as a file) and run.sh; the link to a folder is skipped.
+    assert_eq!(n, 700_000 * 2 + 3);
+    assert_eq!(last, (n, n));
+    let check = b
+        .exec(&format!(
+            "cd '{base}' && cmp from/sub/data.bin to/copied/sub/data.bin && cmp from/sub/data.bin to/copied/data-link \
+             && [ ! -L to/copied/data-link ] && [ ! -e to/copied/loop ] && stat -c %a to/copied/run.sh \
+             && stat -c %a to/copied/sub"
+        ))
+        .await
+        .unwrap();
+    // A read-only folder is filled first, then gets its mode.
+    assert_eq!(
+        String::from_utf8_lossy(&check.stdout).trim(),
+        "750\n555",
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    // A pipe (or device) is refused instead of hanging on a read.
+    let err = src
+        .copy_to(
+            &join(&base, "pipe"),
+            &dst,
+            &join(&base, "to/pipe"),
+            false,
+            |_, _| {},
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, aht_core::Error::Invalid(_)), "{err:?}");
+    assert!(src.open_read(&join(&base, "pipe")).await.is_err());
+
+    // An existing destination needs `overwrite`.
+    let err = src
+        .copy_to(&join(&base, "from/run.sh"), &dst, &to, false, |_, _| {})
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, aht_core::Error::Busy(m) if m == aht_ssh::sftp::EXISTS),
+        "{err:?}"
+    );
+    let file = join(&to, "run.sh");
+    src.copy_to(
+        &join(&base, "from/sub/data.bin"),
+        &dst,
+        &file,
+        true,
+        |_, _| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(dst.stamp(&file).await.unwrap().size, 700_000);
+
+    // The streams S3 transfers use: read a file with its size, write a new one.
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut f, size) = dst.open_read(&file).await.unwrap();
+        let mut got = Vec::new();
+        f.read_to_end(&mut got).await.unwrap();
+        assert_eq!((size, got.len() as u64), (700_000, 700_000));
+        assert!(dst.open_read(&to).await.is_err(), "a folder is refused");
+        let out = join(&to, "streamed.txt");
+        let mut w = dst.create(&out).await.unwrap();
+        w.write_all(b"streamed\n").await.unwrap();
+        w.shutdown().await.unwrap();
+        assert!(dst.exists(&out).await);
+        assert_eq!(dst.read_all(&out, 100).await.unwrap(), b"streamed\n");
+
+        // Replacing goes through a temporary file: the old content stays until the new one is
+        // complete, and nothing is left behind.
+        let tmp = aht_ssh::sftp::temp_sibling(&out);
+        let mut w = dst.create_mode(&tmp, Some(0o100600)).await.unwrap();
+        w.write_all(b"new\n").await.unwrap();
+        w.shutdown().await.unwrap();
+        assert_eq!(dst.read_all(&out, 100).await.unwrap(), b"streamed\n");
+        dst.replace_with(&tmp, &out).await.unwrap();
+        assert_eq!(dst.read_all(&out, 100).await.unwrap(), b"new\n");
+        assert_eq!(
+            dst.stamp(&out)
+                .await
+                .unwrap()
+                .permissions
+                .map(|p| p & 0o777),
+            Some(0o600)
+        );
+        let left: Vec<String> = dst
+            .list(&to)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .filter(|n| n.contains("handrail-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
+
+    let _ = a
+        .exec(&format!("chmod -R u+w '{base}'; rm -rf '{base}'"))
+        .await;
+    src.close().await;
+    dst.close().await;
+}

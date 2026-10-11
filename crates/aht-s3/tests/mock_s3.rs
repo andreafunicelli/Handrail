@@ -109,3 +109,55 @@ async fn copy_errors_inside_a_200_are_errors() {
         .await
         .is_err());
 }
+
+#[tokio::test]
+async fn exists_and_streams_without_files() {
+    let server = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .and(path("/b/here.txt"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path("/b/gone.txt"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/b/here.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("hello s3"))
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/b/up.txt"))
+        .and(header_exists("content-length"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let c = client(&server);
+    assert!(c.exists("b", "here.txt").await.unwrap());
+    assert!(!c.exists("b", "gone.txt").await.unwrap());
+
+    // Into any writer (a server's file over SFTP in the app).
+    let mut sink = Vec::new();
+    let mut last = (0, 0);
+    let n = c
+        .download_to("b", "here.txt", &mut sink, |d, t| last = (d, t))
+        .await
+        .unwrap();
+    assert_eq!((n, sink.as_slice()), (8, b"hello s3".as_slice()));
+    assert_eq!(last, (8, 8));
+
+    // From any reader with a known size.
+    let src = std::io::Cursor::new(b"from a server".to_vec());
+    assert_eq!(
+        c.upload_from("b", "up.txt", src, 13, |_, _| {})
+            .await
+            .unwrap(),
+        13
+    );
+    let got = &server.received_requests().await.unwrap();
+    let put = got.iter().find(|r| r.method.as_str() == "PUT").unwrap();
+    assert_eq!(put.body, b"from a server");
+}

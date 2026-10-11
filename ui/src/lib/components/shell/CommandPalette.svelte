@@ -79,6 +79,15 @@
       out.push({ id: "w:" + w.id, label: t("palette.workspace", { name: w.name }), icon: "layout", group: "actions", run: () => sessions.openWorkspace(w.id) });
     for (const p of pages)
       out.push({ id: "s:" + p, label: t("palette.settings", { page: t(`settings.${p}` as MessageKey) }), icon: "settings", group: "actions", run: () => ui.openSettings(p) });
+    const tab = sessions.activeTab;
+    if (tab && (sessions.broadcast[tab.id] || sessions.broadcastTargets(tab.id).length > 1))
+      out.push({
+        id: "broadcast",
+        label: t(sessions.broadcast[tab.id] ? "palette.broadcastOff" : "palette.broadcastOn"),
+        icon: "terminal",
+        group: "actions",
+        run: () => sessions.toggleBroadcast(tab.id),
+      });
     out.push({ id: "lock", label: t("palette.lock"), icon: "lock", group: "actions", run: () => vault.lock() });
     return out;
   });

@@ -36,6 +36,49 @@ export interface Connection {
   approval_mode: ApprovalMode | null;
   local_shell: string | null;
   notes: string;
+  /** Port forwards started with every session of this connection. */
+  tunnels: Tunnel[];
+}
+
+/** local: `ssh -L` (listen here, connect from the server); remote: `ssh -R` (listen on the
+ *  server, connect from here); dynamic: `ssh -D` (a SOCKS5 proxy here). */
+export type TunnelKind = "local" | "remote" | "dynamic";
+
+export interface Tunnel {
+  kind: TunnelKind;
+  bind_host: string;
+  bind_port: number;
+  /** Unused by dynamic forwards. */
+  dest_host: string;
+  dest_port: number;
+  enabled: boolean;
+}
+
+/** A session's tunnel: running on `port`, failed with `error`, or (neither) still starting. */
+export interface TunnelStatus {
+  tunnel: Tunnel;
+  port: number | null;
+  error: string | null;
+}
+
+export interface TunnelsEvent {
+  session_id: string;
+  tunnels: TunnelStatus[];
+}
+
+/** A Linux server's load, read over the session's connection. Missing values are null
+ *  (another OS, or a /proc file that could not be read). */
+export interface ServerStats {
+  /** Percent of all cores, over half a second. */
+  cpu: number | null;
+  cores: number | null;
+  mem_used: number | null;
+  mem_total: number | null;
+  /** The root file system. */
+  disk_used: number | null;
+  disk_total: number | null;
+  load1: number | null;
+  uptime_s: number | null;
 }
 
 export interface Group {
@@ -53,6 +96,9 @@ export interface Secret {
   label: string;
   value: string;
 }
+
+/** A saved secret without its value. */
+export type SecretInfo = Omit<Secret, "value">;
 
 export type ApprovalMode = "confirm_all" | "confirm_writes" | "auto";
 
@@ -243,6 +289,9 @@ export interface EditProposal {
   actor_label: string;
 }
 export type EditOutcome = "saved" | "rejected" | "failed";
+/** One end of a copy between file browsers. */
+export type Place = { kind: "sftp"; session_id: string; root: boolean } | { kind: "s3"; account_id: string };
+
 export interface TransferProgress {
   transfer_id: string;
   done: number;

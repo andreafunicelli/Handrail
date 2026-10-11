@@ -8,6 +8,7 @@
   import { settings } from "../../stores/settings.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import Icon from "../icons/Icon.svelte";
+  import SessionBar from "./SessionBar.svelte";
 
   let { sessionId, focused = false }: { sessionId: string; focused?: boolean } = $props();
 
@@ -124,6 +125,7 @@
     </div>
   {/if}
   <div class="xterm-box" bind:this={box}></div>
+  {#if info?.connection_id && settings.sessionBar}<SessionBar {sessionId} />{/if}
   {#if info?.integration === "limited"}
     <span class="badge pill warn" title={t("term.limitedHint")}>{t("term.limited")}</span>
   {/if}

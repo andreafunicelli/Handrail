@@ -27,6 +27,9 @@ export function createTauriApi(): Api {
     saveGroup: (group) => invoke("save_group", { group }),
     deleteGroup: (id) => invoke("delete_group", { id }),
     saveSecret: (secret) => invoke("save_secret", { secret }),
+    listSecrets: () => invoke("list_secrets"),
+    updateSecret: (id, label, value) => invoke("update_secret", { id, label, value }),
+    deleteSecret: (id) => invoke("delete_secret", { id }),
 
     openSession: (connection_id, cols, rows, prompt_ref) =>
       invoke("open_session", { connection_id, cols, rows, prompt_ref: prompt_ref ?? null }),
@@ -35,6 +38,8 @@ export function createTauriApi(): Api {
     sessionWrite: (session_id, data_b64) => invoke("session_write", { session_id, data_b64 }),
     sessionResize: (session_id, cols, rows) => invoke("session_resize", { session_id, cols, rows }),
     closeSession: (session_id) => invoke("close_session", { session_id }),
+    sessionTunnels: (session_id) => invoke("session_tunnels", { session_id }),
+    sessionStats: (session_id) => invoke("session_stats", { session_id }),
     hostKeyDecision: (request_id, accept) => invoke("host_key_decision", { request_id, accept }),
 
     approvalDecide: (approval_id, decision) => invoke("approval_decide", { approval_id, decision }),
@@ -53,6 +58,7 @@ export function createTauriApi(): Api {
     sftpRemove: (session_id, path, is_dir, root = false) => invoke("sftp_remove", { session_id, path, is_dir, root }),
     sftpDownload: (session_id, path, transfer_id, root = false) => invoke("sftp_download", { session_id, path, transfer_id, root }),
     sftpUpload: (session_id, local_path, dir, transfer_id, root = false) => invoke("sftp_upload", { session_id, local_path, dir, transfer_id, root }),
+    copyBetween: (from, path, to, to_dir, overwrite, transfer_id) => invoke("copy_between", { from, path, to, to_dir, overwrite, transfer_id }),
     sftpReadText: (session_id, path, root = false) => invoke("sftp_read_text", { session_id, path, root }),
     sftpWriteText: (session_id, path, text, expected, backup, root = false) => invoke("sftp_write_text", { session_id, path, text, expected, backup, root }),
     editProposalDecide: (proposal_id, outcome, note) => invoke("edit_proposal_decide", { proposal_id, outcome, note }),

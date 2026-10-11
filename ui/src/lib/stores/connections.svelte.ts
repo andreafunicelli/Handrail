@@ -22,6 +22,7 @@ export function blankConnection(groupId: string | null = null): Connection {
     approval_mode: null,
     local_shell: null,
     notes: "",
+    tunnels: [],
   };
 }
 

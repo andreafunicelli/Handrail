@@ -49,6 +49,7 @@ fn connection(name: &str) -> Connection {
         approval_mode: Some(ApprovalMode::ConfirmAll),
         local_shell: None,
         notes: "primary".into(),
+        tunnels: vec![],
     }
 }
 

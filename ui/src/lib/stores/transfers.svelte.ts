@@ -1,24 +1,30 @@
 import { api } from "../api";
 import { errorMessage } from "../api/errors";
-import type { FileBackend } from "../util/fileBackends";
+import { alreadyExists, copyBetween, type FileBackend } from "../util/fileBackends";
 import { uuid } from "../util/id";
 
 export interface Transfer {
   id: string;
   /** `FileBackend.key` of the browser that started it. */
   backend: string;
-  direction: "up" | "down";
+  /** A copy's destination browser (`FileBackend.key`): it lists the transfer too. */
+  to?: string;
+  direction: "up" | "down" | "copy";
   name: string;
   done: number;
   total: number;
   state: "running" | "done" | "failed";
-  /** Local path (downloads) or remote path (uploads) when done; the error when failed. */
+  /** Local path (downloads) or remote path (uploads, copies) when done; the error when failed. */
   result: string | null;
 }
 
 /** File transfers of every file browser, with progress from "transfer://progress". */
 class Transfers {
   list = $state<Transfer[]>([]);
+  /** The folder each open file browser shows (by `FileBackend.key`), and its file system. */
+  locations = $state.raw<Record<string, { path: string; fs: FileBackend }>>({});
+  /** Bumped when a copy lands in a browser's file system, so an open browser refreshes. */
+  touched = $state<Record<string, number>>({});
   private listening = false;
 
   private async listen() {
@@ -30,9 +36,9 @@ class Transfers {
     });
   }
 
-  private async run(backend: string, direction: Transfer["direction"], name: string, go: (id: string) => Promise<string>) {
+  private async run(backend: string, direction: Transfer["direction"], name: string, go: (id: string) => Promise<string>, to?: string) {
     await this.listen();
-    const t: Transfer = { id: uuid(), backend, direction, name, done: 0, total: 0, state: "running", result: null };
+    const t: Transfer = { id: uuid(), backend, to, direction, name, done: 0, total: 0, state: "running", result: null };
     this.list.push(t);
     const live = this.list[this.list.length - 1];
     try {
@@ -57,9 +63,39 @@ class Transfers {
     return this.run(fs.key, "up", name, (id) => fs.upload(localPath, dir, id));
   }
 
+  /** A browser of `fs` now shows `path`. */
+  located(fs: FileBackend, path: string) {
+    this.locations = { ...this.locations, [fs.key]: { path, fs } };
+  }
+
+  /** A browser of `fs` closed. */
+  gone(fs: FileBackend) {
+    if (this.locations[fs.key]?.fs !== fs) return;
+    const { [fs.key]: _, ...rest } = this.locations;
+    this.locations = rest;
+  }
+
+  /** Copy `path` from `src` into `dir` of `dest` (server to server, S3 to a server, a server to S3). */
+  async copy(src: FileBackend, path: string, dest: FileBackend, dir: string, overwrite: boolean) {
+    const name = path.split("/").pop() ?? path;
+    let id = "";
+    const out = await this.run(src.key, "copy", name, (tid) => copyBetween(src, path, dest, dir, overwrite, (id = tid)), dest.key).catch((e) => {
+      // Not a failure: the caller asks whether to replace it.
+      if (alreadyExists(e)) this.list = this.list.filter((x) => x.id !== id);
+      throw e;
+    });
+    this.touched[dest.key] = (this.touched[dest.key] ?? 0) + 1;
+    return out;
+  }
+
+  /** Transfers a browser shows: those it started, and copies into it. */
+  of(backend: string) {
+    return this.list.filter((t) => t.backend === backend || t.to === backend);
+  }
+
   /** Forget the finished transfers of one browser. */
   clear(backend: string) {
-    this.list = this.list.filter((t) => t.backend !== backend || t.state === "running");
+    this.list = this.list.filter((t) => (t.backend !== backend && t.to !== backend) || t.state === "running");
   }
 }
 

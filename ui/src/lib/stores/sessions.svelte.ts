@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { AuthPromptEvent, HostKeyEvent, SessionInfo } from "../api/types";
+import type { AuthPromptEvent, HostKeyEvent, SessionInfo, TunnelStatus } from "../api/types";
 import { errorMessage } from "../api/errors";
 import { b64ToBytes } from "../util/b64";
 import { uuid } from "../util/id";
@@ -95,6 +95,10 @@ export class Sessions {
   private wakers = new Map<string, () => void>();
   /** Label of the last agent that typed into each session (for the "Agent running" banner). */
   lastActor = $state<Record<string, string>>({});
+  /** Tabs where typing goes to every terminal pane ("type in all panes"). */
+  broadcast = $state<Record<string, boolean>>({});
+  /** Port forwards of SSH sessions whose connection has any. */
+  tunnels = $state<Record<string, TunnelStatus[]>>({});
   workspaces = $state<Workspace[]>(load("workspaces", []));
 
   activeTab = $derived(this.tabs.find((t) => t.id === this.activeTabId) ?? null);
@@ -121,6 +125,9 @@ export class Sessions {
     if (this.started) return;
     this.started = true;
     await api.on("session://data", (e) => terminals.get(e.session_id).write(b64ToBytes(e.data_b64)));
+    terminals.input = (sessionId, data) => {
+      for (const target of this.inputTargets(sessionId)) terminals.write(target, data);
+    };
     await api.on("session://state", (info) => {
       if (!this.infos[info.session_id] && !this.tabs.some((t) => findLeafBySession(t.layout, info.session_id))) return;
       this.infos[info.session_id] = info;
@@ -134,6 +141,9 @@ export class Sessions {
       this.lastActor[e.session_id] = e.actor_label;
     });
     await api.on("session://host_key", (e) => this.hostKeys.push(e));
+    await api.on("session://tunnels", (e) => {
+      if (this.infos[e.session_id]) this.tunnels[e.session_id] = e.tunnels;
+    });
     // An agent proposed a file edit: show the diff in the file's editor.
     await api.on("edit://proposal", (p) => this.openEditor(editors.propose(p)));
     await api.on("edit://resolved", (id) => editors.resolved(id));
@@ -165,6 +175,7 @@ export class Sessions {
       this.infos[info.session_id] = info;
       this.swapSession(PENDING + ref, info.session_id);
       delete this.pending[ref];
+      void this.loadTunnels(info.session_id);
       return info;
     } catch (e) {
       const p = this.pending[ref];
@@ -254,6 +265,8 @@ export class Sessions {
     terminals.peek(old)?.write(new TextEncoder().encode(`\r\n\x1b[2m── ${t("term.reconnectedLine")} ──\x1b[0m\r\n`));
     terminals.rekey(old, next.session_id);
     this.infos[next.session_id] = next;
+    void this.loadTunnels(next.session_id);
+    delete this.tunnels[old];
     this.swapSession(old, next.session_id);
     this.swapSession(FILES + old, FILES + next.session_id);
     agent.moveSession(old, next.session_id);
@@ -262,6 +275,43 @@ export class Sessions {
     delete this.reconnects[old];
     void api.closeSession(old).catch(() => {});
     delete this.infos[old];
+  }
+
+  /** The session's tunnels as they stand (the "session://tunnels" event brings the outcome). */
+  private async loadTunnels(sessionId: string) {
+    const list = await api.sessionTunnels(sessionId).catch(() => []);
+    // An event may have brought the started tunnels meanwhile.
+    if (list.length && this.infos[sessionId] && !this.tunnels[sessionId]?.some((x) => x.port || x.error)) this.tunnels[sessionId] = list;
+  }
+
+  /**
+   * The live terminals typing in a tab reaches while "type in all panes" is on: every terminal
+   * pane except those an agent is driving or that are disconnected.
+   */
+  broadcastTargets(tabId: string): string[] {
+    const tab = this.tabs.find((x) => x.id === tabId);
+    if (!tab) return [];
+    return leaves(tab.layout)
+      .map((l) => l.sessionId)
+      .filter((id) => isTerminal(id) && this.infos[id] && this.infos[id].state !== "disconnected" && this.infos[id].state !== "agent_running");
+  }
+
+  /** Whether typing in `tabId` currently goes to more than one terminal. */
+  broadcasting(tabId: string): boolean {
+    return !!this.broadcast[tabId] && this.broadcastTargets(tabId).length > 1;
+  }
+
+  /** Where input typed in `sessionId` goes: that session, or every pane of its tab. */
+  inputTargets(sessionId: string): string[] {
+    const tab = this.tabs.find((x) => this.broadcast[x.id] && findLeafBySession(x.layout, sessionId));
+    if (!tab) return [sessionId];
+    const targets = this.broadcastTargets(tab.id);
+    return targets.includes(sessionId) ? targets : [sessionId, ...targets];
+  }
+
+  toggleBroadcast(tabId: string) {
+    if (this.broadcast[tabId]) delete this.broadcast[tabId];
+    else this.broadcast[tabId] = true;
   }
 
   /** Try now: skips the wait, or starts again after giving up. */
@@ -433,6 +483,7 @@ export class Sessions {
     void api.closeSession(sessionId).catch(() => {});
     terminals.dispose(sessionId);
     delete this.infos[sessionId];
+    delete this.tunnels[sessionId];
   }
 
   closeTab(id: string) {
@@ -445,6 +496,7 @@ export class Sessions {
     if (idx < 0) return;
     for (const l of leaves(this.tabs[idx].layout)) this.dropSession(l.sessionId);
     this.tabs = this.tabs.filter((t) => t.id !== id);
+    delete this.broadcast[id];
     if (this.activeTabId === id) this.activeTabId = this.tabs[Math.min(idx, this.tabs.length - 1)]?.id ?? null;
   }
 
@@ -472,6 +524,7 @@ export class Sessions {
     if (!src || !dst) return;
     const layout = splitLeaf(dst.layout, leafId, src.layout, dir, before);
     this.tabs = this.tabs.filter((t) => t.id !== srcTabId).map((t) => (t.id === dstTabId ? { ...t, layout, activeLeaf: src.activeLeaf } : t));
+    delete this.broadcast[srcTabId];
     this.activeTabId = dstTabId;
   }
 

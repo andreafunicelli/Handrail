@@ -1,6 +1,6 @@
 import type { Connection } from "../api/types";
 
-export type SettingsPage = "providers" | "harnesses" | "approvals" | "import" | "sync" | "appearance" | "vault" | "about";
+export type SettingsPage = "providers" | "harnesses" | "approvals" | "import" | "sync" | "appearance" | "credentials" | "vault" | "about";
 export type RailView = "connections" | "snippets";
 
 /** Transient UI state: overlays, drawers, palette. */

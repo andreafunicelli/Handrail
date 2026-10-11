@@ -93,10 +93,12 @@
 {:else}
   {@const info = sessions.infos[node.sessionId]}
   {@const focused = sessions.activeTabId === tabId && sessions.activeTab?.activeLeaf === node.id}
+  {@const bcast = sessions.broadcasting(tabId) && sessions.broadcastTargets(tabId).includes(node.sessionId)}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="pane"
     class:focused={multi && focused}
+    class:bcast
     bind:this={el}
     onpointerdown={() => !focused && sessions.focus(tabId, node.id)}
     ondragover={over}
@@ -108,6 +110,7 @@
         <span class="dot {info?.state ?? ''}"></span>
         <span class="env-tick env-{info?.env ?? 'none'}"></span>
         <span class="ptitle">{sessions.paneTitle(node.sessionId)}</span>
+        {#if bcast}<button class="bpill" title={t("tabs.broadcastStop")} onclick={() => sessions.toggleBroadcast(tabId)}>{t("tabs.broadcastPill")}</button>{/if}
         <button class="icon-btn" title={t("tabs.closePane")} aria-label={t("tabs.closePane")} onclick={() => sessions.closePane(tabId, node.id)}>
           <Icon name="x" size={12} />
         </button>
@@ -201,6 +204,25 @@
   .pane.focused .pane-head {
     color: var(--text);
     box-shadow: inset 0 1px 0 var(--accent);
+  }
+  /* Typing goes to every pane of the tab: hard to miss. */
+  .pane.bcast::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--warn);
+    pointer-events: none;
+    z-index: 3;
+  }
+  .bpill {
+    height: 16px;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: var(--warn-soft);
+    color: var(--warn);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
   }
   .pane-head .icon-btn {
     width: 20px;

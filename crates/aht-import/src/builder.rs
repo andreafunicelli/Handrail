@@ -191,6 +191,7 @@ impl Builder {
             approval_mode: None,
             local_shell: None,
             notes,
+            tunnels: Vec::new(),
         });
         id
     }

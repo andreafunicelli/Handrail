@@ -49,8 +49,9 @@ class Snippets {
   }
 
   /**
-   * Type a snippet into the focused terminal, with Enter when `run`. Snippets with placeholders
-   * open the fill-in dialog first. Throws when no terminal is focused.
+   * Type a snippet into the focused terminal (every terminal of its tab while "type in all
+   * panes" is on), with Enter when `run`. Snippets with placeholders open the fill-in dialog
+   * first. Throws when no terminal is focused.
    */
   async use(s: Snippet | SuggestedSnippet, run: boolean, values?: Record<string, string>) {
     const sessionId = sessions.activeSessionId;
@@ -60,10 +61,13 @@ class Snippets {
       return;
     }
     const command = fillPlaceholders(s.command, values ?? {});
-    const bracketedPaste = terminals.peek(sessionId)?.term.modes.bracketedPasteMode ?? false;
-    const input = snippetInput(command, run, bracketedPaste);
-    if (input === null) throw new Error(t("snip.multilineInsert"));
-    await api.sessionWrite(sessionId, strToB64(input));
+    // "Type in all panes" on: every terminal of the tab gets it.
+    const inputs = sessions.inputTargets(sessionId).map((target) => {
+      const bracketedPaste = terminals.peek(target)?.term.modes.bracketedPasteMode ?? false;
+      return { target, input: snippetInput(command, run, bracketedPaste) };
+    });
+    if (inputs.some((x) => x.input === null)) throw new Error(t("snip.multilineInsert"));
+    await Promise.all(inputs.map((x) => api.sessionWrite(x.target, strToB64(x.input!))));
     sessions.focusSession(sessionId);
   }
 }

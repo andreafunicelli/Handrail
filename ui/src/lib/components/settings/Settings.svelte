@@ -8,6 +8,7 @@
   import SyncPage from "./SyncPage.svelte";
   import AppearancePage from "./AppearancePage.svelte";
   import VaultPage from "./VaultPage.svelte";
+  import CredentialsPage from "./CredentialsPage.svelte";
   import AboutPage from "./AboutPage.svelte";
   import { t } from "../../i18n";
   import { ui, type SettingsPage } from "../../stores/ui.svelte";
@@ -19,6 +20,7 @@
     { id: "import", icon: "import" },
     { id: "sync", icon: "cloud" },
     { id: "appearance", icon: "palette" },
+    { id: "credentials", icon: "key" },
     { id: "vault", icon: "lock" },
     { id: "about", icon: "info" },
   ];
@@ -47,6 +49,7 @@
         {:else if page === "import"}<ImportPage />
         {:else if page === "sync"}<SyncPage />
         {:else if page === "appearance"}<AppearancePage />
+        {:else if page === "credentials"}<CredentialsPage />
         {:else if page === "vault"}<VaultPage />
         {:else}<AboutPage />{/if}
       </div>

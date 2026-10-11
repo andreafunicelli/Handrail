@@ -1,15 +1,18 @@
 mod autosync;
 mod cmd_misc;
 mod cmd_vault;
+mod copy;
 mod s3;
 mod sftp;
 mod state;
+mod stats;
 mod terminal;
+mod tunnels;
 
 use tauri::Manager;
 
 /// The single source of the version is the workspace `Cargo.toml` (`[workspace.package]`);
-/// release builds stamp it to `<major>.<minor>.<build number>`.
+/// release builds stamp it to `<major>.<minor>.<release number>`.
 #[tauri::command(rename_all = "snake_case")]
 fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
@@ -116,6 +119,9 @@ pub fn run() {
             cmd_vault::save_group,
             cmd_vault::delete_group,
             cmd_vault::save_secret,
+            cmd_vault::list_secrets,
+            cmd_vault::update_secret,
+            cmd_vault::delete_secret,
             cmd_vault::list_snippets,
             cmd_vault::save_snippet,
             cmd_vault::delete_snippet,
@@ -161,6 +167,7 @@ pub fn run() {
             sftp::sftp_remove,
             sftp::sftp_download,
             sftp::sftp_upload,
+            copy::copy_between,
             sftp::sftp_sudo,
             sftp::sftp_root_off,
             sftp::sftp_read_text,
@@ -179,6 +186,8 @@ pub fn run() {
             terminal::session_resize,
             terminal::close_session,
             terminal::list_sessions,
+            tunnels::session_tunnels,
+            stats::session_stats,
             terminal::set_approval_mode,
             terminal::agent_send,
             terminal::agent_cancel,

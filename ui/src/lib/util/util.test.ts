@@ -171,6 +171,8 @@ describe("time", () => {
     expect(formatBytes(4300)).toBe("4.2 KB");
     expect(formatBytes(50 * 1024)).toBe("50 KB");
     expect(formatBytes(3 * 1024 * 1024)).toBe("3.0 MB");
+    expect(formatBytes(2.5 * 1024 ** 3)).toBe("2.5 GB");
+    expect(formatBytes(3 * 1024 ** 4)).toBe("3.0 TB");
   });
 });
 

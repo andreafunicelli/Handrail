@@ -65,6 +65,46 @@ pub struct Connection {
     pub local_shell: Option<String>,
     #[serde(default)]
     pub notes: String,
+    /// Port forwards started with every session of this connection.
+    #[serde(default)]
+    pub tunnels: Vec<Tunnel>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelKind {
+    /// `ssh -L`: listen on this computer, connect from the server.
+    Local,
+    /// `ssh -R`: listen on the server, connect from this computer.
+    Remote,
+    /// `ssh -D`: a SOCKS5 proxy on this computer; every connection goes out from the server.
+    Dynamic,
+}
+
+/// A port forward (SSH tunnel).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tunnel {
+    pub kind: TunnelKind,
+    /// Where to listen: this computer (local, dynamic) or the server (remote).
+    #[serde(default = "loopback")]
+    pub bind_host: String,
+    pub bind_port: u16,
+    /// Where connections go, as seen from the server (local) or from this computer (remote).
+    /// Unused by dynamic forwards.
+    #[serde(default)]
+    pub dest_host: String,
+    #[serde(default)]
+    pub dest_port: u16,
+    #[serde(default = "enabled")]
+    pub enabled: bool,
+}
+
+fn loopback() -> String {
+    "127.0.0.1".into()
+}
+
+fn enabled() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

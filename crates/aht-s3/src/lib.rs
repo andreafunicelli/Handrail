@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Bytes read per upload chunk.
 const CHUNK: usize = 256 * 1024;
@@ -465,6 +465,20 @@ impl S3Client {
         Ok(())
     }
 
+    /// Whether object `key` exists.
+    pub async fn exists(&self, bucket: &str, key: &str) -> Result<bool> {
+        let target = Target {
+            bucket: Some(bucket),
+            key,
+            query: &[],
+        };
+        match self.call(Method::HEAD, target, &[]).await {
+            Ok(_) => Ok(true),
+            Err(Error::NotFound(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Copy object `key` to the new local file `local`. `progress(done, total)` follows the
     /// bytes. A failed download removes the partial file.
     pub async fn download(
@@ -472,6 +486,28 @@ impl S3Client {
         bucket: &str,
         key: &str,
         local: &Path,
+        progress: impl FnMut(u64, u64) + Send,
+    ) -> Result<u64> {
+        let mut dst = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(local)
+            .await
+            .map_err(io_err)?;
+        let copied = self.download_to(bucket, key, &mut dst, progress).await;
+        if copied.is_err() {
+            drop(dst);
+            let _ = tokio::fs::remove_file(local).await;
+        }
+        copied
+    }
+
+    /// Stream object `key` into `dst` (a file, or one on a server over SFTP).
+    pub async fn download_to<W: AsyncWrite + Unpin + Send>(
+        &self,
+        bucket: &str,
+        key: &str,
+        dst: &mut W,
         mut progress: impl FnMut(u64, u64) + Send,
     ) -> Result<u64> {
         let target = Target {
@@ -481,29 +517,15 @@ impl S3Client {
         };
         let mut resp = self.call(Method::GET, target, &[]).await?;
         let total = resp.content_length().unwrap_or(0);
-        let mut dst = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(local)
-            .await
-            .map_err(io_err)?;
-        let copied = async {
-            let mut done = 0u64;
-            progress(0, total);
-            while let Some(chunk) = resp.chunk().await.map_err(net)? {
-                dst.write_all(&chunk).await.map_err(io_err)?;
-                done += chunk.len() as u64;
-                progress(done, total);
-            }
-            dst.flush().await.map_err(io_err)?;
-            Ok::<u64, Error>(done)
+        let mut done = 0u64;
+        progress(0, total);
+        while let Some(chunk) = resp.chunk().await.map_err(net)? {
+            dst.write_all(&chunk).await.map_err(io_err)?;
+            done += chunk.len() as u64;
+            progress(done, total);
         }
-        .await;
-        if copied.is_err() {
-            drop(dst);
-            let _ = tokio::fs::remove_file(local).await;
-        }
-        copied
+        dst.flush().await.map_err(io_err)?;
+        Ok(done)
     }
 
     /// Upload the local file `local` as `key` (created or replaced), up to 5 GiB.
@@ -512,10 +534,23 @@ impl S3Client {
         bucket: &str,
         key: &str,
         local: &Path,
-        mut progress: impl FnMut(u64, u64) + Send + 'static,
+        progress: impl FnMut(u64, u64) + Send + 'static,
     ) -> Result<u64> {
         let file = tokio::fs::File::open(local).await.map_err(io_err)?;
         let total = file.metadata().await.map_err(io_err)?.len();
+        self.upload_from(bucket, key, file, total, progress).await
+    }
+
+    /// Upload the `total` bytes `src` gives (a file, or one on a server over SFTP) as `key`
+    /// (created or replaced), up to 5 GiB.
+    pub async fn upload_from<R: AsyncRead + Unpin + Send + 'static>(
+        &self,
+        bucket: &str,
+        key: &str,
+        src: R,
+        total: u64,
+        mut progress: impl FnMut(u64, u64) + Send + 'static,
+    ) -> Result<u64> {
         if total > MAX_PUT {
             return Err(Error::Invalid(
                 "files over 5 GiB need a multipart upload, which is not supported yet".into(),
@@ -523,7 +558,7 @@ impl S3Client {
         }
         progress(0, total);
         let stream = futures::stream::unfold(
-            (file, 0u64, progress),
+            (src, 0u64, progress),
             move |(mut f, done, mut p)| async move {
                 let mut buf = vec![0u8; CHUNK];
                 match f.read(&mut buf).await {
