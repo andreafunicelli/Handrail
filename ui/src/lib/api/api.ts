@@ -1,5 +1,9 @@
 import type {
   FileEntry,
+  FileStamp,
+  TextFile,
+  EditProposal,
+  EditOutcome,
   TransferProgress,
   Snippet,
   S3Account,
@@ -47,6 +51,9 @@ export interface EventMap {
   "session://host_key": HostKeyEvent;
   "session://auth_prompt": AuthPromptEvent;
   "transfer://progress": TransferProgress;
+  "edit://proposal": EditProposal;
+  /** A proposal ended without the user (agent cancelled or timed out): drop its diff. */
+  "edit://resolved": string;
   "approval://requested": ApprovalRequest;
   "agent://event": AgentEventEnvelope;
   "sync://status": SyncStatus;
@@ -94,15 +101,31 @@ export interface Api {
 
   // providers / harnesses / agent
   // files (SFTP on an SSH session's connection)
-  sftpHome(sessionId: string): Promise<string>;
-  sftpList(sessionId: string, path: string): Promise<FileEntry[]>;
-  sftpMkdir(sessionId: string, path: string): Promise<void>;
-  sftpRename(sessionId: string, from: string, to: string): Promise<void>;
-  sftpRemove(sessionId: string, path: string, isDir: boolean): Promise<void>;
+  /** Start the session's root SFTP server through sudo (see `root` below). Rejects with
+   *  `{ kind: "auth", message: "sudo_password_required" }` when the password must be typed. */
+  sftpSudo(sessionId: string, password: string | null): Promise<void>;
+  /** The file browser left root mode (agent proposals stop using root). */
+  sftpRootOff(sessionId: string): Promise<void>;
+  /** `root`: use the server started by `sftpSudo` instead of the login user's. */
+  sftpHome(sessionId: string, root?: boolean): Promise<string>;
+  sftpList(sessionId: string, path: string, root?: boolean): Promise<FileEntry[]>;
+  sftpMkdir(sessionId: string, path: string, root?: boolean): Promise<void>;
+  sftpRename(sessionId: string, from: string, to: string, root?: boolean): Promise<void>;
+  sftpRemove(sessionId: string, path: string, isDir: boolean, root?: boolean): Promise<void>;
   /** Download into the Downloads folder; resolves with the local path. Progress: "transfer://progress". */
-  sftpDownload(sessionId: string, path: string, transferId: string): Promise<string>;
+  sftpDownload(sessionId: string, path: string, transferId: string, root?: boolean): Promise<string>;
   /** Upload a local file into `dir`; resolves with the remote path. */
-  sftpUpload(sessionId: string, localPath: string, dir: string, transferId: string): Promise<string>;
+  sftpUpload(sessionId: string, localPath: string, dir: string, transferId: string, root?: boolean): Promise<string>;
+  /** UTF-8 text up to 5 MB (binary files are refused). */
+  sftpReadText(sessionId: string, path: string, root?: boolean): Promise<TextFile>;
+  /**
+   * Save in place. `expected`: the stamp from the read (null for a new file); a file changed
+   * since rejects with `{ kind: "busy", message: "changed_on_server" }`. `backup` copies the
+   * current file to `<path>.bak` first.
+   */
+  sftpWriteText(sessionId: string, path: string, text: string, expected: FileStamp | null, backup: boolean, root?: boolean): Promise<FileStamp>;
+  /** Answer an agent's proposed edit (after saving it, when accepted). */
+  editProposalDecide(proposalId: string, outcome: EditOutcome, note: string | null): Promise<void>;
   /** Native file picker; empty when cancelled. */
   pickFiles(): Promise<string[]>;
 

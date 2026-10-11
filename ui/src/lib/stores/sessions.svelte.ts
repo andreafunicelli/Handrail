@@ -19,6 +19,8 @@ import { load, save } from "../util/storage";
 import { terminals } from "../terminal/host";
 import { connections } from "./connections.svelte";
 import { agent } from "./agent.svelte";
+import { editors } from "./editors.svelte";
+import { ui } from "./ui.svelte";
 import { RECONNECT_ATTEMPTS, reconnectDelay, retryable, shouldAutoReconnect } from "../util/reconnect";
 import { t } from "../i18n";
 import { s3 } from "./s3.svelte";
@@ -75,8 +77,12 @@ export const filesSession = (leafSession: string) => leafSession.slice(FILES.len
 const S3 = "s3:";
 export const isS3 = (leafSession: string) => leafSession.startsWith(S3);
 export const s3AccountOf = (leafSession: string) => leafSession.slice(S3.length);
-/** Whether a leaf shows a live terminal (not a connecting pane or a file browser). */
-const isTerminal = (leafSession: string) => !isPending(leafSession) && !isFiles(leafSession) && !isS3(leafSession);
+/** A file editor pane holds `edit:<doc id>` (see the editors store). */
+const EDIT = "edit:";
+export const isEdit = (leafSession: string) => leafSession.startsWith(EDIT);
+export const editDocOf = (leafSession: string) => leafSession.slice(EDIT.length);
+/** Whether a leaf shows a live terminal (not a connecting pane, file browser or editor). */
+const isTerminal = (leafSession: string) => !isPending(leafSession) && !isFiles(leafSession) && !isS3(leafSession) && !isEdit(leafSession);
 
 export class Sessions {
   infos = $state<Record<string, SessionInfo>>({});
@@ -99,6 +105,14 @@ export class Sessions {
     return id && isTerminal(id) ? id : null;
   });
   activeSession = $derived(this.activeSessionId ? (this.infos[this.activeSessionId] ?? null) : null);
+  /** The SSH session the focused pane works on: its terminal, file browser or file editor. */
+  contextSession = $derived.by(() => {
+    const tab = this.activeTab;
+    const id = tab ? ((findLeaf(tab.layout, tab.activeLeaf) ?? leaves(tab.layout)[0])?.sessionId ?? null) : null;
+    if (!id) return null;
+    const sid = isFiles(id) ? filesSession(id) : isEdit(id) ? (editors.docs[editDocOf(id)]?.fs.sessionId ?? null) : isTerminal(id) ? id : null;
+    return sid ? (this.infos[sid] ?? null) : null;
+  });
 
   private started = false;
 
@@ -120,6 +134,9 @@ export class Sessions {
       this.lastActor[e.session_id] = e.actor_label;
     });
     await api.on("session://host_key", (e) => this.hostKeys.push(e));
+    // An agent proposed a file edit: show the diff in the file's editor.
+    await api.on("edit://proposal", (p) => this.openEditor(editors.propose(p)));
+    await api.on("edit://resolved", (id) => editors.resolved(id));
     await api.on("session://auth_prompt", (e) => {
       const p = this.pending[e.prompt_ref];
       if (p) this.pending[e.prompt_ref] = { ...p, prompt: e };
@@ -350,6 +367,47 @@ export class Sessions {
     }
   }
 
+  /**
+   * Show editor doc `docId`: focus its pane, else split it to the right of its session's file
+   * browser (or terminal) when that tab has a single pane, else open a new tab (an editor
+   * squeezed into a third column is too narrow to use).
+   */
+  openEditor(docId: string) {
+    const leafSession = EDIT + docId;
+    for (const t of this.tabs) {
+      const existing = findLeafBySession(t.layout, leafSession);
+      if (existing) return this.focus(t.id, existing.id);
+    }
+    const sid = editors.docs[docId]?.fs.sessionId;
+    for (const near of sid ? [FILES + sid, sid] : [])
+      for (const t of this.tabs) {
+        const at = findLeafBySession(t.layout, near);
+        if (!at) continue;
+        if (leaves(t.layout).length > 1) {
+          this.placeLeaf(leafSession);
+          return;
+        }
+        const node = leaf(leafSession);
+        this.updateTab(t.id, (tab) => ({ ...tab, layout: splitLeaf(tab.layout, at.id, node, "row"), activeLeaf: node.id }));
+        this.activeTabId = t.id;
+        return;
+      }
+    this.placeLeaf(leafSession);
+  }
+
+  /** Run `close` now, or after the user agrees to drop unsaved edits in `leafSessions`. */
+  private closeChecked(leafSessions: string[], close: () => void) {
+    const dirty = leafSessions.filter((l) => isEdit(l) && editors.dirty(editDocOf(l)));
+    if (!dirty.length) return close();
+    void (async () => {
+      for (const l of dirty) {
+        const name = editors.docs[editDocOf(l)]?.name ?? "";
+        if (!(await ui.ask(t("edit.discardTitle", { name }), { body: t("edit.discardBody"), confirmLabel: t("edit.discard"), danger: true }))) return;
+      }
+      close();
+    })();
+  }
+
   /** Open an S3 account's browser: focus it if open, else a new tab (or a split). */
   openS3(accountId: string, split?: SplitDir) {
     const leafSession = S3 + accountId;
@@ -361,6 +419,7 @@ export class Sessions {
   }
 
   private dropSession(sessionId: string) {
+    if (isEdit(sessionId)) return editors.close(editDocOf(sessionId));
     if (isFiles(sessionId) || isS3(sessionId)) return;
     if (isPending(sessionId)) {
       const ref = pendingRef(sessionId);
@@ -377,6 +436,11 @@ export class Sessions {
   }
 
   closeTab(id: string) {
+    const tab = this.tabs.find((t) => t.id === id);
+    if (tab) this.closeChecked(leaves(tab.layout).map((l) => l.sessionId), () => this.removeTab(id));
+  }
+
+  private removeTab(id: string) {
     const idx = this.tabs.findIndex((t) => t.id === id);
     if (idx < 0) return;
     for (const l of leaves(this.tabs[idx].layout)) this.dropSession(l.sessionId);
@@ -386,10 +450,16 @@ export class Sessions {
 
   closePane(tabId: string, leafId: string) {
     const tab = this.tabs.find((t) => t.id === tabId);
+    const target = tab && findLeaf(tab.layout, leafId);
+    if (target) this.closeChecked([target.sessionId], () => this.removePane(tabId, leafId));
+  }
+
+  private removePane(tabId: string, leafId: string) {
+    const tab = this.tabs.find((t) => t.id === tabId);
     if (!tab) return;
     const l = findLeaf(tab.layout, leafId);
     const rest = removeLeaf(tab.layout, leafId);
-    if (!rest) return this.closeTab(tabId);
+    if (!rest) return this.removeTab(tabId);
     if (l) this.dropSession(l.sessionId);
     this.updateTab(tabId, (t) => ({ ...t, layout: rest, activeLeaf: t.activeLeaf === leafId ? leaves(rest)[0].id : t.activeLeaf }));
   }
@@ -440,6 +510,10 @@ export class Sessions {
     if (isPending(leafSession)) return this.pending[pendingRef(leafSession)]?.label ?? "…";
     if (isFiles(leafSession)) return `Files · ${this.infos[filesSession(leafSession)]?.title ?? "…"}`;
     if (isS3(leafSession)) return `S3 · ${s3.byId(s3AccountOf(leafSession))?.name ?? "…"}`;
+    if (isEdit(leafSession)) {
+      const id = editDocOf(leafSession);
+      return `${editors.docs[id]?.name ?? "…"}${editors.dirty(id) ? " •" : ""}`;
+    }
     return this.infos[leafSession]?.title ?? "…";
   }
 
@@ -451,7 +525,7 @@ export class Sessions {
   // ---- workspaces ----
   saveWorkspace(name: string) {
     // File browsers are not saved; a pane still logging in is saved as its connection.
-    const browser = (id: string) => isFiles(id) || isS3(id);
+    const browser = (id: string) => isFiles(id) || isS3(id) || isEdit(id);
     const connOf = (id: string) =>
       (isPending(id) ? this.pending[pendingRef(id)]?.connectionId : this.infos[id]?.connection_id) ?? "local";
     const tabs = this.tabs.flatMap((t) => {

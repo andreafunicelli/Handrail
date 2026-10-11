@@ -2,14 +2,19 @@
 //! files needs no second login. Downloads go to the Downloads folder; uploads come from paths
 //! the user picked in the native file dialog.
 
+use crate::cmd_vault::secret_value;
 use crate::state::{err, AppState};
+use aht_core::model::{Connection, SshAuth};
 use aht_core::{Error, Result, SessionId};
-use aht_ssh::{EntryKind, RemoteEntry, Sftp};
-use serde::Serialize;
+use aht_ssh::sftp::SUDO_PASSWORD_REQUIRED;
+use aht_ssh::{EntryKind, FileStamp, RemoteEntry, Sftp};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
+use zeroize::Zeroizing;
 
 #[derive(Serialize)]
 pub struct FileEntry {
@@ -51,16 +56,113 @@ struct ProgressEvent {
     total: u64,
 }
 
-/// The session's SFTP client, started on first use.
-async fn sftp(state: &AppState, session_id: SessionId) -> Result<Arc<Sftp>> {
+/// The session's SFTP client: as the login user (started on first use), or as root once
+/// [`sftp_sudo`] started it.
+pub(crate) async fn client(
+    state: &AppState,
+    session_id: SessionId,
+    root: Option<bool>,
+) -> Result<Arc<Sftp>> {
+    let root = root.unwrap_or(false);
     let mut map = state.terminal.sftp.lock().await;
-    if let Some(s) = map.get(&session_id) {
+    if let Some(s) = map.get(&(session_id, root)) {
         return Ok(s.clone());
+    }
+    if root {
+        return Err(Error::Invalid(
+            "switch the file browser to root first".into(),
+        ));
     }
     let conn = state.terminal.ssh_connection(session_id).await?;
     let s = Arc::new(conn.open_sftp().await?);
-    map.insert(session_id, s.clone());
+    map.insert((session_id, false), s.clone());
     Ok(s)
+}
+
+/// The saved login password of the session's connection, if it logs in with one.
+async fn login_password(state: &AppState, session_id: SessionId) -> Option<Zeroizing<String>> {
+    let conn_id = state
+        .terminal
+        .session(session_id)
+        .await
+        .ok()?
+        .info()
+        .connection_id?;
+    let conn = state
+        .vault
+        .lock()
+        .await
+        .get::<Connection>(&conn_id.to_string())
+        .ok()??;
+    match conn.auth {
+        SshAuth::Password { secret } => secret_value(state, secret).await.ok().map(Zeroizing::new),
+        _ => None,
+    }
+}
+
+/// Start the session's root SFTP server through sudo. Without `password`: passwordless sudo,
+/// then the connection's saved login password; fails with `sudo_password_required` when the
+/// user has to type it. The password is used once and never stored.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sftp_sudo(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    password: Option<String>,
+) -> Result<()> {
+    if state
+        .terminal
+        .sftp
+        .lock()
+        .await
+        .contains_key(&(session_id, true))
+    {
+        set_root_active(&state, session_id, true);
+        return Ok(());
+    }
+    let password = password.map(Zeroizing::new);
+    let conn = state.terminal.ssh_connection(session_id).await?;
+    let needs_password = |e: &Error| matches!(e, Error::Auth(m) if m == SUDO_PASSWORD_REQUIRED);
+    let s = match password {
+        Some(pw) => conn.open_sftp_sudo(Some(pw.as_str())).await?,
+        None => match conn.open_sftp_sudo(None).await {
+            Ok(s) => s,
+            Err(e) if needs_password(&e) => match login_password(&state, session_id).await {
+                // A different sudo password: ask for it instead of reporting a wrong one.
+                Some(pw) => conn
+                    .open_sftp_sudo(Some(pw.as_str()))
+                    .await
+                    .map_err(|_| Error::Auth(SUDO_PASSWORD_REQUIRED.into()))?,
+                None => return Err(e),
+            },
+            Err(e) => return Err(e),
+        },
+    };
+    state
+        .terminal
+        .sftp
+        .lock()
+        .await
+        .insert((session_id, true), Arc::new(s));
+    set_root_active(&state, session_id, true);
+    Ok(())
+}
+
+/// Whether the session's file browser is in root mode (agent proposals then use root).
+fn set_root_active(state: &AppState, session_id: SessionId, on: bool) {
+    let mut set = state.terminal.sftp_root_active.lock().unwrap();
+    if on {
+        set.insert(session_id);
+    } else {
+        set.remove(&session_id);
+    }
+}
+
+/// The file browser left root mode: agent proposals go back to the login user. The root client
+/// stays for editors opened as root.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sftp_root_off(state: State<'_, AppState>, session_id: SessionId) -> Result<()> {
+    set_root_active(&state, session_id, false);
+    Ok(())
 }
 
 /// Progress events for `transfer_id`, at most ten a second plus the final one.
@@ -88,17 +190,25 @@ pub(crate) fn reporter(
 
 /// The login directory of the session's user.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn sftp_home(state: State<'_, AppState>, session_id: SessionId) -> Result<String> {
-    sftp(&state, session_id).await?.canonicalize(".").await
+pub async fn sftp_home(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    root: Option<bool>,
+) -> Result<String> {
+    client(&state, session_id, root)
+        .await?
+        .canonicalize(".")
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sftp_list(
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     path: String,
 ) -> Result<Vec<FileEntry>> {
-    let s = sftp(&state, session_id).await?;
+    let s = client(&state, session_id, root).await?;
     Ok(s.list(&path).await?.into_iter().map(Into::into).collect())
 }
 
@@ -106,19 +216,24 @@ pub async fn sftp_list(
 pub async fn sftp_mkdir(
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     path: String,
 ) -> Result<()> {
-    sftp(&state, session_id).await?.mkdir(&path).await
+    client(&state, session_id, root).await?.mkdir(&path).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sftp_rename(
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     from: String,
     to: String,
 ) -> Result<()> {
-    sftp(&state, session_id).await?.rename(&from, &to).await
+    client(&state, session_id, root)
+        .await?
+        .rename(&from, &to)
+        .await
 }
 
 /// Delete a file or an empty folder.
@@ -126,10 +241,111 @@ pub async fn sftp_rename(
 pub async fn sftp_remove(
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     path: String,
     is_dir: bool,
 ) -> Result<()> {
-    sftp(&state, session_id).await?.remove(&path, is_dir).await
+    client(&state, session_id, root)
+        .await?
+        .remove(&path, is_dir)
+        .await
+}
+
+/// Largest file the editor opens.
+const MAX_TEXT: u64 = 5 * 1024 * 1024;
+/// Error text for a file changed on the server since it was read.
+pub(crate) const CHANGED_ON_SERVER: &str = "changed_on_server";
+
+/// What a file looked like when read, sent back with the save. `hash` (SHA-256 of the contents)
+/// is what the conflict check compares: size and a seconds mtime miss a same-size rewrite
+/// within the same second.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stamp {
+    size: u64,
+    modified: Option<u32>,
+    #[serde(default)]
+    hash: Option<String>,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+impl Stamp {
+    fn of(s: FileStamp, contents: &[u8]) -> Self {
+        Stamp {
+            size: s.size,
+            modified: s.modified,
+            hash: Some(sha256_hex(contents)),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct TextFile {
+    pub(crate) text: String,
+    pub(crate) stamp: Stamp,
+}
+
+/// Bytes as editable text: UTF-8 without NUL bytes (those mean a binary file).
+fn as_text(path: &str, bytes: Vec<u8>) -> Result<String> {
+    if bytes.contains(&0) {
+        return Err(Error::Invalid(format!("{path} is a binary file")));
+    }
+    String::from_utf8(bytes).map_err(|_| Error::Invalid(format!("{path} is not UTF-8 text")))
+}
+
+pub(crate) async fn read_text(s: &Sftp, path: &str) -> Result<TextFile> {
+    let info = s.stamp(path).await?;
+    let bytes = s.read_all(path, MAX_TEXT).await?;
+    let stamp = Stamp::of(info, &bytes);
+    Ok(TextFile {
+        text: as_text(path, bytes)?,
+        stamp,
+    })
+}
+
+/// Open a text file for the editor.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sftp_read_text(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    root: Option<bool>,
+    path: String,
+) -> Result<TextFile> {
+    read_text(&*client(&state, session_id, root).await?, &path).await
+}
+
+/// Save editor text in place. `expected` is the stamp from when the file was read (`None` for
+/// a new file): if the file changed since, the save fails with `changed_on_server` instead of
+/// overwriting. `backup` first copies the current contents to `<path>.bak`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn sftp_write_text(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    root: Option<bool>,
+    path: String,
+    text: String,
+    expected: Option<Stamp>,
+    backup: bool,
+) -> Result<Stamp> {
+    let s = client(&state, session_id, root).await?;
+    let current = match s.read_all(&path, MAX_TEXT).await {
+        Ok(bytes) => Some(bytes),
+        Err(Error::NotFound(_)) => None,
+        Err(e) => return Err(e),
+    };
+    // Compare contents: a missing file matches only a new one (`expected` None).
+    if current.as_deref().map(sha256_hex) != expected.and_then(|e| e.hash) {
+        return Err(Error::Busy(CHANGED_ON_SERVER.into()));
+    }
+    if let (true, Some(old)) = (backup, &current) {
+        // The backup keeps the original's permissions: a 0600 file must not become 0644.
+        let mode = s.stamp(&path).await?.permissions;
+        s.write_all_mode(&format!("{path}.bak"), old, mode).await?;
+    }
+    s.write_all(&path, text.as_bytes()).await?;
+    Ok(Stamp::of(s.stamp(&path).await?, text.as_bytes()))
 }
 
 /// `dir/name`, or `dir/stem (2).ext`… when taken.
@@ -205,10 +421,11 @@ pub async fn sftp_download(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     path: String,
     transfer_id: String,
 ) -> Result<String> {
-    let s = sftp(&state, session_id).await?;
+    let s = client(&state, session_id, root).await?;
     let local = free_local_path(&downloads(&app)?, &local_name(&path)?);
     s.download(&path, &local, reporter(&app, transfer_id))
         .await?;
@@ -221,12 +438,13 @@ pub async fn sftp_upload(
     app: AppHandle,
     state: State<'_, AppState>,
     session_id: SessionId,
+    root: Option<bool>,
     local_path: PathBuf,
     dir: String,
     transfer_id: String,
 ) -> Result<String> {
     let name = picked_name(&local_path)?;
-    let s = sftp(&state, session_id).await?;
+    let s = client(&state, session_id, root).await?;
     let remote = aht_ssh::sftp::join(&dir, &name);
     s.upload(&local_path, &remote, reporter(&app, transfer_id))
         .await?;
@@ -236,6 +454,13 @@ pub async fn sftp_upload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_text_opens() {
+        assert_eq!(as_text("a", b"x = 1\n".to_vec()).unwrap(), "x = 1\n");
+        assert!(as_text("a", vec![0x7f, b'E', b'L', b'F', 0, 1]).is_err());
+        assert!(as_text("a", vec![0xff, 0xfe, b'a']).is_err());
+    }
 
     #[test]
     fn local_names_and_free_paths() {

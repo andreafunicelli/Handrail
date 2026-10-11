@@ -29,7 +29,9 @@ If the result state is denied, do not retry the same command; ask the user.
 Never try to answer password prompts or type secrets.
 - Prefer non-interactive commands and flags (no vim/top/less; use --no-pager, -y only when the user asked).
 - Long output is truncated (head+tail); page through it with read_output and the output_id.
-- A timed_out command is still running: poll with read_output or interrupt with send_keys [\"ctrl_c\"].";
+- A timed_out command is still running: poll with read_output or interrupt with send_keys [\"ctrl_c\"].
+- To change a file on an SSH server, cat it first, then call propose_file_edit with the complete new contents; \
+the user reviews the diff and saves it. Do not edit files with sed, echo or tee.";
 
 /// Built once; every session handler shares it.
 pub(crate) struct Shared {

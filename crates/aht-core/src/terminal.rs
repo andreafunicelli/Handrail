@@ -202,6 +202,49 @@ pub trait TerminalTools: Send + Sync {
         session: SessionId,
         keys: Vec<ControlKey>,
     ) -> Result<()>;
+    /// Show new contents for a file to the user as a diff; resolves once they accept (and the
+    /// file is saved) or reject it.
+    async fn propose_file_edit(
+        &self,
+        actor: &Actor,
+        req: FileEditRequest,
+    ) -> Result<FileEditResult> {
+        let _ = (actor, req);
+        Err(crate::Error::Invalid(
+            "file edits are not available here".into(),
+        ))
+    }
+}
+
+/// New contents for a whole text file, proposed by an agent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEditRequest {
+    pub session_id: SessionId,
+    /// Absolute path on the session's server.
+    pub path: String,
+    /// The complete new file.
+    pub content: String,
+    /// Why; shown to the user above the diff.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileEditOutcome {
+    /// The user accepted and the file was saved.
+    Saved,
+    Rejected,
+    /// Accepted, but saving failed (see `note`).
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEditResult {
+    pub outcome: FileEditOutcome,
+    pub path: String,
+    /// The user's comment on a rejection, or why saving failed.
+    pub note: Option<String>,
 }
 
 /// Tool name + description + JSON Schema for its input. Shared by MCP and the built-in agent.
@@ -287,6 +330,24 @@ Do not run interactive full-screen programs (vim, top, less); prefer non-interac
                 "required": ["session_id", "keys"]
             }),
         },
+        ToolSpec {
+            name: "propose_file_edit",
+            description: "Propose new contents for a text file on the server of an SSH session. The user \
+reviews a diff in Handrail's editor, then accepts (the file is saved; as root if their file browser runs as \
+root) or rejects it. Give the complete new file, not a patch, and read the current file first (e.g. with \
+cat) so nothing else changes. Prefer this over sed, echo or tee for editing files. Returns outcome saved, \
+rejected (with the user's note) or failed.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "path": {"type": "string", "description": "Absolute path on the server"},
+                    "content": {"type": "string", "description": "The complete new file contents"},
+                    "reason": {"type": "string", "description": "Short explanation shown above the diff"}
+                },
+                "required": ["session_id", "path", "content"]
+            }),
+        },
     ]
 }
 
@@ -348,6 +409,7 @@ pub async fn dispatch_tool(
             tools.send_keys(actor, a.session_id, a.keys).await?;
             Ok(json!({"ok": true}))
         }
+        "propose_file_edit" => ser(tools.propose_file_edit(actor, parse(args)?).await?),
         other => Err(Error::NotFound(format!("tool {other}"))),
     }
 }

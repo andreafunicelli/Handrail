@@ -103,6 +103,31 @@ async fn real_sftp_round_trip() {
     }
     sftp.remove(&join(&remote_dir, "sub"), true).await.unwrap();
 
+    // Text editing: write in place, read back, shorter content truncates, size limit holds.
+    let conf = join(&remote_dir, "app.conf");
+    sftp.write_all(&conf, b"listen = 80\nworkers = 4\n")
+        .await
+        .unwrap();
+    assert_eq!(sftp.stamp(&conf).await.unwrap().size, 24);
+    sftp.write_all(&conf, b"listen = 8080\n").await.unwrap();
+    assert_eq!(
+        sftp.read_all(&conf, 1024).await.unwrap(),
+        b"listen = 8080\n"
+    );
+    assert!(
+        sftp.read_all(&renamed, 1024).await.is_err(),
+        "over the limit"
+    );
+    // A backup takes the mode it is given, whatever the server's umask.
+    let bak = join(&remote_dir, "app.conf.bak");
+    sftp.write_all_mode(&bak, b"secret\n", Some(0o100600))
+        .await
+        .unwrap();
+    let mode = sftp.stamp(&bak).await.unwrap().permissions;
+    assert_eq!(mode.map(|p| p & 0o777), Some(0o600));
+    sftp.remove(&bak, false).await.unwrap();
+    sftp.remove(&conf, false).await.unwrap();
+
     // A missing file is NotFound and leaves no partial local file.
     let missing = dir.path().join("missing.bin");
     let err = sftp
@@ -115,5 +140,12 @@ async fn real_sftp_round_trip() {
     sftp.remove(&renamed, false).await.unwrap();
     sftp.remove(&remote_dir, true).await.unwrap();
     assert!(sftp.list(&remote_dir).await.is_err());
+    // /root is private: the login user cannot list it...
+    assert!(sftp.list("/root").await.is_err());
     sftp.close().await;
+
+    // ...but the SFTP server started through sudo can (CI runners have passwordless sudo).
+    let root = conn.open_sftp_sudo(None).await.unwrap();
+    assert!(root.list("/root").await.is_ok());
+    root.close().await;
 }

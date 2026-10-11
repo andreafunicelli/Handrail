@@ -252,6 +252,14 @@ export function createMockApi(): Api {
     const dir = (p: string, age = 3600) => files.set(p, { kind: "dir", size: 4096, modified: now - age, permissions: 0o40755 });
     const file = (p: string, size: number, age = 7200, mode = 0o100644) => files.set(p, { kind: "file", size, modified: now - age, permissions: mode });
     for (const p of ["/", "/home", home]) dir(p, 86400 * 30);
+    if (!files.has("/root")) {
+      files.set("/root", { kind: "dir", size: 4096, modified: now - 86400 * 7, permissions: 0o40700 });
+      file("/root/.bashrc", 3106, 86400 * 200);
+      dir("/etc", 86400 * 2);
+      dir("/etc/nginx", 86400 * 2);
+      file("/etc/hostname", new TextEncoder().encode(textOf("/etc/hostname")).length, 86400 * 300);
+      file("/etc/nginx/nginx.conf", new TextEncoder().encode(textOf("/etc/nginx/nginx.conf")).length, 86400 * 2);
+    }
     dir(`${home}/app`);
     dir(`${home}/logs`, 600);
     file(`${home}/.bashrc`, 3771, 86400 * 90);
@@ -265,12 +273,33 @@ export function createMockApi(): Api {
     files.set(`${home}/latest.log`, { kind: "file", size: 18_400_000, modified: now - 600, permissions: 0o120777, link: true });
     files.set(`${home}/old-release`, { kind: "symlink", size: 0, modified: now - 86400 * 40, permissions: 0o120777, link: true });
   }
-  function sshShell(session_id: string) {
+  /** Contents of the fake text files (others read as a one-line placeholder). */
+  const texts = new Map<string, string>([
+    [
+      "/etc/nginx/nginx.conf",
+      "user www-data;\nworker_processes auto;\npid /run/nginx.pid;\n\nevents {\n    worker_connections 768;\n}\n\nhttp {\n    sendfile on;\n    tcp_nopush on;\n    types_hash_max_size 2048;\n\n    include /etc/nginx/mime.types;\n    default_type application/octet-stream;\n\n    access_log /var/log/nginx/access.log;\n    error_log /var/log/nginx/error.log;\n\n    gzip off;\n\n    include /etc/nginx/conf.d/*.conf;\n    include /etc/nginx/sites-enabled/*;\n}\n",
+    ],
+    ["/etc/hostname", "dev-box\n"],
+  ]);
+  const textOf = (path: string) => texts.get(path) ?? `# ${baseName(path)}\n`;
+  /** Agent edit proposals waiting for the user. */
+  const pendingEdits = new Map<string, (r: { outcome: string; note: string | null }) => void>();
+  /** Sessions whose root SFTP server runs (mock sudo password: anything but "wrong"). */
+  const sudoed = new Set<string>();
+  /** Sessions whose file browser is in root mode (agent proposals use root). */
+  const rootActive = new Set<string>();
+  /** Stand-in for the SHA-256 the backend compares. */
+  const hashOf = (text: string) => `${text.length}:${[...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)}`;
+  function sshShell(session_id: string, root = false, path = "", write = false) {
     const sh = shells.get(session_id);
     if (!sh) throw fail("not_found", `session ${session_id}`);
     if (sh.local) throw fail("invalid", "files are only available for SSH sessions");
+    if (root && !sudoed.has(session_id)) throw fail("invalid", "switch the file browser to root first");
     const home = `/home/${sh.info.user}`;
     seedFiles(home);
+    // Like a real server: /root is private, and system folders are writable by root only.
+    const system = path === "/root" || path.startsWith("/root/") || path.startsWith("/etc");
+    if (!root && path && (path.startsWith("/root") ? system : write && system)) throw fail("denied", `Permission denied: ${path}`);
     return { sh, home };
   }
   async function transfer(transfer_id: string, total: number) {
@@ -435,6 +464,7 @@ export function createMockApi(): Api {
       }
       return true;
     };
+    if (/nginx|gzip|config/i.test(message) && !sh.local) return proposeNginx();
     const wantsUptime = /uptime|load/i.test(message);
     const command = wantsUptime ? "uptime" : "df -h";
     const host = sh.info.host ?? "this host";
@@ -516,6 +546,41 @@ export function createMockApi(): Api {
 
     function finishCancelled() {
       ev({ type: "error", message: "Run cancelled — you took over the terminal.", retryable: false });
+      ev({ type: "done" });
+    }
+
+    /** Demo of propose_file_edit: turn gzip on in nginx.conf and wait for the user. */
+    async function proposeNginx() {
+      const path = "/etc/nginx/nginx.conf";
+      if (!(await stream(`I'll enable gzip compression in \`${path}\`. Here is the change for you to review.\n\n`))) return finishCancelled();
+      const original = textOf(path);
+      const proposed = original.replace("    gzip off;\n", "    gzip on;\n    gzip_comp_level 5;\n    gzip_types text/plain text/css application/json application/javascript;\n");
+      const call_id = uuid();
+      const input = { session_id, path, content: proposed, reason: "Enable gzip for text responses" };
+      ev({ type: "tool_call", call_id, name: "propose_file_edit", input });
+      const proposal_id = uuid();
+      const n = files.get(path)!;
+      const decided = new Promise<{ outcome: string; note: string | null }>((resolve) => pendingEdits.set(proposal_id, resolve));
+      emit("edit://proposal", {
+        proposal_id,
+        session_id,
+        path,
+        root: rootActive.has(session_id),
+        original,
+        stamp: { size: n.size, modified: n.modified, hash: hashOf(original) },
+        proposed,
+        reason: input.reason,
+        actor_label: actor,
+      });
+      const r = await decided;
+      ev({ type: "tool_result", call_id, output: { outcome: r.outcome, path, note: r.note }, is_error: false });
+      await stream(
+        r.outcome === "saved"
+          ? "Saved. Check the syntax and reload nginx with `sudo nginx -t && sudo systemctl reload nginx`."
+          : r.outcome === "rejected"
+            ? `Understood, I left the file as it was${r.note ? ` (${r.note})` : ""}.`
+            : `The save failed: ${r.note ?? "unknown error"}.`,
+      );
       ev({ type: "done" });
     }
   }
@@ -715,11 +780,24 @@ export function createMockApi(): Api {
       approvalSettings = structuredClone(s);
     },
 
-    async sftpHome(session_id) {
-      return sshShell(session_id).home;
-    },
-    async sftpList(session_id, path) {
+    async sftpSudo(session_id, password) {
       sshShell(session_id);
+      await sleep(200);
+      if (!sudoed.has(session_id)) {
+        if (password === null) throw fail("auth", "sudo_password_required");
+        if (password === "wrong") throw fail("auth", "wrong sudo password");
+        sudoed.add(session_id);
+      }
+      rootActive.add(session_id);
+    },
+    async sftpRootOff(session_id) {
+      rootActive.delete(session_id);
+    },
+    async sftpHome(session_id, root = false) {
+      return sshShell(session_id, root).home;
+    },
+    async sftpList(session_id, path, root = false) {
+      sshShell(session_id, root, path);
       const node = files.get(path);
       if (!node) throw fail("not_found", `No such file: ${path}`);
       if (node.kind !== "dir") throw fail("invalid", `${path} is not a folder`);
@@ -728,14 +806,15 @@ export function createMockApi(): Api {
         .map(([p, n]) => ({ name: baseName(p), path: p, kind: n.kind, link: !!n.link, size: n.size, modified: n.modified, permissions: n.permissions }))
         .sort((a, b) => Number(b.kind === "dir") - Number(a.kind === "dir") || a.name.localeCompare(b.name));
     },
-    async sftpMkdir(session_id, path) {
-      sshShell(session_id);
+    async sftpMkdir(session_id, path, root = false) {
+      sshShell(session_id, root, path, true);
       if (files.has(path)) throw fail("other", "SFTP: already exists");
       if (files.get(parentOf(path))?.kind !== "dir") throw fail("not_found", "No such file");
       files.set(path, { kind: "dir", size: 4096, modified: Math.floor(Date.now() / 1000), permissions: 0o40755 });
     },
-    async sftpRename(session_id, from, to) {
-      sshShell(session_id);
+    async sftpRename(session_id, from, to, root = false) {
+      sshShell(session_id, root, from, true);
+      sshShell(session_id, root, to, true);
       if (!files.has(from)) throw fail("not_found", "No such file");
       if (files.has(to)) throw fail("other", "SFTP: already exists");
       for (const [p, n] of [...files.entries()])
@@ -744,28 +823,56 @@ export function createMockApi(): Api {
           files.set(to + p.slice(from.length), n);
         }
     },
-    async sftpRemove(session_id, path, is_dir) {
-      sshShell(session_id);
+    async sftpRemove(session_id, path, is_dir, root = false) {
+      sshShell(session_id, root, path, true);
       const n = files.get(path);
       if (!n) throw fail("not_found", "No such file");
       if (is_dir && n.link) throw fail("other", "SFTP: Failure (not a folder)");
       if (is_dir && [...files.keys()].some((p) => parentOf(p) === path && p !== path)) throw fail("other", "SFTP: Failure (folder not empty)");
       files.delete(path);
     },
-    async sftpDownload(session_id, path, transfer_id) {
-      sshShell(session_id);
+    async sftpDownload(session_id, path, transfer_id, root = false) {
+      sshShell(session_id, root, path);
       const n = files.get(path);
       if (!n || n.kind !== "file") throw fail("not_found", "No such file");
       await transfer(transfer_id, n.size);
       return `~/Downloads/${baseName(path)}`;
     },
-    async sftpUpload(session_id, localPath, dir, transfer_id) {
-      sshShell(session_id);
+    async sftpUpload(session_id, localPath, dir, transfer_id, root = false) {
+      const remote = `${dir === "/" ? "" : dir}/${baseName(localPath)}`;
+      sshShell(session_id, root, remote, true);
       const size = 250_000 + Math.floor(Math.random() * 4_000_000);
       await transfer(transfer_id, size);
-      const remote = `${dir === "/" ? "" : dir}/${baseName(localPath)}`;
       files.set(remote, { kind: "file", size, modified: Math.floor(Date.now() / 1000), permissions: 0o100644 });
       return remote;
+    },
+    async sftpReadText(session_id, path, root = false) {
+      sshShell(session_id, root, path);
+      const n = files.get(path);
+      if (!n) throw fail("not_found", `No such file: ${path}`);
+      if (n.kind !== "file") throw fail("invalid", `${path} is not a file`);
+      if (/\.(gz|zip|tar|png|jpg|bin)$/.test(path)) throw fail("invalid", `${path} is a binary file`);
+      const text = textOf(path);
+      return { text, stamp: { size: n.size, modified: n.modified, hash: hashOf(text) } };
+    },
+    async sftpWriteText(session_id, path, text, expected, backup, root = false) {
+      sshShell(session_id, root, path, true);
+      await sleep(150);
+      const n = files.get(path);
+      if ((n ? hashOf(textOf(path)) : null) !== (expected?.hash ?? null)) throw fail("busy", "changed_on_server");
+      if (backup && n) {
+        texts.set(`${path}.bak`, textOf(path));
+        files.set(`${path}.bak`, { ...n });
+      }
+      texts.set(path, text);
+      const modified = Math.max(Math.floor(Date.now() / 1000), (n?.modified ?? 0) + 1);
+      const node = { kind: "file" as const, size: new TextEncoder().encode(text).length, modified, permissions: n?.permissions ?? 0o100644 };
+      files.set(path, node);
+      return { size: node.size, modified: node.modified, hash: hashOf(text) };
+    },
+    async editProposalDecide(proposal_id, outcome, note) {
+      pendingEdits.get(proposal_id)?.({ outcome, note });
+      pendingEdits.delete(proposal_id);
     },
     async pickFiles() {
       return ["/Users/dev/Desktop/report.pdf"];

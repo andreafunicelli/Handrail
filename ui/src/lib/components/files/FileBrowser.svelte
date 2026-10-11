@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import Modal from "../common/Modal.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
@@ -10,12 +10,27 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
   import { ui } from "../../stores/ui.svelte";
-  import { isFolder, type FileBackend } from "../../util/fileBackends";
+  import { editable, isFolder, type FileBackend } from "../../util/fileBackends";
+  import { editors } from "../../stores/editors.svelte";
+  import { sessions } from "../../stores/sessions.svelte";
+  import { sudo } from "../../stores/sudo.svelte";
   import { joinPath, modeString, parentDir, validName } from "../../util/files";
   import { formatBytes, relativeTime } from "../../util/time";
 
   /** Browser for one remote file system; `label` names it (user@host, account name). */
-  let { fs, label }: { fs: FileBackend; label: string } = $props();
+  let { fs: base, label }: { fs: FileBackend; label: string } = $props();
+
+  /** The same file system as root, while the root toggle is on. */
+  let rootFs = $state<FileBackend | null>(null);
+  const fs = $derived(rootFs ?? base);
+  // A reconnect hands over a new session: its root server has to be started again.
+  $effect(() => {
+    void base.key;
+    untrack(() => {
+      void rootFs?.leaveRoot?.().catch(() => {});
+      rootFs = null;
+    });
+  });
 
   let path = $state("");
   let pathInput = $state("");
@@ -30,7 +45,11 @@
   const mine = $derived(transfers.list.filter((x) => x.backend === fs.key));
   const writable = $derived(fs.writable(path));
 
+  /** The folder last asked for (switching to root retries it, e.g. after "Permission denied"). */
+  let wanted = "";
+
   async function go(to: string) {
+    wanted = to;
     loading = true;
     error = null;
     try {
@@ -47,6 +66,30 @@
   }
   const refresh = () => go(path);
 
+  async function toggleRoot() {
+    if (rootFs) {
+      void rootFs.leaveRoot?.().catch(() => {});
+      rootFs = null;
+      return refresh();
+    }
+    await becomeRoot();
+  }
+
+  /** Start the root SFTP server; asks for the sudo password when sudo needs one. */
+  async function becomeRoot() {
+    try {
+      const r = await sudo.elevate(base);
+      if (!r) return;
+      rootFs = r;
+      await go(wanted || path || (await r.home()));
+    } catch (e) {
+      toasts.error(e);
+    }
+  }
+
+  // Closing the browser leaves root mode too.
+  onDestroy(() => void rootFs?.leaveRoot?.().catch(() => {}));
+
   onMount(async () => {
     try {
       await go(await fs.home());
@@ -58,7 +101,17 @@
 
   function open(e: FileEntry) {
     if (e.kind === "dir") void go(e.path);
+    else if (editable(fs, e)) void edit(e);
     else void download(e);
+  }
+
+  /** Open a text file in the editor (as root while the browser is). */
+  async function edit(e: FileEntry) {
+    try {
+      sessions.openEditor(await editors.open(fs, e.path));
+    } catch (err) {
+      toasts.error(err);
+    }
   }
 
   async function download(e: FileEntry) {
@@ -120,6 +173,7 @@
       x: ev.clientX,
       y: ev.clientY,
       items: [
+        ...(isFile && fs.readText ? [{ label: t("files.edit"), icon: "edit" as const, action: () => edit(e) }] : []),
         isFile ? { label: t("files.download"), icon: "download", action: () => download(e) } : { label: t("files.open"), icon: "folder", action: () => go(e.path) },
         { label: t("files.copyPath"), icon: "copy", action: () => void navigator.clipboard?.writeText(e.path).catch(() => {}) },
         "sep",
@@ -151,6 +205,11 @@
     <button class="icon-btn" title={t("files.refresh")} aria-label={t("files.refresh")} onclick={refresh}><Icon name="refresh" size={14} /></button>
     <button class="icon-btn" title={t("files.newFolder")} aria-label={t("files.newFolder")} disabled={!writable} onclick={() => (naming = { mode: "mkdir", value: "" })}><Icon name="plus" size={14} /></button>
     <button class="btn sm" disabled={!writable} onclick={upload}><Icon name="upload" size={13} />{t("files.upload")}</button>
+    {#if base.asRoot}
+      <button class="btn sm root" class:on={!!rootFs} aria-pressed={!!rootFs} title={t(rootFs ? "files.rootOff" : "files.rootOn")} onclick={toggleRoot}>
+        <Icon name="shield" size={13} />{t("files.root")}
+      </button>
+    {/if}
   </div>
   <nav class="crumbs" aria-label={t("files.path")}>
     {#each crumbs as c, i (c.path)}
@@ -158,7 +217,7 @@
       <button class="crumb" onclick={() => go(c.path)}>{c.name}</button>
     {/each}
     <span class="grow"></span>
-    <span class="who">{label}</span>
+    <span class="who" class:asroot={!!rootFs}>{rootFs ? t("files.asRoot", { label }) : label}</span>
   </nav>
 
   <div class="list" role="grid" aria-busy={loading}>
@@ -412,5 +471,13 @@
     flex: none;
     color: var(--faint);
     font-size: var(--fs-small);
+  }
+  .root.on {
+    background: var(--warn-soft);
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+  .who.asroot {
+    color: var(--warn);
   }
 </style>

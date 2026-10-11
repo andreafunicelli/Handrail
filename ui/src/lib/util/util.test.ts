@@ -14,6 +14,8 @@ import { SUGGESTED_SNIPPETS, fillPlaceholders, placeholders, snippetInput } from
 import { presetOf, s3Where } from "./s3";
 import { reconnectDelay, retryable, shouldAutoReconnect } from "./reconnect";
 import type { SessionInfo } from "../api/types";
+import { editorQuestion, ASK_MAX_CHARS } from "./editorAsk";
+import { editable, sftpBackend } from "./fileBackends";
 
 describe("fuzzy", () => {
   it("matches subsequences and rejects non-matches", () => {
@@ -287,5 +289,32 @@ describe("auto-reconnect", () => {
     expect(shouldAutoReconnect(info({ connection_id: null }), "key")).toBe(false);
     expect(shouldAutoReconnect(info({ state: "idle" }), "key")).toBe(false);
     expect(shouldAutoReconnect(info({ ended: null }), "key")).toBe(false);
+  });
+});
+
+describe("editor", () => {
+  it("builds the agent question from the selection or the whole text", () => {
+    const doc = { path: "/etc/app.conf", root: true, text: "a = 1\nb = 2\n", dirty: true };
+    const whole = editorQuestion(doc, " raise b ", null);
+    expect(whole).toContain("`/etc/app.conf`");
+    expect(whole).toContain("as root");
+    expect(whole).toContain("unsaved changes");
+    expect(whole).toContain("```\na = 1\nb = 2\n```");
+    expect(whole).toContain("My request: raise b");
+    expect(whole).toContain("propose_file_edit");
+    const sel = editorQuestion(doc, "why?", { text: "b = 2", fromLine: 2, toLine: 2 });
+    expect(sel).toContain("Selected lines 2–2");
+    expect(sel).not.toContain("a = 1");
+    // Backticks in the file cannot close the fence early; long files are cut.
+    expect(editorQuestion({ ...doc, text: "```x```" }, "q", null)).toContain("````\n```x```\n````");
+    expect(editorQuestion({ ...doc, text: "x".repeat(ASK_MAX_CHARS + 10) }, "q", null)).toContain("read the rest with cat");
+  });
+  it("opens text files, not archives or huge files", () => {
+    const fs = sftpBackend("s");
+    const f = (name: string, size = 100) => ({ name, path: `/x/${name}`, kind: "file" as const, link: false, size, modified: null, permissions: null });
+    expect(editable(fs, f("nginx.conf"))).toBe(true);
+    expect(editable(fs, f("Dockerfile"))).toBe(true);
+    expect(editable(fs, f("backup.tar.gz"))).toBe(false);
+    expect(editable(fs, f("big.log", 6 * 1024 * 1024))).toBe(false);
   });
 });

@@ -17,6 +17,7 @@
   import SnippetsPanel from "../snippets/SnippetsPanel.svelte";
   import SnippetDialogs from "../snippets/SnippetDialogs.svelte";
   import S3AccountDialog from "../s3/S3AccountDialog.svelte";
+  import SudoDialog from "../files/SudoDialog.svelte";
   import { snippets } from "../../stores/snippets.svelte";
   import { s3 } from "../../stores/s3.svelte";
   import { t } from "../../i18n";
@@ -178,6 +179,7 @@
 {#if ui.paletteOpen}<CommandPalette />{/if}
 <SnippetDialogs />
 <S3AccountDialog />
+<SudoDialog />
 {#if sessions.hostKeys[0]}{#key sessions.hostKeys[0].request_id}<HostKeyDialog req={sessions.hostKeys[0]} />{/key}{/if}
 
 {#if ui.saveWorkspaceOpen}

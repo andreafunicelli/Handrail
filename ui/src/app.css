@@ -31,6 +31,16 @@
   --env-prod: #e06c6c;
   --env-staging: #d9a35f;
   --env-dev: #6fb488;
+  /* Code editor syntax */
+  --syn-keyword: #c49cff;
+  --syn-string: #9fcf8f;
+  --syn-number: #e3a86b;
+  --syn-comment: #6b7080;
+  --syn-name: #8ab4ff;
+  --syn-type: #6fcfc4;
+  --syn-meta: #d9b06c;
+  --diff-add: rgba(126, 201, 150, 0.14);
+  --diff-del: rgba(224, 108, 108, 0.14);
 
   --font-ui: "Inter", "Geist", system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
@@ -79,6 +89,15 @@
   --env-prod: #c94a4a;
   --env-staging: #b97a20;
   --env-dev: #3f8c5c;
+  --syn-keyword: #7a3fc4;
+  --syn-string: #3a7d2c;
+  --syn-number: #a35a12;
+  --syn-comment: #8a8f9a;
+  --syn-name: #2f5fc4;
+  --syn-type: #17807a;
+  --syn-meta: #9a6a14;
+  --diff-add: rgba(58, 138, 85, 0.12);
+  --diff-del: rgba(194, 72, 72, 0.12);
   --shadow-float: 0 12px 32px -10px rgba(20, 22, 30, 0.18), 0 0 0 1px var(--border-strong);
 }
 

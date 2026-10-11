@@ -6,7 +6,8 @@
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import type { LayoutNode, SplitDir } from "../../util/layout";
-  import { filesSession, isFiles, isPending, isS3, pendingRef, s3AccountOf, sessions } from "../../stores/sessions.svelte";
+  import { editDocOf, filesSession, isEdit, isFiles, isPending, isS3, pendingRef, s3AccountOf, sessions } from "../../stores/sessions.svelte";
+  import EditorPane from "../editor/EditorPane.svelte";
   import { s3 } from "../../stores/s3.svelte";
   import { s3Backend, sftpBackend } from "../../util/fileBackends";
   import { toasts } from "../../stores/toasts.svelte";
@@ -116,6 +117,8 @@
       {#if isFiles(node.sessionId)}
         {@const sid = filesSession(node.sessionId)}
         <FileBrowser fs={sftpBackend(sid)} label={`${sessions.infos[sid]?.user ?? ""}@${sessions.infos[sid]?.host ?? ""}`} />
+      {:else if isEdit(node.sessionId)}
+        <EditorPane docId={editDocOf(node.sessionId)} {focused} />
       {:else if isS3(node.sessionId)}
         {@const id = s3AccountOf(node.sessionId)}
         <FileBrowser fs={s3Backend(id)} label={s3.byId(id)?.name ?? "S3"} />

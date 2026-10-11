@@ -157,6 +157,26 @@ describe("mock api", () => {
     expect((await api.listS3Accounts()).some((a) => a.id === r2.id)).toBe(false);
   });
 
+  it("edits text files with conflict checks, backups and sudo", async () => {
+    const api = createMockApi();
+    const conn = (await api.listConnections()).find((c) => c.auth.type !== "prompt")!;
+    const s = await api.openSession(conn.id, 80, 24);
+    await api.sftpHome(s.session_id);
+    const path = "/etc/nginx/nginx.conf";
+    const f = await api.sftpReadText(s.session_id, path);
+    expect(f.text).toContain("gzip off;");
+    await expect(api.sftpWriteText(s.session_id, path, "x", f.stamp, true)).rejects.toMatchObject({ kind: "denied" });
+    await expect(api.sftpSudo(s.session_id, null)).rejects.toMatchObject({ message: "sudo_password_required" });
+    await expect(api.sftpSudo(s.session_id, "wrong")).rejects.toMatchObject({ message: "wrong sudo password" });
+    await api.sftpSudo(s.session_id, "pw");
+    const st = await api.sftpWriteText(s.session_id, path, "gzip on;\n", f.stamp, true, true);
+    expect(st.size).toBe(9);
+    expect((await api.sftpReadText(s.session_id, `${path}.bak`, true)).text).toBe(f.text);
+    // The old stamp no longer matches: someone (we) changed the file since.
+    await expect(api.sftpWriteText(s.session_id, path, "y", f.stamp, false, true)).rejects.toMatchObject({ message: "changed_on_server" });
+    await expect(api.sftpReadText(s.session_id, "/home/x.tar.gz")).rejects.toBeTruthy();
+  });
+
   it("opens only https links", async () => {
     const api = createMockApi();
     await expect(api.openUrl("javascript:alert(1)")).rejects.toThrow();
