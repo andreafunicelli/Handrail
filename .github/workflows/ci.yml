@@ -99,3 +99,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # Errors only: the duplicate-version warnings ran to thousands of lines and pushed
+          # the failing advisories out of the retrievable log.
+          log-level: error
