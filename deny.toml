@@ -6,7 +6,16 @@ all-features = true
 
 [advisories]
 version = 2
-ignore = []
+# Each entry has no fixed version upstream; revisit when one ships.
+ignore = [
+    # proc-macro-error is unmaintained. It is a build-time proc macro pulled in by gtk-rs 0.18
+    # (glib-macros, gtk3-macros), which Tauri uses on Linux; nothing runs at app runtime.
+    { id = "RUSTSEC-2024-0370", reason = "build-time only, via Tauri's gtk-rs 0.18 on Linux; no upgrade available" },
+    # Marvin attack: RSA private-key operations are not constant-time. russh uses `rsa` to sign
+    # the client's SSH authentication with a user's RSA key, locally, once per login; the
+    # attack needs many timed decryptions observed by the attacker. No patched rsa release.
+    { id = "RUSTSEC-2023-0071", reason = "russh client-side RSA signing only; no patched rsa release (RustCrypto/RSA#626)" },
+]
 
 [licenses]
 version = 2
