@@ -218,6 +218,7 @@ impl Agent {
                 }
             };
             let aborted = turn.cancelled || turn.receiver_gone;
+            let answered = !turn.text.is_empty();
             // A cancelled stream may hold tool calls we cannot trust; drop them.
             let calls = if aborted { Vec::new() } else { turn.tool_uses };
             if !turn.text.is_empty() || !calls.is_empty() {
@@ -247,7 +248,7 @@ impl Agent {
             }
             if calls.is_empty() {
                 if turn.stop == StopReason::MaxTokens {
-                    if turn.text.is_empty() {
+                    if !answered {
                         // All of it went on thinking: ask again with more room (kept for later
                         // turns), up to what the model allows.
                         let cap = max_tokens_cap(&self.cfg.model);
