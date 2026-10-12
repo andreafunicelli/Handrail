@@ -18,6 +18,8 @@
   let problem = $state<string | null>(null);
   let cursor = $state("default");
   let attempt = $state(0);
+  /** The pane no longer matches the desktop's resolution (the desktop is scaled meanwhile). */
+  let stale = $state(false);
 
   let id: string | null = null;
   let desk = { width: 0, height: 0 };
@@ -47,6 +49,7 @@
       const c = canvas!;
       if (c.width !== m.tiles.width || c.height !== m.tiles.height) [c.width, c.height] = [m.tiles.width, m.tiles.height];
       desk = { width: m.tiles.width, height: m.tiles.height };
+      stale = differs(paneSize());
       const ctx = c.getContext("2d")!;
       for (const r of m.tiles.rects) ctx.putImageData(new ImageData(r.data, r.w, r.h), r.x, r.y);
       phase = "live";
@@ -79,6 +82,17 @@
     c.getContext("2d")!.putImageData(new ImageData(px, p.width, p.height), 0, 0);
     const dpr = window.devicePixelRatio || 1;
     return `url(${c.toDataURL()}) ${Math.round(p.hotX / dpr)} ${Math.round(p.hotY / dpr)}, default`;
+  }
+
+  function differs(s: { width: number; height: number }) {
+    return Math.abs(s.width - desk.width) > 8 || Math.abs(s.height - desk.height) > 8;
+  }
+
+  /** Ask for the pane's resolution. Servers without dynamic resize (Display Control) make
+   *  IronRDP reconnect for it, so this only happens when the user asks. */
+  function matchSize() {
+    stale = false;
+    if (id && phase === "live") void api.rdpResize(id, paneSize()).catch(() => {});
   }
 
   async function connect() {
@@ -172,10 +186,10 @@
     let timer: ReturnType<typeof setTimeout> | undefined;
     const ro = new ResizeObserver(() => {
       clearTimeout(timer);
+      // The desktop scales to the pane; changing its resolution can cost a reconnect, so that
+      // waits for the "Match window size" button.
       timer = setTimeout(() => {
-        if (!id || phase !== "live") return;
-        const s = paneSize();
-        if (Math.abs(s.width - desk.width) > 8 || Math.abs(s.height - desk.height) > 8) void api.rdpResize(id, s).catch(() => {});
+        if (id && phase === "live") stale = differs(paneSize());
       }, 400);
     });
     ro.observe(host!);
@@ -205,6 +219,9 @@
     onblur={() => send({ t: "release_all" })}
     oncontextmenu={(e) => e.preventDefault()}
   ></canvas>
+  {#if phase === "live" && stale}
+    <button class="btn sm fit" onclick={matchSize} title={t("rdp.matchSizeHint")}><Icon name="refresh" size={12} />{t("rdp.matchSize")}</button>
+  {/if}
   {#if phase !== "live"}
     <div class="state" role="status">
       <Icon name="monitor" size={28} />
@@ -241,6 +258,15 @@
   }
   canvas.hidden {
     visibility: hidden;
+  }
+  .fit {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    opacity: 0.85;
+  }
+  .fit:hover {
+    opacity: 1;
   }
   .state {
     position: absolute;
