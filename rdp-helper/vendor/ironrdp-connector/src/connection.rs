@@ -608,6 +608,7 @@ impl Sequence for ClientConnector {
                     // nothing was read and the licensing sequence runs from its
                     // first step when the next PDU arrives.
                     if self.message_channel_id.is_some() {
+                        crate::handrail::check_licensing_pdu(input, io_channel_id, license_exchange.state.name())?;
                         advance_licensing_exchange(license_exchange, io_channel_id, user_channel_id, input, output)?
                     } else {
                         (
@@ -635,8 +636,8 @@ impl Sequence for ClientConnector {
                 // Handrail: licensing PDUs travel on the I/O channel only. The server may keep
                 // using the message channel (auto-detect, heartbeat) while licensing runs, and
                 // upstream decoded those as licensing PDUs ("invalid security header flags").
-                // Answer or skip them as the connect-time auto-detect phase does, and say
-                // exactly what arrived when the I/O channel carries something else.
+                // Answer or skip them as the connect-time auto-detect phase does; what arrives
+                // on the I/O channel is checked by `handrail::check_licensing_pdu`.
                 let indication = ironrdp_pdu::mcs::decode_send_data_indication(input).ok();
                 match indication {
                     Some(data) if data.channel_id != io_channel_id => {
@@ -669,22 +670,10 @@ impl Sequence for ClientConnector {
                             },
                         )
                     }
-                    Some(data)
-                        if data.user_data.len() >= 2
-                            && u16::from_le_bytes([data.user_data[0], data.user_data[1]]) & 0x0080 == 0 =>
-                    {
-                        let head = &data.user_data[..data.user_data.len().min(16)];
-                        return Err(reason_err!(
-                            "LicensingExchange",
-                            "the server sent a non-licensing PDU on the I/O channel during licensing \
-                             (state {}, security flags {:#06x}, {} bytes, starting {:02x?})",
-                            license_exchange.state.name(),
-                            u16::from_le_bytes([data.user_data[0], data.user_data[1]]),
-                            data.user_data.len(),
-                            head,
-                        ));
+                    _ => {
+                        crate::handrail::check_licensing_pdu(input, io_channel_id, license_exchange.state.name())?;
+                        advance_licensing_exchange(license_exchange, io_channel_id, user_channel_id, input, output)?
                     }
-                    _ => advance_licensing_exchange(license_exchange, io_channel_id, user_channel_id, input, output)?,
                 }
             }
 

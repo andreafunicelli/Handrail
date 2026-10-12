@@ -13,6 +13,13 @@ Source: IronRDP commit `11a0810c` (`chore(release): prepare for publishing (#136
   "invalid `securityHeaderFlags`". PDUs on other channels are now answered (auto-detect RTT)
   or skipped, and an I/O-channel PDU without `SEC_LICENSE_PKT` is reported with its flags and
   first bytes.
+- Server redirection is recognised (handrail.rs, used by both licensing entry points in
+  connection.rs): a Remote Desktop Connection Broker answers the Client Info PDU with a Server
+  Redirection PDU where the first licensing PDU would be. IronRDP 0.10 can't follow it and
+  decoded it as a licensing PDU. It is now parsed (Enhanced and Standard Security forms) and
+  reported as an error naming the target host. Any other non-licensing PDU on the I/O channel
+  is reported with its first word and bytes. `handrail::parse_redirection` is public so
+  `rdp-helper/tests/redirection.rs` can test it.
 - `#[expect(single_use_lifetimes)]` → `#[allow(...)]` (connection.rs): the lint is only enabled
   by IronRDP's workspace lint settings, so the expectation would go unfulfilled here.
 
