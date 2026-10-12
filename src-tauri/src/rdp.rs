@@ -231,6 +231,7 @@ pub async fn rdp_open(
             "width": size.width,
             "height": size.height,
             "scale": size.scale,
+            "admin": conn.rdp_admin,
         })
         .to_string(),
     );

@@ -1,0 +1,33 @@
+# ironrdp-connector 0.10.0 (IronRDP commit 11a0810c), patched for Handrail: see PATCHES.md.
+[package]
+name = "ironrdp-connector"
+version = "0.10.0"
+readme = "README.md"
+description = "State machines to drive an RDP connection sequence"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Devolutions/IronRDP"
+publish = false
+
+[lib]
+doctest = false
+test = false
+
+[features]
+default = []
+qoi = ["ironrdp-pdu/qoi"]
+qoiz = ["ironrdp-pdu/qoiz"]
+
+[dependencies]
+ironrdp-svc = "0.8"
+ironrdp-core = "0.2"
+ironrdp-error = "0.2"
+ironrdp-pdu = { version = "0.9", features = ["std"] }
+sspi = { version = "0.21", features = ["scard"] }
+url = "2.5"
+rand = { version = "0.9", features = ["std"] }
+tracing = { version = "0.1", features = ["log"] }
+picky-asn1-der = "0.5"
+picky-asn1-x509 = "0.15"
+picky = "=7.0.0-rc.25"

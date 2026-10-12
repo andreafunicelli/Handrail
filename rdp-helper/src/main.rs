@@ -101,14 +101,16 @@ async fn run() -> anyhow::Result<()> {
             }
             RdpOutputEvent::ConnectionFailure(e) => {
                 tracing::debug!(error = ?e, "connection failed");
-                fail(&mut stdout, &e.to_string()).await?;
-                result = Err(anyhow::anyhow!("connection failed: {e}"));
+                // The whole cause chain: "decode error" alone does not say what failed.
+                let message = e.report().to_string();
+                fail(&mut stdout, &message).await?;
+                result = Err(anyhow::anyhow!("connection failed: {message}"));
                 break;
             }
             RdpOutputEvent::Terminated(r) => {
                 let (reason, error) = match r {
                     Ok(reason) => (reason.to_string(), false),
-                    Err(e) => (e.to_string(), true),
+                    Err(e) => (e.report().to_string(), true),
                 };
                 let body = json!({ "reason": reason, "error": error }).to_string();
                 proto::write(&mut stdout, proto::TERMINATED, body.as_bytes()).await?;
@@ -168,6 +170,8 @@ async fn forward_input(mut stdin: Stdin, tx: mpsc::UnboundedSender<RdpInputEvent
 }
 
 fn config(s: proto::Start) -> anyhow::Result<Config> {
+    // One session per process, so the process-wide switch is this session's.
+    ironrdp_connector::set_console_session(s.admin);
     let mut b = ConfigBuilder::new()
         .with_destination(Destination::from_parts(s.host, s.port))
         .with_username(s.username)

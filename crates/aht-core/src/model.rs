@@ -71,6 +71,9 @@ pub struct Connection {
     /// Port forwards started with every session of this connection.
     #[serde(default)]
     pub tunnels: Vec<Tunnel>,
+    /// For `Rdp`: connect to the console (administrative) session, like `mstsc /admin`.
+    #[serde(default)]
+    pub rdp_admin: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

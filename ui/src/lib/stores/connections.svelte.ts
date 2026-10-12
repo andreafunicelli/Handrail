@@ -23,6 +23,7 @@ export function blankConnection(groupId: string | null = null): Connection {
     local_shell: null,
     notes: "",
     tunnels: [],
+    rdp_admin: false,
   };
 }
 

@@ -38,6 +38,8 @@ export interface Connection {
   notes: string;
   /** Port forwards started with every session of this connection. */
   tunnels: Tunnel[];
+  /** RDP: connect to the console (administrative) session, like `mstsc /admin`. */
+  rdp_admin?: boolean;
 }
 
 /** local: `ssh -L` (listen here, connect from the server); remote: `ssh -R` (listen on the
