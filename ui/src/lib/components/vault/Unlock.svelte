@@ -1,5 +1,6 @@
 <script lang="ts">
   import VaultFrame from "./VaultFrame.svelte";
+  import DeleteVaultDialog from "./DeleteVaultDialog.svelte";
   import { t } from "../../i18n";
   import { vault } from "../../stores/vault.svelte";
   import { errorMessage, isSecretKeyRequired } from "../../api/errors";
@@ -9,6 +10,8 @@
   let newDevice = $state(vault.joined || (vault.status.needs_secret_key ?? false));
   let busy = $state(false);
   let error = $state<string | null>(null);
+  let forgot = $state(false);
+  let deleting = $state(false);
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
@@ -51,8 +54,18 @@
     {#if !newDevice}
       <button type="button" class="link" onclick={() => (newDevice = true)}>{t("vault.unlock.newDevice")}</button>
     {/if}
+    {#if forgot}
+      <div class="forgot">
+        <p class="hint">{t("vault.unlock.forgotBody")}</p>
+        <button type="button" class="btn sm danger" onclick={() => (deleting = true)}>{t("vaultdel.go")}</button>
+      </div>
+    {:else}
+      <button type="button" class="link" onclick={() => (forgot = true)}>{t("vault.unlock.forgot")}</button>
+    {/if}
   </form>
 </VaultFrame>
+
+{#if deleting}<DeleteVaultDialog onclose={() => (deleting = false)} />{/if}
 
 <style>
   .form {
@@ -75,5 +88,13 @@
   }
   .link:hover {
     color: var(--text);
+  }
+  .forgot {
+    display: grid;
+    gap: 8px;
+    justify-items: start;
+  }
+  .forgot .hint {
+    margin: 0;
   }
 </style>

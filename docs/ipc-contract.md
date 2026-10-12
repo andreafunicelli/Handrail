@@ -13,6 +13,10 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
   (never overwrites; owner-only on Unix) and returns the path. The webview cannot save `blob:` downloads.
 - `vault_unlock({ password, secret_key? }) -> void` (secret_key needed only on a new device)
 - `vault_lock() -> void`
+- `vault_delete() -> void` — deletes the vault from this device, locked or not: items, snapshots,
+  the Secret Key in the keychain, the sync settings and the AI profiles' folders; closes every
+  session. Synced copies (GitHub, cloud folders) and known_hosts are kept. Status is then
+  uninitialized.
 
 ## Connections & groups
 - `list_connections() -> Connection[]`, `save_connection({ connection }) -> Connection`,

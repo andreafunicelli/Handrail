@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "../icons/Icon.svelte";
+  import DeleteVaultDialog from "../vault/DeleteVaultDialog.svelte";
   import { t } from "../../i18n";
   import { settings } from "../../stores/settings.svelte";
   import { toasts } from "../../stores/toasts.svelte";
@@ -7,6 +8,7 @@
   import { vault } from "../../stores/vault.svelte";
 
   const options = [5, 15, 30, 60, 0];
+  let deleting = $state(false);
 
   async function setAutoLock(min: number) {
     settings.autoLock = min;
@@ -29,3 +31,9 @@
 <h3>{t("vaultset.changePassword")}</h3>
 <p class="hint">{t("vaultset.changePasswordSoon")}</p>
 <button class="btn" disabled>{t("vaultset.changePassword")} <span class="pill">{t("common.soon")}</span></button>
+
+<h3>{t("vaultset.danger")}</h3>
+<p class="hint">{t("vaultset.dangerBody")}</p>
+<button class="btn danger" onclick={() => (deleting = true)}><Icon name="trash" size={14} />{t("vaultset.danger")}</button>
+
+{#if deleting}<DeleteVaultDialog onclose={() => (deleting = false)} />{/if}

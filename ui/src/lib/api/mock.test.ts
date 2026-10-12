@@ -24,6 +24,12 @@ describe("mock api", () => {
     await expect(api.vaultUnlock("wrong")).rejects.toMatchObject({ kind: "auth" });
     await api.vaultUnlock("correct horse battery");
     expect((await api.vaultStatus()).locked).toBe(false);
+    // Deleting works locked and starts over with any new password.
+    await api.vaultLock();
+    await api.vaultDelete();
+    expect(await api.vaultStatus()).toMatchObject({ initialized: false, locked: true });
+    await api.vaultCreate("another long password");
+    expect((await api.vaultStatus()).locked).toBe(false);
   });
 
   it("seeds prod/staging/dev connections and saves new ones", async () => {

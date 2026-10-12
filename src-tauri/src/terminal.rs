@@ -748,70 +748,84 @@ pub async fn session_resize(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn close_session(state: tauri::State<'_, AppState>, session_id: SessionId) -> Result<()> {
-    let hub = &state.terminal;
-    let entry = hub.sessions.write().await.remove(&session_id);
-    let sftps: Vec<_> = {
-        let mut map = hub.sftp.lock().await;
-        [false, true]
-            .iter()
-            .filter_map(|root| map.remove(&(session_id, *root)))
-            .collect()
-    };
-    for sftp in sftps {
-        sftp.close().await;
-    }
-    hub.sftp_root_active.lock().unwrap().remove(&session_id);
-    let pending: Vec<_> = {
-        let mut map = hub.approvals.lock().unwrap();
-        let ids: Vec<_> = map
-            .iter()
-            .filter(|(_, (s, _))| *s == session_id)
-            .map(|(id, _)| *id)
-            .collect();
-        ids.into_iter().filter_map(|id| map.remove(&id)).collect()
-    };
-    drop(pending);
-    let runs: Vec<Run> = {
-        let mut map = hub.runs.lock().await;
-        let ids: Vec<_> = map
-            .iter()
-            .filter(|(_, r)| r.session_id == session_id)
-            .map(|(id, _)| id.clone())
-            .collect();
-        ids.into_iter().filter_map(|id| map.remove(&id)).collect()
-    };
-    for r in runs {
-        match r.kind {
-            RunKind::BuiltIn(c) => c.cancel(),
-            RunKind::Harness(h) => h.cancel().await,
-        }
-    }
-    let prefix = format!("{session_id}:");
-    hub.agents
-        .lock()
-        .await
-        .retain(|k, _| !k.starts_with(&prefix));
-    let chats: Vec<HarnessChat> = {
-        let mut map = hub.harness_chats.lock().await;
-        let keys: Vec<_> = map
-            .keys()
-            .filter(|(s, _)| *s == session_id)
-            .cloned()
-            .collect();
-        keys.into_iter().filter_map(|k| map.remove(&k)).collect()
-    };
-    for chat in chats {
-        chat.run.cancel().await;
-        hub.revoke(&chat.token);
-    }
-    if let Some(e) = entry {
-        for t in &e.tokens {
-            hub.revoke(t);
-        }
-        aht_harness_cleanup(&e.temp_files);
-        let _ = e.term.close().await;
-    }
+    state.terminal.close(session_id).await;
     Ok(())
+}
+
+impl TerminalHub {
+    /// Close every session (the vault they came from is being deleted).
+    pub async fn close_all(&self) {
+        let ids: Vec<SessionId> = self.sessions.read().await.keys().copied().collect();
+        for id in ids {
+            self.close(id).await;
+        }
+    }
+
+    async fn close(&self, session_id: SessionId) {
+        let hub = self;
+        let entry = hub.sessions.write().await.remove(&session_id);
+        let sftps: Vec<_> = {
+            let mut map = hub.sftp.lock().await;
+            [false, true]
+                .iter()
+                .filter_map(|root| map.remove(&(session_id, *root)))
+                .collect()
+        };
+        for sftp in sftps {
+            sftp.close().await;
+        }
+        hub.sftp_root_active.lock().unwrap().remove(&session_id);
+        let pending: Vec<_> = {
+            let mut map = hub.approvals.lock().unwrap();
+            let ids: Vec<_> = map
+                .iter()
+                .filter(|(_, (s, _))| *s == session_id)
+                .map(|(id, _)| *id)
+                .collect();
+            ids.into_iter().filter_map(|id| map.remove(&id)).collect()
+        };
+        drop(pending);
+        let runs: Vec<Run> = {
+            let mut map = hub.runs.lock().await;
+            let ids: Vec<_> = map
+                .iter()
+                .filter(|(_, r)| r.session_id == session_id)
+                .map(|(id, _)| id.clone())
+                .collect();
+            ids.into_iter().filter_map(|id| map.remove(&id)).collect()
+        };
+        for r in runs {
+            match r.kind {
+                RunKind::BuiltIn(c) => c.cancel(),
+                RunKind::Harness(h) => h.cancel().await,
+            }
+        }
+        let prefix = format!("{session_id}:");
+        hub.agents
+            .lock()
+            .await
+            .retain(|k, _| !k.starts_with(&prefix));
+        let chats: Vec<HarnessChat> = {
+            let mut map = hub.harness_chats.lock().await;
+            let keys: Vec<_> = map
+                .keys()
+                .filter(|(s, _)| *s == session_id)
+                .cloned()
+                .collect();
+            keys.into_iter().filter_map(|k| map.remove(&k)).collect()
+        };
+        for chat in chats {
+            chat.run.cancel().await;
+            hub.revoke(&chat.token);
+        }
+        if let Some(e) = entry {
+            for t in &e.tokens {
+                hub.revoke(t);
+            }
+            aht_harness_cleanup(&e.temp_files);
+            let _ = e.term.close().await;
+        }
+    }
 }
 
 fn aht_harness_cleanup(files: &[PathBuf]) {

@@ -38,6 +38,11 @@ class Vault {
     await api.vaultLock();
     this.phase = "unlock";
   }
+  /** Delete the vault, then start the app over: every store still caches its items and tabs. */
+  async erase() {
+    await api.vaultDelete();
+    location.reload();
+  }
 }
 
 export const vault = new Vault();

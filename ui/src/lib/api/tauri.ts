@@ -19,6 +19,7 @@ export function createTauriApi(): Api {
     vaultCreate: (password) => invoke("vault_create", { password }),
     vaultUnlock: (password, secret_key) => invoke("vault_unlock", { password, secret_key: secret_key || null }),
     vaultLock: () => invoke("vault_lock"),
+    vaultDelete: () => invoke("vault_delete"),
 
     listConnections: () => invoke("list_connections"),
     saveConnection: (connection) => invoke("save_connection", { connection }),

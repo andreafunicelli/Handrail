@@ -847,3 +847,45 @@ fn errors_convert_to_core() {
     let e: aht_core::Error = VaultError::WrongCredentials.into();
     assert!(matches!(e, aht_core::Error::Auth(_)));
 }
+
+#[test]
+fn erase_removes_everything_and_allows_a_new_vault() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("vault");
+    let (mut v, _) = new_vault(&dir);
+    v.put(&secret("hunter2")).unwrap();
+    v.snapshot().unwrap();
+    // A copy an earlier erase could not remove is cleaned up too.
+    std::fs::create_dir_all(root.path().join(".vault-deleted-0011").join("items")).unwrap();
+    // Locked, as when the password is forgotten.
+    v.lock();
+
+    v.erase().unwrap();
+    assert_eq!(
+        v.status(),
+        VaultStatus {
+            initialized: false,
+            locked: true
+        }
+    );
+    assert!(v.vault_id().is_none());
+    assert_eq!(
+        std::fs::read_dir(&dir).unwrap().count(),
+        1,
+        "only local/ is recreated"
+    );
+    let left: Vec<_> = std::fs::read_dir(root.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(left, vec![std::ffi::OsString::from("vault")]);
+
+    // Reopening sees nothing, and a new vault can be created in the same place.
+    assert!(!Vault::open(&dir).unwrap().status().initialized);
+    let (mut fresh, _) = new_vault(&dir);
+    assert!(fresh.list::<Secret>().unwrap().is_empty());
+    // Erasing a vault whose directory is gone is fine.
+    std::fs::remove_dir_all(&dir).unwrap();
+    fresh.erase().unwrap();
+    assert!(!fresh.status().initialized);
+}
