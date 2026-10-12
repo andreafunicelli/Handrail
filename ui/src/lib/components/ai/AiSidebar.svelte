@@ -170,6 +170,13 @@
           <ToolCard {item} sessionId={sid} />
         {:else if item.kind === "approval"}
           <ApprovalCard {item} sessionId={sid} />
+        {:else if item.kind === "limit"}
+          <div class="limit" role="status">
+            <span>{t("ai.stepLimit", { n: item.steps })}</span>
+            {#if item === chat?.items.at(-1) && !running}
+              <button class="btn sm primary" onclick={() => send(t("ai.continueMsg"))}>{t("ai.continue")}</button>
+            {/if}
+          </div>
         {:else if item.kind === "error"}
           <div class="err" role="alert">
             <Icon name="alert" size={13} />
@@ -477,5 +484,16 @@
     font-size: var(--fs-small);
     color: var(--faint);
     font-variant-numeric: tabular-nums;
+  }
+  .limit {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    border-radius: var(--r-lg);
+    background: var(--hover);
+    color: var(--muted);
+    font-size: var(--fs-meta);
   }
 </style>

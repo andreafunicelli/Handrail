@@ -171,27 +171,30 @@ mod tests {
 
     #[test]
     fn checksum_detects_typos() {
-        let k = SecretKey::generate().unwrap();
-        let s = k.reveal().to_string();
         let mut detected = 0;
         let mut total = 0;
-        // Change each data character to a different symbol; nearly all must be rejected.
-        for pos in 3..s.len() {
-            let c = s.as_bytes()[pos];
-            if c == b'-' {
-                continue;
-            }
-            let repl = if c == b'Z' { 'Y' } else { 'Z' };
-            let mut t = s.clone().into_bytes();
-            t[pos] = repl as u8;
-            total += 1;
-            match SecretKey::parse(std::str::from_utf8(&t).unwrap()) {
-                Err(_) => detected += 1,
-                Ok(other) => assert_ne!(other, k),
+        // Change each data character of many keys to a different symbol: a 5-bit checksum misses
+        // about one typo in 32, so across all of them nearly every one must be rejected. (One
+        // key alone has too few characters for a stable bound.)
+        for _ in 0..100 {
+            let k = SecretKey::generate().unwrap();
+            let s = k.reveal().to_string();
+            for pos in 3..s.len() {
+                let c = s.as_bytes()[pos];
+                if c == b'-' {
+                    continue;
+                }
+                let repl = if c == b'Z' { 'Y' } else { 'Z' };
+                let mut t = s.clone().into_bytes();
+                t[pos] = repl as u8;
+                total += 1;
+                match SecretKey::parse(std::str::from_utf8(&t).unwrap()) {
+                    Err(_) => detected += 1,
+                    Ok(other) => assert_ne!(other, k),
+                }
             }
         }
-        // 5-bit checksum: allow at most a couple of chance collisions.
-        assert!(detected >= total - 3, "{detected}/{total}");
+        assert!(detected * 100 >= total * 92, "{detected}/{total}");
     }
 
     #[test]

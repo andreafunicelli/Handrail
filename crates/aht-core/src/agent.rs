@@ -40,6 +40,11 @@ pub enum AgentEvent {
         message: String,
         retryable: bool,
     },
+    /// The run used all its model calls while the model still had work to do; the user can
+    /// let it continue.
+    StepLimit {
+        steps: u32,
+    },
     /// Turn finished.
     Done,
 }

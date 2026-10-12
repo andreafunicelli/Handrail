@@ -33,12 +33,54 @@ pub struct AgentConfig {
     pub max_tool_result_bytes: usize,
 }
 
+/// Model calls per message unless the user sets another limit.
+pub const DEFAULT_MAX_STEPS: usize = 50;
+
+/// Room for one reply, by model. Reasoning models spend part of it thinking, so they need far
+/// more than chat models; asking for more than a model allows is an error, so older models with
+/// small limits get theirs.
+pub fn default_max_tokens(model: &str) -> u32 {
+    let m = model.to_ascii_lowercase();
+    let reasoning = m.contains("reasoner")
+        || m.contains("-r1")
+        || m.starts_with("r1")
+        || m.contains("thinking")
+        || ["o1", "o3", "o4", "gpt-5"]
+            .iter()
+            .any(|p| m.starts_with(p) || m.contains(&format!("/{p}")));
+    if reasoning {
+        32_768
+    } else if m.contains("claude-3-haiku")
+        || m.contains("claude-3-opus")
+        || m.contains("claude-3-sonnet")
+    {
+        4_096
+    } else if m.contains("claude-3-5") || m.contains("claude-3.5") {
+        8_192
+    } else if m.contains("claude") || m.starts_with("gpt-4.1") || m.starts_with("gpt-4o") {
+        16_384
+    } else {
+        // DeepSeek chat, local and other OpenAI-compatible models.
+        8_192
+    }
+}
+
+/// The most a reply may be given when the model used its whole budget thinking.
+fn max_tokens_cap(model: &str) -> u32 {
+    if default_max_tokens(model) >= 32_768 {
+        65_536
+    } else {
+        default_max_tokens(model)
+    }
+}
+
 impl AgentConfig {
     pub fn new(model: impl Into<String>) -> Self {
+        let model = model.into();
         Self {
-            model: model.into(),
-            max_steps: 25,
-            max_tokens: 4096,
+            max_tokens: default_max_tokens(&model),
+            model,
+            max_steps: DEFAULT_MAX_STEPS,
             temperature: None,
             system_extra: None,
             max_tool_result_bytes: DEFAULT_MAX_TOOL_RESULT_BYTES,
@@ -96,6 +138,11 @@ impl Agent {
 
     pub fn clear_history(&mut self) {
         self.history.clear();
+    }
+
+    /// Model calls allowed per message, from the user's settings (at least 1).
+    pub fn set_max_steps(&mut self, steps: usize) {
+        self.cfg.max_steps = steps.max(1);
     }
 
     /// Run one user turn to completion: stream the model, execute tool calls, feed results back,
@@ -171,6 +218,7 @@ impl Agent {
                 }
             };
             let aborted = turn.cancelled || turn.receiver_gone;
+            let answered = !turn.text.is_empty();
             // A cancelled stream may hold tool calls we cannot trust; drop them.
             let calls = if aborted { Vec::new() } else { turn.tool_uses };
             if !turn.text.is_empty() || !calls.is_empty() {
@@ -200,12 +248,29 @@ impl Agent {
             }
             if calls.is_empty() {
                 if turn.stop == StopReason::MaxTokens {
-                    return Err(Failure {
-                        error: aht_core::Error::Provider(
-                            "response was cut off (max_tokens reached)".into(),
-                        ),
-                        retryable: false,
-                    });
+                    if !answered {
+                        // All of it went on thinking: ask again with more room (kept for later
+                        // turns), up to what the model allows.
+                        let cap = max_tokens_cap(&self.cfg.model);
+                        if self.cfg.max_tokens < cap {
+                            self.cfg.max_tokens = self.cfg.max_tokens.saturating_mul(2).min(cap);
+                            continue;
+                        }
+                        return Err(Failure {
+                            error: aht_core::Error::Provider(format!(
+                                "the model spent its whole reply budget ({} tokens) thinking \
+                                 without answering; try again, or ask for a smaller step",
+                                self.cfg.max_tokens
+                            )),
+                            retryable: true,
+                        });
+                    }
+                    // A long answer: keep what arrived and say how to get the rest.
+                    let note =
+                        "\n\n_(The reply hit the length limit. Say \"continue\" for the rest.)_";
+                    let _ = events
+                        .send(AgentEvent::TextDelta { text: note.into() })
+                        .await;
                 }
                 return Ok(());
             }
@@ -216,11 +281,15 @@ impl Agent {
 
         // Step budget exhausted while the model still wanted tools.
         let note = format!(
-            "I stopped after {} steps without finishing. Send another message to let me continue.",
+            "I stopped after {} steps without finishing. Continue to let me go on.",
             self.cfg.max_steps
         );
-        self.history.push(Message::assistant_text(note.clone()));
-        let _ = events.send(AgentEvent::TextDelta { text: note }).await;
+        self.history.push(Message::assistant_text(note));
+        let _ = events
+            .send(AgentEvent::StepLimit {
+                steps: self.cfg.max_steps as u32,
+            })
+            .await;
         Ok(())
     }
 

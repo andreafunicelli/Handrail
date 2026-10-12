@@ -11,6 +11,7 @@
   let pattern = $state("");
   let patternError = $state<string | null>(null);
   const modes: ApprovalMode[] = ["confirm_all", "confirm_writes", "auto"];
+  const stepChoices = [25, 50, 100, 200];
 
   onMount(async () => {
     try {
@@ -64,6 +65,14 @@
         <span class="mname">{t(`ai.mode.${m}`)}</span>
         <span class="hint">{t(`appr.mode.${m}.desc`)}</span>
       </label>
+    {/each}
+  </div>
+
+  <h3>{t("appr.steps")}</h3>
+  <p class="hint sub">{t("appr.stepsHint")}</p>
+  <div class="seg" role="group" aria-label={t("appr.steps")}>
+    {#each stepChoices as n (n)}
+      <button aria-pressed={(s.max_steps ?? 50) === n} onclick={() => s && ((s.max_steps = n), persist())}>{n}</button>
     {/each}
   </div>
 
