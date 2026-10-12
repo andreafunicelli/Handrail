@@ -20,6 +20,8 @@
   let attempt = $state(0);
   /** The pane no longer matches the desktop's resolution (the desktop is scaled meanwhile). */
   let stale = $state(false);
+  /** The server's current pointer, redrawn at the new scale when the pane or desktop size changes. */
+  let pointer: Pointer | null = null;
 
   let id: string | null = null;
   let desk = { width: 0, height: 0 };
@@ -48,14 +50,17 @@
     if (m.kind === "tiles") {
       const c = canvas!;
       if (c.width !== m.tiles.width || c.height !== m.tiles.height) [c.width, c.height] = [m.tiles.width, m.tiles.height];
+      const resized = desk.width !== m.tiles.width || desk.height !== m.tiles.height;
       desk = { width: m.tiles.width, height: m.tiles.height };
       stale = differs(paneSize());
+      if (resized) cursor = cssCursor(pointer);
       const ctx = c.getContext("2d")!;
       for (const r of m.tiles.rects) ctx.putImageData(new ImageData(r.data, r.w, r.h), r.x, r.y);
       phase = "live";
       problem = null;
     } else if (m.kind === "pointer") {
-      cursor = cssCursor(m.pointer);
+      pointer = m.pointer;
+      cursor = cssCursor(pointer);
     } else if (m.kind === "error") {
       phase = "ended";
       problem = m.message || t("rdp.failed");
@@ -67,21 +72,36 @@
     }
   }
 
-  function cssCursor(p: Pointer): string {
-    if (p.kind === "default") return "default";
+  /** CSS pixels per desktop pixel: the desktop is scaled (and letterboxed) to the pane. */
+  function displayScale() {
+    const r = canvas?.getBoundingClientRect();
+    const k = r && desk.width && desk.height ? Math.min(r.width / desk.width, r.height / desk.height) : 0;
+    return k > 0 ? k : 1 / (window.devicePixelRatio || 1);
+  }
+
+  /** The server's pointer at the desktop's on-screen scale, so its tip stays where clicks land. */
+  function cssCursor(p: Pointer | null): string {
+    if (!p || p.kind === "default") return "default";
     if (p.kind === "hidden") return "none";
     if (!p.width || !p.height || p.width > 256 || p.height > 256) return "default";
-    const c = document.createElement("canvas");
-    [c.width, c.height] = [p.width, p.height];
+    const src = document.createElement("canvas");
+    [src.width, src.height] = [p.width, p.height];
     // IronRDP decodes premultiplied alpha; ImageData wants it straight.
     const px = new Uint8ClampedArray(p.rgba);
     for (let i = 0; i < px.length; i += 4) {
       const a = px[i + 3];
       if (a && a < 255) for (let k = 0; k < 3; k++) px[i + k] = Math.min(255, (px[i + k] * 255) / a);
     }
-    c.getContext("2d")!.putImageData(new ImageData(px, p.width, p.height), 0, 0);
-    const dpr = window.devicePixelRatio || 1;
-    return `url(${c.toDataURL()}) ${Math.round(p.hotX / dpr)} ${Math.round(p.hotY / dpr)}, default`;
+    src.getContext("2d")!.putImageData(new ImageData(px, p.width, p.height), 0, 0);
+    // Browsers refuse cursor images over 128 CSS px.
+    const k = Math.min(displayScale(), 128 / p.width, 128 / p.height);
+    const c = document.createElement("canvas");
+    [c.width, c.height] = [Math.max(1, Math.round(p.width * k)), Math.max(1, Math.round(p.height * k))];
+    const ctx = c.getContext("2d")!;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(src, 0, 0, c.width, c.height);
+    const hot = (v: number, max: number) => Math.min(max - 1, Math.max(0, Math.round(v * k)));
+    return `url(${c.toDataURL()}) ${hot(p.hotX, c.width)} ${hot(p.hotY, c.height)}, default`;
   }
 
   function differs(s: { width: number; height: number }) {
@@ -189,7 +209,10 @@
       // The desktop scales to the pane; changing its resolution can cost a reconnect, so that
       // waits for the "Match window size" button.
       timer = setTimeout(() => {
-        if (id && phase === "live") stale = differs(paneSize());
+        if (id && phase === "live") {
+          stale = differs(paneSize());
+          cursor = cssCursor(pointer);
+        }
       }, 400);
     });
     ro.observe(host!);
