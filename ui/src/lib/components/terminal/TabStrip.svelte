@@ -82,7 +82,7 @@
   });
 </script>
 
-<div class="bar">
+<div class="bar" data-tour="tabs">
   {#if ui.narrow}
     <button class="icon-btn" aria-label={t("rail.connections")} onclick={() => (ui.sidebarDrawer = true)}><Icon name="menu" /></button>
   {/if}

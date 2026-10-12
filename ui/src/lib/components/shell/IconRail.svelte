@@ -12,14 +12,14 @@
   <button class="item" class:on={ui.rail === "connections"} aria-pressed={ui.rail === "connections"} title={t("rail.connections")} aria-label={t("rail.connections")} onclick={() => (ui.rail = "connections")}>
     <Icon name="server" size={18} />
   </button>
-  <button class="item" class:on={ui.rail === "snippets"} aria-pressed={ui.rail === "snippets"} title={t("rail.snippets")} aria-label={t("rail.snippets")} onclick={() => (ui.rail = "snippets")}>
+  <button data-tour="snippets" class="item" class:on={ui.rail === "snippets"} aria-pressed={ui.rail === "snippets"} title={t("rail.snippets")} aria-label={t("rail.snippets")} onclick={() => (ui.rail = "snippets")}>
     <Icon name="snippet" size={18} />
   </button>
   <span class="grow"></span>
   <button class="item" title={t("vault.lock")} aria-label={t("vault.lock")} onclick={() => vault.lock().catch(toasts.error)}>
     <Icon name="lock" size={17} />
   </button>
-  <button class="item" class:on={!!ui.settingsPage} title={t("rail.settings")} aria-label={t("rail.settings")} onclick={() => ui.openSettings()}>
+  <button data-tour="settings" class="item" class:on={!!ui.settingsPage} title={t("rail.settings")} aria-label={t("rail.settings")} onclick={() => ui.openSettings()}>
     <Icon name="settings" size={18} />
   </button>
 </nav>

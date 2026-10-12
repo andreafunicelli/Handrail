@@ -262,6 +262,11 @@
     const parts = path.split("/").filter(Boolean);
     return [{ name: "/", path: "/" }, ...parts.map((p, i) => ({ name: p, path: "/" + parts.slice(0, i + 1).join("/") }))];
   });
+  /** The selected row, when it can be copied elsewhere (folders only go server to server). */
+  const copyable = $derived.by(() => {
+    const e = entries.find((x) => x.path === selected);
+    return e && (fs.kind === "sftp" || e.kind !== "dir") ? e : null;
+  });
   const icon = (e: FileEntry) => (e.kind === "dir" ? "folder" : e.link ? "link" : "file");
 </script>
 
@@ -276,10 +281,11 @@
       <button class="icon-btn" title={t("files.newFile")} aria-label={t("files.newFile")} disabled={!writable} onclick={() => (naming = { mode: "touch", value: "" })}><Icon name="filePlus" size={14} /></button>
     {/if}
     <button class="icon-btn" title={t("files.newFolder")} aria-label={t("files.newFolder")} disabled={!writable} onclick={() => (naming = { mode: "mkdir", value: "" })}><Icon name="folderPlus" size={14} /></button>
-    <button class="btn sm" disabled={!writable} onclick={upload}><Icon name="upload" size={13} />{t("files.upload")}</button>
+    <button class="btn sm" disabled={!writable} aria-label={t("files.upload")} onclick={upload}><Icon name="upload" size={13} /><span class="lbl">{t("files.upload")}</span></button>
+    <button class="btn sm" disabled={!copyable} aria-label={t("files.copyButton")} title={copyable ? t("files.copyToServer") : t("files.copyPick")} onclick={() => (copying = copyable)}><Icon name="send" size={13} /><span class="lbl">{t("files.copyButton")}</span></button>
     {#if base.asRoot}
-      <button class="btn sm root" class:on={!!rootFs} aria-pressed={!!rootFs} title={t(rootFs ? "files.rootOff" : "files.rootOn")} onclick={toggleRoot}>
-        <Icon name="shield" size={13} />{t("files.root")}
+      <button class="btn sm root" class:on={!!rootFs} aria-pressed={!!rootFs} aria-label={t("files.root")} title={t(rootFs ? "files.rootOff" : "files.rootOn")} onclick={toggleRoot}>
+        <Icon name="shield" size={13} /><span class="lbl">{t("files.root")}</span>
       </button>
     {/if}
   </div>
@@ -375,7 +381,13 @@
   }
   .pathform {
     flex: 1;
-    min-width: 0;
+    min-width: 90px;
+  }
+  /* Narrow panes: the labelled buttons keep only their icons, so the path stays usable. */
+  @container (max-width: 560px) {
+    .bar .lbl {
+      display: none;
+    }
   }
   .path {
     width: 100%;

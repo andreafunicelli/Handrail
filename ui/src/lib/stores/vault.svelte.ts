@@ -10,6 +10,8 @@ class Vault {
   secretKey = $state<string | null>(null);
   /** This device just joined a synced vault: unlocking needs the Secret Key. */
   joined = $state(false);
+  /** A vault was just created here: the app opens with the guided tour. */
+  justCreated = $state(false);
 
   async refresh() {
     this.status = await api.vaultStatus();
@@ -23,6 +25,7 @@ class Vault {
   async create(password: string) {
     const { secret_key } = await api.vaultCreate(password);
     this.secretKey = secret_key;
+    this.justCreated = true;
     this.phase = "kit";
   }
   finishKit() {
