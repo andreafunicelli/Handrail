@@ -74,7 +74,10 @@ impl LaunchSpec {
     }
 }
 
-const CLAUDE_LOCAL_TOOLS: &str = "Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit";
+/// Claude Code's own tools that act on this computer, refused in server mode. Only names the
+/// installed Claude Code still has: it rejects deny rules for unknown tools (`MultiEdit`, folded
+/// into `Edit`, is gone). `dontAsk` refuses anything not explicitly allowed anyway.
+const CLAUDE_LOCAL_TOOLS: &str = "Bash,PowerShell,Edit,Write,NotebookEdit";
 
 /// Split profile extras into (args to forward, api_billing opt-in).
 fn split_extra(extra: &[String]) -> (Vec<String>, bool) {
@@ -429,6 +432,8 @@ mod tests {
         for t in ["Bash", "Edit", "Write", "NotebookEdit"] {
             assert!(dis.split(',').any(|x| x == t));
         }
+        // Claude Code refuses to start on a deny rule for a tool it no longer has.
+        assert!(!dis.split(',').any(|x| x == "MultiEdit"));
         assert_eq!(
             pair(&s.args, "--permission-mode").as_deref(),
             Some("dontAsk")

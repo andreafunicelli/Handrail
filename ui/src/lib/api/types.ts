@@ -218,6 +218,7 @@ export type AgentEvent =
   | { type: "approval_resolved"; approval_id: ApprovalId; decision: ApprovalDecision }
   | { type: "usage"; input_tokens: number; output_tokens: number; cost_usd: number | null }
   | { type: "error"; message: string; retryable: boolean }
+  | { type: "step_limit"; steps: number }
   | { type: "done" };
 
 // ---- IPC payloads (docs/ipc-contract.md) ----
@@ -466,6 +467,8 @@ export interface IpcError {
 export interface ApprovalSettings {
   default_mode: ApprovalMode;
   deny_list: string[];
+  /** Model calls the built-in agent may make per message (default 50). */
+  max_steps?: number;
 }
 
 export interface ProviderTestResult {

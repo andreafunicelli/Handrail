@@ -255,6 +255,7 @@ fn kinds(evs: &[AgentEvent]) -> Vec<&'static str> {
             AgentEvent::ApprovalResolved { .. } => "approval_res",
             AgentEvent::Usage { .. } => "usage",
             AgentEvent::Error { .. } => "error",
+            AgentEvent::StepLimit { .. } => "step_limit",
             AgentEvent::Done => "done",
         })
         .collect()
@@ -469,11 +470,8 @@ async fn max_steps_stops_with_message_and_valid_history() {
     assert_eq!(provider.requests().len(), 3);
     let k = kinds(&evs);
     assert_eq!(k.iter().filter(|k| **k == "call").count(), 3);
-    assert_eq!(k[k.len() - 2..], ["text", "done"]);
-    match &evs[evs.len() - 2] {
-        AgentEvent::TextDelta { text } => assert!(text.contains("3 steps")),
-        e => panic!("{e:?}"),
-    }
+    assert_eq!(k[k.len() - 2..], ["step_limit", "done"]);
+    assert_eq!(evs[evs.len() - 2], AgentEvent::StepLimit { steps: 3 });
     assert_history_well_formed(a.history());
     assert_eq!(a.history().last().unwrap().role, Role::Assistant);
 }
@@ -699,13 +697,70 @@ async fn dropping_the_event_receiver_stops_the_run() {
 }
 
 #[tokio::test]
-async fn max_tokens_cutoff_without_tools_reports_error() {
+async fn a_cut_off_answer_is_kept_with_a_note() {
     let provider = ScriptedProvider::new(vec![Turn::Events(vec![
         text("cut"),
         stop(StopReason::MaxTokens),
     ])]);
     let mut a = agent(provider, Arc::new(MockTools::default()), cfg());
     let (r, evs) = run(&mut a, "x").await;
+    assert!(r.is_ok());
+    assert_eq!(kinds(&evs), ["text", "text", "done"]);
+    assert!(matches!(&evs[1], AgentEvent::TextDelta { text } if text.contains("continue")));
+}
+
+#[tokio::test]
+async fn thinking_that_fills_the_budget_is_retried_with_more_room() {
+    let provider = ScriptedProvider::new(vec![
+        Turn::Events(vec![
+            ProviderEvent::ThinkingDelta("hmm".into()),
+            stop(StopReason::MaxTokens),
+        ]),
+        Turn::Events(vec![text("done"), stop(StopReason::EndTurn)]),
+    ]);
+    let mut c = cfg();
+    c.model = "deepseek-reasoner".into();
+    c.max_tokens = 32_768;
+    let mut a = agent(provider.clone(), Arc::new(MockTools::default()), c);
+    let (r, _) = run(&mut a, "x").await;
+    assert!(r.is_ok());
+    let reqs = provider.requests();
+    assert_eq!(
+        reqs.iter().map(|r| r.max_tokens).collect::<Vec<_>>(),
+        [32_768, 65_536]
+    );
+}
+
+#[tokio::test]
+async fn thinking_past_the_models_limit_is_a_clear_error() {
+    let provider = ScriptedProvider::repeating(vec![
+        ProviderEvent::ThinkingDelta("hmm".into()),
+        stop(StopReason::MaxTokens),
+    ]);
+    let mut c = cfg();
+    c.model = "deepseek-chat".into();
+    c.max_tokens = 8_192;
+    let mut a = agent(provider.clone(), Arc::new(MockTools::default()), c);
+    let (r, evs) = run(&mut a, "x").await;
     assert!(r.is_err());
-    assert_eq!(kinds(&evs), ["text", "error", "done"]);
+    assert_eq!(
+        provider.requests().len(),
+        1,
+        "no retry beyond the model's limit"
+    );
+    assert!(
+        matches!(evs.iter().find(|e| matches!(e, AgentEvent::Error { .. })),
+        Some(AgentEvent::Error { message, retryable: true }) if message.contains("thinking"))
+    );
+}
+
+#[test]
+fn reply_budgets_fit_the_model() {
+    use aht_agent::default_max_tokens as m;
+    assert_eq!(m("deepseek-reasoner"), 32_768);
+    assert_eq!(m("deepseek-chat"), 8_192);
+    assert_eq!(m("claude-sonnet-4-5"), 16_384);
+    assert_eq!(m("claude-3-haiku-20240307"), 4_096);
+    assert_eq!(m("o3-mini"), 32_768);
+    assert_eq!(m("llama3.1:8b"), 8_192);
 }

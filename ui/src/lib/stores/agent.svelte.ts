@@ -25,7 +25,8 @@ export type ChatItem =
       done: boolean;
     }
   | { kind: "approval"; id: string; req: ApprovalRequest; decision: ApprovalDecision | null }
-  | { kind: "error"; id: string; message: string; retryable: boolean };
+  | { kind: "error"; id: string; message: string; retryable: boolean }
+  | { kind: "limit"; id: string; steps: number };
 
 export interface Chat {
   items: ChatItem[];
@@ -247,6 +248,9 @@ class Agent {
         break;
       case "error":
         chat.items.push({ kind: "error", id: nid(), message: ev.message, retryable: ev.retryable });
+        break;
+      case "step_limit":
+        chat.items.push({ kind: "limit", id: nid(), steps: ev.steps });
         break;
       case "done":
         if (chat.runId === runId || chat.runId === null) chat.runId = null;

@@ -505,6 +505,18 @@ pub async fn host_key_decision(
 // ---------- opening sessions ----------
 
 /// The UI stores `{ default_mode, deny_list: string[] }` under the `approvals` setting.
+/// Model calls the built-in agent may make per message (Settings › Approvals).
+async fn agent_max_steps(state: &AppState) -> usize {
+    let vault = state.vault.lock().await;
+    vault
+        .get::<aht_vault::Setting>("approvals")
+        .ok()
+        .flatten()
+        .and_then(|s| s.value.get("max_steps")?.as_u64())
+        .map(|n| n.clamp(5, 500) as usize)
+        .unwrap_or(aht_agent::DEFAULT_MAX_STEPS)
+}
+
 async fn approval_settings(state: &AppState) -> (ApprovalMode, Vec<regex::Regex>) {
     let value = {
         let vault = state.vault.lock().await;
@@ -1219,6 +1231,7 @@ async fn start_builtin(
         }
         self::hub(&a).runs.lock().await.remove(&rid);
     });
+    let max_steps = agent_max_steps(&state).await;
     let a = app.clone();
     let rid = run_id.to_string();
     tokio::spawn(async move {
@@ -1235,6 +1248,7 @@ async fn start_builtin(
             emit_run(&a, &rid, session_id, AgentEvent::Done);
             return;
         };
+        agent.set_max_steps(max_steps);
         // Errors are already reported through the event stream.
         let _ = agent.run(&message, Some(info), tx, cancel).await;
     });
