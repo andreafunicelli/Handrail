@@ -17,6 +17,8 @@ const LB_LOAD_BALANCE_INFO: u32 = 0x0002;
 const LB_USERNAME: u32 = 0x0004;
 const LB_DOMAIN: u32 = 0x0008;
 const LB_PASSWORD: u32 = 0x0010;
+/// Informational only: the client stays where it is ([MS-RDPBCGR] 2.2.13.1).
+pub const LB_NOREDIRECT: u32 = 0x0080;
 const LB_TARGET_FQDN: u32 = 0x0100;
 const LB_TARGET_NETBIOS_NAME: u32 = 0x0200;
 
@@ -128,19 +130,35 @@ pub fn parse_redirection(user_data: &[u8]) -> Option<Redirection> {
     Some(out)
 }
 
+/// What to do with a PDU that arrives where licensing expects one.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LicensingInput {
+    /// Hand it to the licensing sequence.
+    Licensing,
+    /// An informational redirection (`LB_NOREDIRECT`): consume it and keep waiting.
+    Skip,
+}
+
 /// Before a PDU is handed to the licensing sequence: when it is on the I/O channel but is not a
 /// licensing PDU, fail with what it is (a redirection and where to) instead of a decode error.
-pub(crate) fn check_licensing_pdu(input: &[u8], io_channel_id: u16, state: &str) -> ConnectorResult<()> {
+pub(crate) fn check_licensing_pdu(input: &[u8], io_channel_id: u16, state: &str) -> ConnectorResult<LicensingInput> {
     let Ok(data) = ironrdp_pdu::mcs::decode_send_data_indication(input) else {
-        return Ok(());
+        return Ok(LicensingInput::Licensing);
     };
     let user_data = data.user_data;
     if data.channel_id != io_channel_id || user_data.len() < 2 {
-        return Ok(());
+        return Ok(LicensingInput::Licensing);
     }
     // Redirection first: in the enhanced form the first word is a length, which may happen to
     // have the licensing bit set.
     if let Some(redirection) = parse_redirection(user_data) {
+        if redirection.redir_flags & LB_NOREDIRECT != 0 {
+            tracing::debug!(
+                ?redirection,
+                "Informational server redirection (LB_NOREDIRECT), staying"
+            );
+            return Ok(LicensingInput::Skip);
+        }
         let target = redirection.target().unwrap_or("another host (no name given)");
         let mut details = format!("session {}", redirection.session_id);
         if let Some(lb) = redirection.load_balance_info.as_deref().filter(|lb| !lb.is_empty()) {
@@ -159,7 +177,7 @@ pub(crate) fn check_licensing_pdu(input: &[u8], io_channel_id: u16, state: &str)
     }
     let flags = u16::from_le_bytes([user_data[0], user_data[1]]);
     if flags & SEC_LICENSE_PKT != 0 {
-        return Ok(());
+        return Ok(LicensingInput::Licensing);
     }
     let head = &user_data[..user_data.len().min(32)];
     Err(reason_err!(

@@ -17,7 +17,8 @@ Source: IronRDP commit `11a0810c` (`chore(release): prepare for publishing (#136
   connection.rs): a Remote Desktop Connection Broker answers the Client Info PDU with a Server
   Redirection PDU where the first licensing PDU would be. IronRDP 0.10 can't follow it and
   decoded it as a licensing PDU. It is now parsed (Enhanced and Standard Security forms) and
-  reported as an error naming the target host. Any other non-licensing PDU on the I/O channel
+  reported as an error naming the target host, unless it is informational (`LB_NOREDIRECT`),
+  which is consumed while licensing keeps waiting. Any other non-licensing PDU on the I/O channel
   is reported with its first word and bytes. `handrail::parse_redirection` is public so
   `rdp-helper/tests/redirection.rs` can test it.
 - `#[expect(single_use_lifetimes)]` → `#[allow(...)]` (connection.rs): the lint is only enabled

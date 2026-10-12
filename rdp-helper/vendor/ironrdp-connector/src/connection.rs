@@ -607,8 +607,10 @@ impl Sequence for ClientConnector {
                     // the terminal-state transition lives in one place. Otherwise
                     // nothing was read and the licensing sequence runs from its
                     // first step when the next PDU arrives.
-                    if self.message_channel_id.is_some() {
-                        crate::handrail::check_licensing_pdu(input, io_channel_id, license_exchange.state.name())?;
+                    if self.message_channel_id.is_some()
+                        && crate::handrail::check_licensing_pdu(input, io_channel_id, license_exchange.state.name())?
+                            == crate::handrail::LicensingInput::Licensing
+                    {
                         advance_licensing_exchange(license_exchange, io_channel_id, user_channel_id, input, output)?
                     } else {
                         (
@@ -671,8 +673,24 @@ impl Sequence for ClientConnector {
                         )
                     }
                     _ => {
-                        crate::handrail::check_licensing_pdu(input, io_channel_id, license_exchange.state.name())?;
-                        advance_licensing_exchange(license_exchange, io_channel_id, user_channel_id, input, output)?
+                        match crate::handrail::check_licensing_pdu(input, io_channel_id, license_exchange.state.name())?
+                        {
+                            crate::handrail::LicensingInput::Licensing => advance_licensing_exchange(
+                                license_exchange,
+                                io_channel_id,
+                                user_channel_id,
+                                input,
+                                output,
+                            )?,
+                            crate::handrail::LicensingInput::Skip => (
+                                Written::Nothing,
+                                ClientConnectorState::LicensingExchange {
+                                    io_channel_id,
+                                    user_channel_id,
+                                    license_exchange,
+                                },
+                            ),
+                        }
                     }
                 }
             }

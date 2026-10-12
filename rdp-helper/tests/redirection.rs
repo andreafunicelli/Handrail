@@ -1,7 +1,7 @@
 //! Recognising a Connection Broker's Server Redirection PDU where licensing should start
 //! (vendor/ironrdp-connector/src/handrail.rs).
 
-use ironrdp_connector::handrail::{parse_redirection, Redirection};
+use ironrdp_connector::handrail::{parse_redirection, Redirection, LB_NOREDIRECT};
 
 fn utf16z(s: &str) -> Vec<u8> {
     s.encode_utf16()
@@ -93,4 +93,18 @@ fn licensing_pdus_are_not_redirections() {
     assert_eq!(parse_redirection(&license), None);
     assert_eq!(parse_redirection(&[0x80]), None);
     assert_eq!(parse_redirection(&[]), None);
+}
+
+#[test]
+fn informational_redirection_keeps_its_flag() {
+    // LB_NOREDIRECT with no other fields: the connector skips it instead of failing.
+    let mut pdu = vec![0x00, 0x04, 0, 0, 0x00, 0x04, 12, 0];
+    pdu.extend_from_slice(&3u32.to_le_bytes());
+    pdu.extend_from_slice(&LB_NOREDIRECT.to_le_bytes());
+    let r = parse_redirection(&pdu).expect("a redirection");
+    assert_eq!(
+        (r.session_id, r.redir_flags & LB_NOREDIRECT),
+        (3, LB_NOREDIRECT)
+    );
+    assert_eq!(r.target(), None);
 }
