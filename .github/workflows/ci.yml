@@ -176,6 +176,6 @@ jobs:
       # The RDP helper is a workspace of its own (see rdp-helper/Cargo.toml).
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
+          # rdp-helper/deny.toml links to the root policy.
           manifest-path: rdp-helper/Cargo.toml
-          command-arguments: --config=deny.toml
           log-level: error
