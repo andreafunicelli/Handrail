@@ -120,34 +120,3 @@ Two environment variables help when testing:
 | `aht-import` | Importers for other SSH managers |
 
 Design spec: [`docs/superpowers/specs/2026-10-10-aihubterm-design.md`](docs/superpowers/specs/2026-10-10-aihubterm-design.md). It was written while the project was called AIHubTerm.
-
-### Installers and updates
-
-The **Release** workflow (`.github/workflows/release.yml`) builds a universal macOS `.dmg` and Windows `.exe`/`.msi` installers:
-- On every push to `main`, it publishes them as a GitHub Release named `v<major>.<minor>.<patch>`, the patch one past the last release of that major.minor (publishing runs go one at a time, so two never take the same number).
-- On pull requests, it attaches them as workflow artifacts.
-
-The major.minor lives only in the workspace `Cargo.toml` (currently 1.0); CI stamps the full version into it. Changing it there (e.g. to 1.1) restarts the patch at 0.
-
-Updates need two things:
-1. **An updater key pair** from `npx tauri signer generate`.
-   - The public key goes in `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
-   - The private key and its password go in the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-2. **Releases in this repository.** Every push to `main` publishes one here, with a changelog of the pull requests merged since the previous release. The updater reads `latest.json` from the latest release.
-
-Releases used to go to the separate `andreafunicelli/handrail-releases` repository, and apps installed from there still look for updates there. While the secret `RELEASES_TOKEN` (a token with "Contents: read and write" on that repository) exists, each release also copies its `latest.json` there, so those apps update to a version that looks here. Delete the secret once they have updated.
-
-### Renamed from AIHubTerm
-
-Existing installs carry over:
-- the data directory (`dev.aihubterm.app`) is moved on first launch;
-- the Secret Key saved in the keychain is still found;
-- an existing `aihubterm-vault` GitHub repository is reused;
-- an `AIHubTerm` cloud-drive folder that holds a vault is reused.
-
-## Status
-
-Version 1.x, released from `main`. Before a public release:
-- choose a license;
-- set up code signing and notarization;
-- confirm with Anthropic and OpenAI that the subscription integration complies with their terms.
