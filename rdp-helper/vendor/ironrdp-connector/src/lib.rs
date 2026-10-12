@@ -8,6 +8,7 @@ mod connection;
 pub mod connection_activation;
 mod connection_finalization;
 pub mod credssp;
+pub mod handrail;
 mod license_exchange;
 mod server_name;
 
