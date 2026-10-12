@@ -50,6 +50,7 @@ fn connection(name: &str) -> Connection {
         local_shell: None,
         notes: "primary".into(),
         tunnels: vec![],
+        rdp_admin: false,
     }
 }
 

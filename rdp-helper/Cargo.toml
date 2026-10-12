@@ -12,10 +12,13 @@ license = "UNLICENSED"
 publish = false
 
 [workspace]
+# The vendored crate is a dependency, not ours to lint or format.
+exclude = ["vendor"]
 
 [dependencies]
 anyhow = "1"
 ironrdp-client = { version = "0.1.0", features = ["rustls"] }
+ironrdp-connector = "0.10"
 ironrdp-input = "0.7"
 ironrdp-pdu = "0.9"
 serde = { version = "1", features = ["derive"] }
@@ -23,6 +26,10 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+
+# Console-session support (`mstsc /admin`), see vendor/ironrdp-connector/PATCHES.md.
+[patch.crates-io]
+ironrdp-connector = { path = "vendor/ironrdp-connector" }
 
 [profile.release]
 codegen-units = 1

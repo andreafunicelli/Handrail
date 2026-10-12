@@ -192,6 +192,7 @@ impl Builder {
             local_shell: None,
             notes,
             tunnels: Vec::new(),
+            rdp_admin: false,
         });
         id
     }

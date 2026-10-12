@@ -572,6 +572,8 @@ export const en = {
   "editor.kind.rdp": "Remote desktop (RDP)",
   "editor.rdpUser": "For a domain account: DOMAIN\\user or user@domain.",
   "editor.rdpPassword": "Remote desktop needs a saved password.",
+  "editor.rdpAdmin": "Administrative session (/admin)",
+  "editor.rdpAdminHint": "Connects to the server's console session, like mstsc /admin. Needs an administrator account; also gets in when the server's Remote Desktop licensing refuses normal sessions.",
   "editor.rdpJump": "The desktop is reached through an SSH tunnel over these hosts.",
   "sidebar.servers": "Servers",
   "ai.stepLimit": "Stopped after {n} steps without finishing.",

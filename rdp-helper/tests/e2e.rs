@@ -89,6 +89,17 @@ async fn recv(stdout: &mut ChildStdout) -> Option<(u8, Vec<u8>)> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connects_renders_types_and_closes() {
+    session(false).await;
+}
+
+/// The console-session request (`mstsc /admin`) travels in the client cluster data, which the
+/// connector only sends when asked: the server must still take it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connects_to_the_console_session() {
+    session(true).await;
+}
+
+async fn session(admin: bool) {
     // A self-signed certificate for the server's TLS (and so NLA).
     let dir = tempfile::tempdir().unwrap();
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
@@ -134,7 +145,7 @@ async fn connects_renders_types_and_closes() {
     let mut stdout = helper.stdout.take().unwrap();
     let start = serde_json::json!({
         "host": "127.0.0.1", "port": port, "username": "handrail", "password": "s3cret!",
-        "width": W, "height": H,
+        "width": W, "height": H, "admin": admin,
     });
     send(&mut stdin, 0x01, start.to_string().as_bytes()).await;
 

@@ -168,6 +168,8 @@ async fn forward_input(mut stdin: Stdin, tx: mpsc::UnboundedSender<RdpInputEvent
 }
 
 fn config(s: proto::Start) -> anyhow::Result<Config> {
+    // One session per process, so the process-wide switch is this session's.
+    ironrdp_connector::set_console_session(s.admin);
     let mut b = ConfigBuilder::new()
         .with_destination(Destination::from_parts(s.host, s.port))
         .with_username(s.username)

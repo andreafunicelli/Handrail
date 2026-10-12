@@ -42,6 +42,9 @@ pub struct Start {
     /// Percent (100 = no scaling).
     #[serde(default = "default_scale")]
     pub scale: u32,
+    /// Connect to the console (administrative) session, like `mstsc /admin`.
+    #[serde(default)]
+    pub admin: bool,
 }
 
 fn default_scale() -> u32 {
@@ -180,6 +183,6 @@ mod tests {
             r#"{"host":"h","port":3389,"username":"u","password":"p","width":800,"height":600}"#,
         )
         .unwrap();
-        assert_eq!((s.scale, s.domain), (100, None));
+        assert_eq!((s.scale, s.domain, s.admin), (100, None, false));
     }
 }

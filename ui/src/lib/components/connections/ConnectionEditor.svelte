@@ -77,6 +77,8 @@
         // Tunnels and agent approvals belong to SSH sessions.
         out.tunnels = [];
         out.approval_mode = null;
+      } else {
+        out.rdp_admin = false;
       }
       if (authType === "password") {
         // A typed password is new (for this connection only); else the saved one picked.
@@ -218,6 +220,13 @@
         <p class="hint">{t("editor.promptNote")}</p>
       {/if}
     </fieldset>
+
+    {#if rdp}
+      <label class="check admin">
+        <input type="checkbox" bind:checked={c.rdp_admin} />
+        <span>{t("editor.rdpAdmin")}<span class="hint">{t("editor.rdpAdminHint")}</span></span>
+      </label>
+    {/if}
 
     <fieldset class="field">
       <legend class="label">{t("editor.jump")}</legend>
@@ -518,5 +527,15 @@
     align-items: center;
     gap: 6px;
     margin: 0;
+  }
+  .admin {
+    align-items: flex-start;
+  }
+  .admin input {
+    margin-top: 3px;
+  }
+  .admin .hint {
+    display: block;
+    margin-top: 2px;
   }
 </style>
