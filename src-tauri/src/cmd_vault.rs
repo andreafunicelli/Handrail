@@ -146,6 +146,43 @@ pub async fn vault_lock(state: State<'_, AppState>) -> Result<()> {
     Ok(())
 }
 
+/// Delete the vault from this device, locked or not (a forgotten master password is the usual
+/// reason): every item, snapshot and the Secret Key in the keychain, plus what only made sense
+/// with it: open sessions, the sync settings and the AI profiles' folders. Copies synced to
+/// GitHub or a cloud folder stay; known_hosts stays too (it belongs to the device).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn vault_delete(state: State<'_, AppState>) -> Result<()> {
+    // No sync round may run against the vault while it goes.
+    let _sync = state.sync_lock.lock().await;
+    // Locked first: an SSH session (or reconnect) can no longer read its credentials.
+    vault_lock(state.clone()).await?;
+    state.terminal.close_all().await;
+    let vault = state.vault.clone();
+    let mut guard = vault.lock_owned().await;
+    let vault_id = guard.vault_id().map(str::to_owned);
+    tokio::task::spawn_blocking(move || guard.erase())
+        .await
+        .map_err(err)?
+        .map_err(Error::from)?;
+    // Anything that registered while the first pass ran (a local shell, an open in flight).
+    state.terminal.close_all().await;
+    if let Some(id) = vault_id {
+        if let Err(e) = state.keystore.delete(&id) {
+            tracing::warn!("could not remove the secret key from the keychain: {e}");
+        }
+    }
+    match std::fs::remove_dir_all(&state.paths.profiles_dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            tracing::warn!("could not remove the AI profiles' folders: {e}")
+        }
+        _ => {}
+    }
+    match std::fs::remove_file(&state.paths.sync_state_file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
 /// Settings under `sync.` hold credentials and are managed by the sync commands only.
 fn check_setting_key(key: &str) -> Result<()> {
     if key.starts_with("sync.") {

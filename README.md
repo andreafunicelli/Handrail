@@ -29,6 +29,7 @@
   - Your master password plus a Secret Key (Argon2id, XChaCha20-Poly1305), with an Emergency Kit to save once.
   - Snapshots you can roll back to.
   - Sync conflicts are kept, so a lost edit can be brought back.
+  - Forgot the master password? Delete the vault from the unlock screen (or Settings › Vault) and start over; synced copies are kept.
 - **Sync across macOS and Windows:**
   - In one click through a cloud drive (iCloud Drive, Dropbox, OneDrive, Google Drive), or through a private GitHub repository.
   - Or through any folder (Syncthing, a network share).

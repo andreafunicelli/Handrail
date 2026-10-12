@@ -630,6 +630,10 @@ export function createMockApi(): Api {
     async vaultLock() {
       vault.locked = true;
     },
+    async vaultDelete() {
+      await sleep(300);
+      Object.assign(vault, { initialized: false, locked: true, password: "" });
+    },
     async appVersion() {
       return "0.1.0";
     },

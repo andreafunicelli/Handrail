@@ -411,6 +411,41 @@ impl Vault {
         self.unlocked = None;
     }
 
+    /// Delete the vault from this device: items, snapshots, manifest and device-local state.
+    /// Works locked (a forgotten password is the main reason to do it). Afterwards the vault is
+    /// uninitialized and [`Vault::create`] or [`Vault::join`] can start over in the same place.
+    ///
+    /// The directory is first renamed away in one step, so a failure part way never leaves a
+    /// half-deleted vault that still opens; a copy that could not be removed is retried by the
+    /// next erase.
+    pub fn erase(&mut self) -> Result<()> {
+        let dir = self.dir.clone();
+        let parent = dir.parent().unwrap_or_else(|| Path::new("."));
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "vault".into());
+        let prefix = format!(".{name}-deleted-");
+        self.lock();
+        let doomed = parent.join(format!("{prefix}{}", random_hex(8)?));
+        match std::fs::rename(&dir, &doomed) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        std::fs::create_dir_all(&dir)?;
+        *self = Vault::open(&dir)?;
+        // This erase's copy and any an earlier one could not remove.
+        for entry in std::fs::read_dir(parent)? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                // Encrypted leftovers; the vault itself is already gone.
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+        Ok(())
+    }
+
     /// Item files skipped at unlock because they failed to decrypt/validate.
     pub fn corrupt_files(&self) -> &[String] {
         self.unlocked.as_ref().map_or(&[], |u| &u.corrupt)

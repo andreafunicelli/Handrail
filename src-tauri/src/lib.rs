@@ -111,6 +111,7 @@ pub fn run() {
             cmd_vault::vault_create,
             cmd_vault::vault_unlock,
             cmd_vault::vault_lock,
+            cmd_vault::vault_delete,
             cmd_vault::save_emergency_kit,
             cmd_vault::list_connections,
             cmd_vault::save_connection,
