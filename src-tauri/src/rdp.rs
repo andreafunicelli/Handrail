@@ -194,11 +194,15 @@ pub async fn rdp_open(
         None => (conn.host.clone(), conn.port),
     };
 
-    let mut child = Command::new(path)
-        .stdin(Stdio::piped())
+    let mut cmd = Command::new(path);
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    // The helper is a console program: without this Windows opens a console window for it.
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let mut child = cmd
         .spawn()
         .map_err(|e| Error::Other(format!("could not start the RDP component: {e}")))?;
     let stdin = child
