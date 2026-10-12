@@ -37,7 +37,11 @@ const build = (triple) => {
 };
 
 if (target === "universal-apple-darwin") {
-  const parts = ["aarch64-apple-darwin", "x86_64-apple-darwin"].map(build);
+  // Tauri builds each architecture on its own (and wants that one's helper), then bundles the
+  // universal one.
+  const triples = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
+  const parts = triples.map(build);
+  triples.forEach((t, i) => copyFileSync(parts[i], join(outDir, `handrail-rdp-${t}`)));
   execFileSync("lipo", ["-create", "-output", out, ...parts], { stdio: "inherit" });
 } else {
   copyFileSync(build(target), out);

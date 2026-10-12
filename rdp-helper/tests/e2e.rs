@@ -103,19 +103,19 @@ async fn connects_renders_types_and_closes() {
         .unwrap()
         .port();
     let (keys_tx, mut keys) = mpsc::unbounded_channel();
-    let mut server = RdpServer::builder()
-        .with_addr(([127, 0, 0, 1], port))
-        .with_hybrid(identity.make_acceptor().unwrap(), identity.pub_key.clone())
-        .with_input_handler(Keys(keys_tx))
-        .with_display_handler(Desktop)
-        .build();
-    server.set_credentials(Some(Credentials {
-        username: "handrail".into(),
-        password: "s3cret!".into(),
-        domain: None,
-    }));
-    // The server's future is not `Send`: it gets a thread and runtime of its own.
+    // The server is not `Send`: it is built and run on a thread (and runtime) of its own.
     std::thread::spawn(move || {
+        let mut server = RdpServer::builder()
+            .with_addr(([127, 0, 0, 1], port))
+            .with_hybrid(identity.make_acceptor().unwrap(), identity.pub_key.clone())
+            .with_input_handler(Keys(keys_tx))
+            .with_display_handler(Desktop)
+            .build();
+        server.set_credentials(Some(Credentials {
+            username: "handrail".into(),
+            password: "s3cret!".into(),
+            domain: None,
+        }));
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
