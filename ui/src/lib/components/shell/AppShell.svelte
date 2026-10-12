@@ -14,6 +14,8 @@
   import Modal from "../common/Modal.svelte";
   import Icon from "../icons/Icon.svelte";
   import UpdateBanner from "./UpdateBanner.svelte";
+  import Tour from "./Tour.svelte";
+  import { tour } from "../../stores/tour.svelte";
   import SnippetsPanel from "../snippets/SnippetsPanel.svelte";
   import SnippetDialogs from "../snippets/SnippetDialogs.svelte";
   import S3AccountDialog from "../s3/S3AccountDialog.svelte";
@@ -46,6 +48,12 @@
   onMount(() => {
     void Promise.all([connections.load(), snippets.load(), s3.load(), sessions.init(), agent.init()]).catch(toasts.error);
     updates.start();
+    // First run after creating the vault: show the tour once the layout is on screen.
+    let tourTimer: ReturnType<typeof setTimeout> | undefined;
+    if (vault.justCreated) {
+      vault.justCreated = false;
+      tourTimer = setTimeout(() => tour.start(), 400);
+    }
 
     // Background syncs change the vault behind the UI: refresh the cached items when one pulled.
     let lastSync: SyncStatus | null = null;
@@ -78,6 +86,7 @@
       mq.removeEventListener("change", sync);
       evs.forEach((e) => removeEventListener(e, bump, { capture: true }));
       clearInterval(iv);
+      clearTimeout(tourTimer);
       unlistenSync?.();
     };
   });
@@ -124,7 +133,7 @@
 <div class="shell" class:narrow={ui.narrow}>
   {#if !ui.narrow}
     <IconRail />
-    <div class="side" style:width="{settings.sidebarWidth}px">
+    <div class="side" style:width="{settings.sidebarWidth}px" data-tour="connections">
       {@render sideContent()}
     </div>
     <Resizer value={settings.sidebarWidth} min={200} max={480} onchange={(v) => (settings.sidebarWidth = v)} />
@@ -146,7 +155,7 @@
 
   {#if !ui.narrow && settings.aiOpen}
     <Resizer value={settings.aiWidth} min={300} max={640} edge="left" onchange={(v) => (settings.aiWidth = v)} />
-    <div class="ai-dock" style:width="{settings.aiWidth}px"><AiSidebar /></div>
+    <div class="ai-dock" style:width="{settings.aiWidth}px" data-tour="ai"><AiSidebar /></div>
   {/if}
 </div>
 
@@ -177,6 +186,7 @@
 {#if ui.editing}<ConnectionEditor connection={ui.editing.connection} isNew={ui.editing.isNew} />{/if}
 {#if ui.settingsPage}<Settings />{/if}
 {#if ui.paletteOpen}<CommandPalette />{/if}
+{#if tour.step != null}<Tour />{/if}
 <SnippetDialogs />
 <S3AccountDialog />
 <SudoDialog />

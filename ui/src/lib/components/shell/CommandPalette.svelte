@@ -17,6 +17,7 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { ui, type SettingsPage } from "../../stores/ui.svelte";
   import { vault } from "../../stores/vault.svelte";
+  import { tour } from "../../stores/tour.svelte";
 
   interface Action {
     id: string;
@@ -89,6 +90,7 @@
         run: () => sessions.toggleBroadcast(tab.id),
       });
     out.push({ id: "lock", label: t("palette.lock"), icon: "lock", group: "actions", run: () => vault.lock() });
+    out.push({ id: "tour", label: t("tour.replay"), icon: "sparkle", group: "actions", run: () => tour.start() });
     return out;
   });
 

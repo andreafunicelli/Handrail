@@ -4,6 +4,7 @@
   import { t } from "../../i18n";
   import { api } from "../../api";
   import { updates } from "../../stores/updates.svelte";
+  import { tour } from "../../stores/tour.svelte";
   import { relativeTime } from "../../util/time";
 
   let version = $state("");
@@ -50,6 +51,8 @@
     {/if}
     {#if updates.error}<span class="hint err">{updates.error}</span>{/if}
   </dd>
+  <dt>{t("about.tour")}</dt>
+  <dd><button class="btn sm" onclick={() => tour.start()}>{t("tour.replay")}</button></dd>
 </dl>
 
 <style>

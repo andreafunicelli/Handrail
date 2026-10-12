@@ -343,7 +343,7 @@
     }}><Icon name="plus" /></button>
   </div>
 
-  <div class="kinds" role="tablist">
+  <div class="kinds" role="tablist" data-tour="kinds">
     <button role="tab" aria-selected={kind === "ssh"} class="kind" class:on={kind === "ssh"} onclick={() => (kind = "ssh")}>SSH</button>
     <button role="tab" aria-selected={kind === "s3"} class="kind" class:on={kind === "s3"} onclick={() => (kind = "s3")}>S3</button>
     <button role="tab" aria-selected="false" class="kind" disabled>MySQL <span class="pill">{t("sidebar.soon")}</span></button>
