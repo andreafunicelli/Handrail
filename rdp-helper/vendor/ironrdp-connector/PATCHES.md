@@ -21,6 +21,10 @@ Source: IronRDP commit `11a0810c` (`chore(release): prepare for publishing (#136
   which is consumed while licensing keeps waiting. Any other non-licensing PDU on the I/O channel
   is reported with its first word and bytes. `handrail::parse_redirection` is public so
   `rdp-helper/tests/redirection.rs` can test it.
+- A Set Error Info PDU where licensing should start is reported with the server's reason
+  (handrail.rs, `set_error_info`). A Windows Server whose RD licensing is broken refuses normal
+  sessions that way (`ERRINFO_LICENSE_NO_LICENSE_SERVER`). Licensing errors also suggest the
+  administrative session, which needs no license.
 - `#[expect(single_use_lifetimes)]` → `#[allow(...)]` (connection.rs): the lint is only enabled
   by IronRDP's workspace lint settings, so the expectation would go unfulfilled here.
 

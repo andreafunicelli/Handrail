@@ -1,7 +1,8 @@
 //! Recognising a Connection Broker's Server Redirection PDU where licensing should start
 //! (vendor/ironrdp-connector/src/handrail.rs).
 
-use ironrdp_connector::handrail::{parse_redirection, Redirection, LB_NOREDIRECT};
+use ironrdp_connector::handrail::{parse_redirection, set_error_info, Redirection, LB_NOREDIRECT};
+use ironrdp_pdu::rdp::server_error_info::{ErrorInfo, ProtocolIndependentLicensingCode};
 
 fn utf16z(s: &str) -> Vec<u8> {
     s.encode_utf16()
@@ -107,4 +108,29 @@ fn informational_redirection_keeps_its_flag() {
         (3, LB_NOREDIRECT)
     );
     assert_eq!(r.target(), None);
+}
+
+/// What a Windows Server 2019 with no reachable RD license server sent in place of the first
+/// licensing PDU: Set Error Info, ERRINFO_LICENSE_NO_LICENSE_SERVER (0x101).
+const NO_LICENSE_SERVER: [u8; 22] = [
+    0x16, 0x00, 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x16, 0x00, 0x2f, 0x00,
+    0x00, 0x00, 0x01, 0x01, 0x00, 0x00,
+];
+
+#[test]
+fn reads_the_servers_licensing_refusal() {
+    assert_eq!(
+        set_error_info(&NO_LICENSE_SERVER),
+        Some(ErrorInfo::ProtocolIndependentLicensingCode(
+            ProtocolIndependentLicensingCode::NoLicenseServer
+        ))
+    );
+    assert_eq!(parse_redirection(&NO_LICENSE_SERVER), None);
+}
+
+#[test]
+fn licensing_pdus_are_not_error_info() {
+    let license = [0x80, 0x00, 0x00, 0x00, 0x01, 0x03, 0x10, 0x00, 0, 0, 0, 0];
+    assert_eq!(set_error_info(&license), None);
+    assert_eq!(set_error_info(&[]), None);
 }

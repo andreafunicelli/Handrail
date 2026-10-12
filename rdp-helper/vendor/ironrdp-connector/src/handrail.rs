@@ -6,6 +6,9 @@
 //! it as a licensing PDU ("invalid security header flags"). Recognise it and say where the
 //! server wants the client to go.
 
+use ironrdp_pdu::rdp::headers::{ShareControlHeader, ShareControlPdu, ShareDataPdu};
+use ironrdp_pdu::rdp::server_error_info::{ErrorInfo, ServerSetErrorInfoPdu};
+
 use crate::{ConnectorResult, reason_err};
 
 const SEC_LICENSE_PKT: u16 = 0x0080;
@@ -175,6 +178,28 @@ pub(crate) fn check_licensing_pdu(input: &[u8], io_channel_id: u16, state: &str)
              connect to {target} directly"
         ));
     }
+    // A server that refuses the session says why in a Set Error Info PDU (slow-path data PDU,
+    // no security header) and disconnects. Licensing failures arrive here, at the first
+    // licensing step: no license server, no CAL, ...
+    if let Some(info) = set_error_info(user_data) {
+        let code = user_data[user_data.len() - 4..]
+            .try_into()
+            .map(u32::from_le_bytes)
+            .unwrap_or_default();
+        let hint = if matches!(info, ErrorInfo::ProtocolIndependentLicensingCode(_)) {
+            ". The server's Remote Desktop licensing is not working, so it refuses normal sessions \
+             (other clients such as mstsc fail the same way). An administrator can fix the RD \
+             licensing configuration on the server, or connect with \"Administrative session \
+             (/admin)\", which needs no license"
+        } else {
+            ""
+        };
+        return Err(reason_err!(
+            "LicensingExchange",
+            "the server refused the session: {} (error info {code:#010x}){hint}",
+            info.description(),
+        ));
+    }
     let flags = u16::from_le_bytes([user_data[0], user_data[1]]);
     if flags & SEC_LICENSE_PKT != 0 {
         return Ok(LicensingInput::Licensing);
@@ -186,4 +211,16 @@ pub(crate) fn check_licensing_pdu(input: &[u8], io_channel_id: u16, state: &str)
          first word {flags:#06x}, {} bytes, starting {head:02x?})",
         user_data.len(),
     ))
+}
+
+/// The error of a Set Error Info PDU ([MS-RDPBCGR] 2.2.5.1.1), if that is what `user_data` is.
+pub fn set_error_info(user_data: &[u8]) -> Option<ErrorInfo> {
+    let header = ironrdp_core::decode::<ShareControlHeader>(user_data).ok()?;
+    match header.share_control_pdu {
+        ShareControlPdu::Data(data) => match data.share_data_pdu {
+            ShareDataPdu::ServerSetErrorInfo(ServerSetErrorInfoPdu(info)) => Some(info),
+            _ => None,
+        },
+        _ => None,
+    }
 }
