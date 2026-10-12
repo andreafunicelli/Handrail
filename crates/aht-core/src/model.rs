@@ -15,6 +15,9 @@ pub enum ConnectionKind {
     Sftp,
     /// Local shell (PowerShell, bash, WSL...).
     Local,
+    /// Remote desktop: host, port (3389), user (`DOMAIN\user` or `user@domain`), a saved
+    /// password, and optionally jump hosts to tunnel through.
+    Rdp,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

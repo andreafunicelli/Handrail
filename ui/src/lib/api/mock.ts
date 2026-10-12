@@ -23,8 +23,29 @@ import type {
 } from "./types";
 import { b64ToStr, strToB64 } from "../util/b64";
 import { uuid } from "../util/id";
+import { MSG_POINTER, encodeTiles } from "../util/rdp";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+interface MockDesktop {
+  width: number;
+  height: number;
+  dots: [number, number][];
+  mouse: [number, number];
+  typed: number;
+  cb: (msg: ArrayBuffer) => void;
+}
+
+/** A stand-in Windows desktop: wallpaper, a window, a taskbar, and a dot wherever it was clicked. */
+function mockDesktop(d: MockDesktop, x: number, y: number): [number, number, number] {
+  if (d.dots.some(([dx, dy]) => Math.abs(dx - x) < 5 && Math.abs(dy - y) < 5)) return [230, 72, 72];
+  const bar = 44;
+  if (y >= d.height - bar) return x < 48 ? [40, 110, 210] : [24, 26, 32];
+  const [wx, wy, ww, wh] = [d.width * 0.18, d.height * 0.14, d.width * 0.5, d.height * 0.5];
+  if (x >= wx && x < wx + ww && y >= wy && y < wy + wh) return y < wy + 30 ? [235, 236, 240] : [250, 250, 252];
+  const t = y / d.height;
+  return [Math.round(20 + 30 * t), Math.round(60 + 70 * t), Math.round(120 + 80 * t)];
+}
 
 // ---------- seed data ----------
 const g = (name: string, order: number, parent_id: string | null = null): Group => ({ id: uuid(), name, parent_id, order });
@@ -60,7 +81,8 @@ function seed() {
   const deployKey: Secret = { id: uuid(), kind: "private_key", label: "deploy key (ed25519)", value: "-----BEGIN OPENSSH PRIVATE KEY-----\n…" };
   const dbPassword: Secret = { id: uuid(), kind: "password", label: "postgres password", value: "s3cret" };
   const oldKey: Secret = { id: uuid(), kind: "private_key", label: "old laptop key", value: "-----BEGIN OPENSSH PRIVATE KEY-----\n…" };
-  const secrets = [deployKey, dbPassword, oldKey];
+  const adminPassword: Secret = { id: uuid(), kind: "password", label: "ACME administrator", value: "Winter2026!" };
+  const secrets = [deployKey, dbPassword, oldKey, adminPassword];
   const keyAuth = { type: "key" as const, key: deployKey.id, passphrase: null };
   const bastion = conn({ name: "bastion", host: "bastion.acme.io", env: "prod", group_id: prod.id, tags: ["jump"], auth: keyAuth });
   const connections: Connection[] = [
@@ -85,6 +107,18 @@ function seed() {
     conn({ name: "dev-box", host: "192.168.1.50", env: "dev", group_id: dev.id, user: "andrea" }),
     conn({ name: "ci-runner", host: "ci.internal", env: "dev", group_id: dev.id, user: "runner" }),
     conn({ name: "raspberry", host: "pi.local", group_id: personal.id, user: "pi", auth: { type: "prompt" } }),
+    conn({
+      name: "dc-01",
+      kind: "rdp",
+      host: "10.0.3.10",
+      port: 3389,
+      env: "prod",
+      group_id: prodEu.id,
+      user: "ACME\\administrator",
+      jump: [bastion.id],
+      tags: ["windows", "ad"],
+      auth: { type: "password", secret: adminPassword.id },
+    }),
   ];
   const providers: Provider[] = [
     {
@@ -223,6 +257,7 @@ export function createMockApi(): Api {
   const shells = new Map<string, Shell>();
   const listeners = new Map<string, Set<(p: unknown) => void>>();
   const pendingHostKeys = new Map<string, (ok: boolean) => void>();
+  const rdp = new Map<string, MockDesktop>();
   const pendingApprovals = new Map<string, (d: ApprovalDecision) => void>();
   const cancelled = new Set<string>();
   const trusted = new Set<string>();
@@ -937,6 +972,46 @@ export function createMockApi(): Api {
       await transfer(transfer_id, size);
       files.set(remote, { kind: "file", size, modified: Math.floor(Date.now() / 1000), permissions: 0o100644 });
       return remote;
+    },
+    async rdpOpen(connectionId, size, onMessage) {
+      const c = db.connections.find((x) => x.id === connectionId);
+      if (!c || c.kind !== "rdp") throw fail("invalid", "not an RDP connection");
+      if (c.auth.type !== "password") throw fail("invalid", `${c.name} needs a saved password for RDP`);
+      const id = uuid();
+      const desk = { width: size.width, height: size.height, dots: [] as [number, number][], mouse: [0, 0] as [number, number], typed: 0, cb: onMessage };
+      rdp.set(id, desk);
+      setTimeout(() => {
+        if (!rdp.has(id)) return;
+        desk.cb(new Uint8Array([MSG_POINTER, 0]).buffer);
+        desk.cb(encodeTiles(desk.width, desk.height, [{ x: 0, y: 0, w: desk.width, h: desk.height }], (x, y) => mockDesktop(desk, x, y)));
+      }, 600);
+      return id;
+    },
+    async rdpInput(id, events) {
+      const desk = rdp.get(id);
+      if (!desk) throw fail("not_found", `RDP session ${id}`);
+      for (const e of events) {
+        if (e.t === "move") desk.mouse = [e.x, e.y];
+        if (e.t === "key" && e.down) desk.typed++;
+        if (e.t === "down" && e.button === 0) {
+          const [x, y] = desk.mouse;
+          desk.dots.push([x, y]);
+          const r = { x: Math.max(0, x - 6), y: Math.max(0, y - 6), w: 12, h: 12 };
+          r.w = Math.min(r.w, desk.width - r.x);
+          r.h = Math.min(r.h, desk.height - r.y);
+          if (r.w > 0 && r.h > 0) desk.cb(encodeTiles(desk.width, desk.height, [r], (px, py) => mockDesktop(desk, px, py)));
+        }
+      }
+    },
+    async rdpResize(id, size) {
+      const desk = rdp.get(id);
+      if (!desk) throw fail("not_found", `RDP session ${id}`);
+      if (size.width === desk.width && size.height === desk.height) return;
+      Object.assign(desk, { width: size.width, height: size.height });
+      desk.cb(encodeTiles(desk.width, desk.height, [{ x: 0, y: 0, w: desk.width, h: desk.height }], (x, y) => mockDesktop(desk, x, y)));
+    },
+    async rdpClose(id) {
+      rdp.delete(id);
     },
     async copyBetween(from, path, to, toDir, overwrite, transfer_id) {
       const name = baseName(path);

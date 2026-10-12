@@ -45,6 +45,8 @@ import type {
   SyncReport,
   SyncStatus,
   VaultStatus,
+  RdpInput,
+  RdpSize,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -142,6 +144,17 @@ export interface Api {
    * name is taken, unless `overwrite`.
    */
   copyBetween(from: Place, path: string, to: Place, toDir: string, overwrite: boolean, transferId: string): Promise<string>;
+
+  // remote desktop
+  /**
+   * Open an RDP session at the view's size (device pixels; `scale` in percent). Desktop updates
+   * arrive on `onMessage` as raw helper messages (util/rdp.ts parses them). Resolves to the id.
+   */
+  rdpOpen(connectionId: string, size: RdpSize, onMessage: (msg: ArrayBuffer) => void): Promise<string>;
+  /** Keyboard and mouse input, batched. */
+  rdpInput(id: string, events: RdpInput[]): Promise<void>;
+  rdpResize(id: string, size: RdpSize): Promise<void>;
+  rdpClose(id: string): Promise<void>;
   /** UTF-8 text up to 5 MB (binary files are refused). */
   sftpReadText(sessionId: string, path: string, root?: boolean): Promise<TextFile>;
   /**

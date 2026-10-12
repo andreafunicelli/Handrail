@@ -3,5 +3,7 @@ target/
 node_modules/
 ui/dist/
 src-tauri/gen/
+src-tauri/binaries/
+rdp-helper/target/
 *.log
 .DS_Store

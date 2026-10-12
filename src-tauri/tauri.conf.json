@@ -34,6 +34,7 @@
       "icons/icon.ico"
     ],
     "createUpdaterArtifacts": false,
+    "externalBin": ["binaries/handrail-rdp"],
     "macOS": {
       "signingIdentity": "-"
     }

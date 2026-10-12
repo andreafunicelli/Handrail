@@ -361,6 +361,11 @@ struct UiHostKeyPrompt {
     app: AppHandle,
 }
 
+/// Asks the user about new or changed host keys (for SSH connections opened outside a terminal).
+pub(crate) fn host_key_prompt(app: &AppHandle) -> Arc<dyn aht_ssh::HostKeyPrompt> {
+    Arc::new(UiHostKeyPrompt { app: app.clone() })
+}
+
 impl UiHostKeyPrompt {
     async fn ask(&self, ev: HostKeyEvent) -> bool {
         let (tx, rx) = oneshot::channel();
@@ -529,7 +534,7 @@ async fn approval_settings(state: &AppState) -> (ApprovalMode, Vec<regex::Regex>
 
 /// `ask` answers login prompts for connections without saved credentials; without it (an agent
 /// opening the connection) such a connection cannot log in.
-async fn auth_material(
+pub(crate) async fn auth_material(
     state: &AppState,
     c: &Connection,
     ask: Option<&Arc<dyn KeyboardInteractiveHandler>>,
@@ -559,7 +564,7 @@ async fn auth_material(
     })
 }
 
-async fn load_connection(state: &AppState, id: ConnectionId) -> Result<Connection> {
+pub(crate) async fn load_connection(state: &AppState, id: ConnectionId) -> Result<Connection> {
     state
         .vault
         .lock()

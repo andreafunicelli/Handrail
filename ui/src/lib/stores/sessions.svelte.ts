@@ -78,11 +78,18 @@ const S3 = "s3:";
 export const isS3 = (leafSession: string) => leafSession.startsWith(S3);
 export const s3AccountOf = (leafSession: string) => leafSession.slice(S3.length);
 /** A file editor pane holds `edit:<doc id>` (see the editors store). */
+/** A remote desktop pane: `rdp:<connection id>#<instance>` (one connection can be open twice). */
+const RDP = "rdp:";
+export const isRdp = (leafSession: string) => leafSession.startsWith(RDP);
+export const rdpConnectionOf = (leafSession: string) => leafSession.slice(RDP.length).split("#")[0];
+const rdpLeaf = (connectionId: string) => `${RDP}${connectionId}#${uuid()}`;
+
 const EDIT = "edit:";
 export const isEdit = (leafSession: string) => leafSession.startsWith(EDIT);
 export const editDocOf = (leafSession: string) => leafSession.slice(EDIT.length);
 /** Whether a leaf shows a live terminal (not a connecting pane, file browser or editor). */
-const isTerminal = (leafSession: string) => !isPending(leafSession) && !isFiles(leafSession) && !isS3(leafSession) && !isEdit(leafSession);
+const isTerminal = (leafSession: string) =>
+  !isPending(leafSession) && !isFiles(leafSession) && !isS3(leafSession) && !isEdit(leafSession) && !isRdp(leafSession);
 
 export class Sessions {
   infos = $state<Record<string, SessionInfo>>({});
@@ -354,6 +361,8 @@ export class Sessions {
   /** Open a saved connection: new tab, or a split next to the active pane. */
   async open(connectionId: string, split?: SplitDir) {
     connections.touch(connectionId);
+    // A remote desktop pane connects itself once it knows its size.
+    if (connections.byId.get(connectionId)?.kind === "rdp") return void this.placeLeaf(rdpLeaf(connectionId), split);
     const ref = uuid();
     this.placeLeaf(PENDING + ref, split);
     return this.connect(ref, connectionId);
@@ -470,7 +479,8 @@ export class Sessions {
 
   private dropSession(sessionId: string) {
     if (isEdit(sessionId)) return editors.close(editDocOf(sessionId));
-    if (isFiles(sessionId) || isS3(sessionId)) return;
+    // Remote desktops close with their pane (RdpView).
+    if (isFiles(sessionId) || isS3(sessionId) || isRdp(sessionId)) return;
     if (isPending(sessionId)) {
       const ref = pendingRef(sessionId);
       const p = this.pending[ref];
@@ -563,6 +573,7 @@ export class Sessions {
     if (isPending(leafSession)) return this.pending[pendingRef(leafSession)]?.label ?? "…";
     if (isFiles(leafSession)) return `Files · ${this.infos[filesSession(leafSession)]?.title ?? "…"}`;
     if (isS3(leafSession)) return `S3 · ${s3.byId(s3AccountOf(leafSession))?.name ?? "…"}`;
+    if (isRdp(leafSession)) return connections.byId.get(rdpConnectionOf(leafSession))?.name ?? "…";
     if (isEdit(leafSession)) {
       const id = editDocOf(leafSession);
       return `${editors.docs[id]?.name ?? "…"}${editors.dirty(id) ? " •" : ""}`;
@@ -580,7 +591,7 @@ export class Sessions {
     // File browsers are not saved; a pane still logging in is saved as its connection.
     const browser = (id: string) => isFiles(id) || isS3(id) || isEdit(id);
     const connOf = (id: string) =>
-      (isPending(id) ? this.pending[pendingRef(id)]?.connectionId : this.infos[id]?.connection_id) ?? "local";
+      (isRdp(id) ? rdpConnectionOf(id) : isPending(id) ? this.pending[pendingRef(id)]?.connectionId : this.infos[id]?.connection_id) ?? "local";
     const tabs = this.tabs.flatMap((t) => {
       let layout: LayoutNode | null = t.layout;
       for (const l of leaves(t.layout)) if (layout && browser(l.sessionId)) layout = removeLeaf(layout, l.id);
@@ -605,7 +616,9 @@ export class Sessions {
       const logins: [string, string][] = [];
       for (const l of leaves(layout)) {
         const conn = l.sessionId;
-        if (conn === "local" || !connections.byId.has(conn)) {
+        if (connections.byId.get(conn)?.kind === "rdp") {
+          mapping.set(l.id, rdpLeaf(conn));
+        } else if (conn === "local" || !connections.byId.has(conn)) {
           const info = await api.openLocalSession(null, COLS, ROWS);
           this.infos[info.session_id] = info;
           mapping.set(l.id, info.session_id);

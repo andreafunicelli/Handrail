@@ -11,7 +11,7 @@ export type OutputId = Uuid;
 export type ApprovalId = Uuid;
 
 // ---- model.rs ----
-export type ConnectionKind = "ssh" | "mysql" | "sftp" | "local";
+export type ConnectionKind = "ssh" | "mysql" | "sftp" | "local" | "rdp";
 export type Environment = "prod" | "staging" | "dev" | "none";
 
 export type SshAuth =
@@ -472,3 +472,18 @@ export interface ProviderTestResult {
   ok: boolean;
   message: string | null;
 }
+
+/** An RDP view's size in device pixels; `scale` in percent (100 = none). */
+export interface RdpSize {
+  width: number;
+  height: number;
+  scale: number;
+}
+
+/** One keyboard or mouse event for an RDP session (rdp-helper/src/proto.rs `Input`). */
+export type RdpInput =
+  | { t: "move"; x: number; y: number }
+  | { t: "down" | "up"; button: number }
+  | { t: "wheel"; vertical: boolean; units: number }
+  | { t: "key"; code: number; down: boolean }
+  | { t: "release_all" };

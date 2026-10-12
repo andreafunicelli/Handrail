@@ -18,6 +18,25 @@ implementation used when not running inside Tauri (`window.__TAURI_INTERNALS__` 
   session. Synced copies (GitHub, cloud folders) and known_hosts are kept. Status is then
   uninitialized.
 
+## Remote desktop
+RDP sessions run in a `handrail-rdp` helper process (rdp-helper/), one per session. Desktop
+updates reach the UI as raw messages on a channel: `[kind u8][payload]`, little-endian.
+- `0x11` tiles: `[u16 width][u16 height][u16 count]`, then per rectangle
+  `[u16 x][u16 y][u16 w][u16 h]` and its RGBA pixels row by row
+- `0x12` pointer: `[0]` default, `[1]` hidden, or `[3][u16 w][u16 h][u16 hot_x][u16 hot_y][RGBA]`
+  (premultiplied alpha)
+- `0x13` error: JSON `{ message }` (the connection failed or the helper stopped)
+- `0x14` terminated: JSON `{ reason, error }`
+
+Commands:
+- `rdp_open({ connection_id, size: { width, height, scale }, on_event: Channel }) -> string`:
+  an `rdp` connection with a saved password; jump hosts become an SSH local forward. Size in
+  device pixels, scale in percent.
+- `rdp_input({ id, events: RdpInput[] }) -> void`: `{t:"move",x,y}`, `{t:"down"|"up",button}`
+  (DOM numbering), `{t:"wheel",vertical,units}` (120 = a notch, positive = up/right),
+  `{t:"key",code,down}` (set-1 scancode, extended keys `0xE0xx`), `{t:"release_all"}`
+- `rdp_resize({ id, size }) -> void`, `rdp_close({ id }) -> void`
+
 ## Connections & groups
 - `list_connections() -> Connection[]`, `save_connection({ connection }) -> Connection`,
   `delete_connection({ id })`

@@ -1,0 +1,39 @@
+# The RDP engine runs as its own process, started by Handrail once per RDP session.
+#
+# It is a separate workspace with its own Cargo.lock on purpose: IronRDP pins pre-release
+# crypto crates (picky =7.0.0-rc.25 → curve25519-dalek =5.0.0-rc.1, aes-gcm =0.11.0-rc.4)
+# that cannot coexist with the stable versions russh and the importers use. Keeping it apart
+# also means a crash in the RDP stack never takes the app down.
+[package]
+name = "handrail-rdp"
+version = "1.0.0"
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+ironrdp-client = { version = "0.1.0", features = ["rustls"] }
+ironrdp-input = "0.7"
+ironrdp-pdu = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+[dev-dependencies]
+async-trait = "0.1"
+ironrdp-server = { version = "0.13", default-features = false, features = ["helper"] }
+rcgen = "0.14"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
