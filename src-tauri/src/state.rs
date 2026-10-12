@@ -39,6 +39,7 @@ pub struct AppState {
     /// S3 clients by account id (they hold the decrypted secret): replaced when the account or
     /// its secret changes, cleared when the vault locks.
     pub s3: Mutex<HashMap<String, Arc<aht_s3::S3Client>>>,
+    pub rdp: crate::rdp::RdpHub,
 }
 
 impl AppState {
@@ -55,6 +56,7 @@ impl AppState {
             sync_lock: Mutex::new(()),
             terminal: crate::terminal::TerminalHub::default(),
             s3: Mutex::new(HashMap::new()),
+            rdp: crate::rdp::RdpHub::default(),
             paths,
         })
     }

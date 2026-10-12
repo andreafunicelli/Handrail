@@ -238,6 +238,7 @@
   >
     <span class="env env-{c.env}" aria-label={t(`env.${c.env}`)}></span>
     <span class="name">{c.name}</span>
+    {#if c.kind === "rdp"}<span class="kindic" title={t("editor.kind.rdp")}><Icon name="monitor" size={12} /></span>{/if}
     {#if showPath}
       <span class="meta">{groupPath(connections.groups, c.group_id) || c.host}</span>
     {:else}
@@ -344,7 +345,7 @@
   </div>
 
   <div class="kinds" role="tablist" data-tour="kinds">
-    <button role="tab" aria-selected={kind === "ssh"} class="kind" class:on={kind === "ssh"} onclick={() => (kind = "ssh")}>SSH</button>
+    <button role="tab" aria-selected={kind === "ssh"} class="kind" class:on={kind === "ssh"} onclick={() => (kind = "ssh")}>{t("sidebar.servers")}</button>
     <button role="tab" aria-selected={kind === "s3"} class="kind" class:on={kind === "s3"} onclick={() => (kind = "s3")}>S3</button>
     <button role="tab" aria-selected="false" class="kind" disabled>MySQL <span class="pill">{t("sidebar.soon")}</span></button>
   </div>
@@ -688,5 +689,10 @@
     font-size: var(--fs-small);
     color: var(--danger);
     white-space: nowrap;
+  }
+  .kindic {
+    display: inline-flex;
+    flex: none;
+    color: var(--faint);
   }
 </style>

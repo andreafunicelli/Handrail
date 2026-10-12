@@ -446,3 +446,8 @@ button:disabled {
     transition-duration: 1ms !important;
   }
 }
+
+/* The attribute wins over any component's display rule. */
+[hidden] {
+  display: none !important;
+}

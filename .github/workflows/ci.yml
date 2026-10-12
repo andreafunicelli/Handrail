@@ -82,6 +82,11 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # ...and the RDP helper (externalBin). Checking and testing the app need only a stand-in;
+      # the helper is built and tested in its own job below.
+      - name: RDP helper stand-in
+        run: node scripts/build-rdp-helper.mjs --placeholder
+
       - name: Check formatting
         if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all -- --check
@@ -126,6 +131,36 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  rdp-helper:
+    name: RDP helper (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rdp-helper
+
+      - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --manifest-path rdp-helper/Cargo.toml -- --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path rdp-helper/Cargo.toml --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --manifest-path rdp-helper/Cargo.toml --locked
+
   deny:
     name: Dependency audit (cargo-deny)
     runs-on: ubuntu-latest
@@ -136,4 +171,11 @@ jobs:
         with:
           # Errors only: the duplicate-version warnings ran to thousands of lines and pushed
           # the failing advisories out of the retrievable log.
+          log-level: error
+
+      # The RDP helper is a workspace of its own (see rdp-helper/Cargo.toml).
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # rdp-helper/deny.toml links to the root policy.
+          manifest-path: rdp-helper/Cargo.toml
           log-level: error

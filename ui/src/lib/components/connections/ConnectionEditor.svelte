@@ -36,7 +36,18 @@
   const envs: Environment[] = ["none", "dev", "staging", "prod"];
   const jumpCandidates = $derived(connections.list.filter((x) => x.id !== c.id && x.kind === "ssh"));
   const tunnelsOk = $derived(c.tunnels.every((x) => !tunnelProblem(x)));
-  const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk);
+  const rdp = $derived(c.kind === "rdp");
+  /** RDP logs in with a saved password only (NLA needs it before the session starts). */
+  const rdpPasswordOk = $derived(!rdp || !!password || !!passwordId);
+  const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk && rdpPasswordOk);
+
+  function setKind(kind: "ssh" | "rdp") {
+    if (c.kind === kind) return;
+    if (kind === "rdp" && c.port === 22) c.port = 3389;
+    if (kind === "ssh" && c.port === 3389) c.port = 22;
+    if (kind === "rdp") authType = "password";
+    c.kind = kind;
+  }
 
   onMount(() => {
     sheet.querySelector<HTMLInputElement>("input")?.focus();
@@ -62,6 +73,11 @@
       out.tags = tagsText.split(",").map((s) => s.trim()).filter(Boolean);
       out.tunnels = out.tunnels.map((x) => ({ ...x, bind_host: x.bind_host.trim(), dest_host: x.kind === "dynamic" ? "" : x.dest_host.trim(), dest_port: x.kind === "dynamic" ? 0 : x.dest_port }));
       if (out.env === "prod" && out.approval_mode === "auto") out.approval_mode = null;
+      if (out.kind === "rdp") {
+        // Tunnels and agent approvals belong to SSH sessions.
+        out.tunnels = [];
+        out.approval_mode = null;
+      }
       if (authType === "password") {
         // A typed password is new (for this connection only); else the saved one picked.
         if (password) out.auth = { type: "password", secret: await secret("password", password, `${out.name} password`) };
@@ -130,6 +146,14 @@
   </header>
 
   <form class="body" onsubmit={(e) => (e.preventDefault(), save())}>
+    {#if isNew}
+      <div class="seg kind" role="group" aria-label={t("editor.kind")}>
+        <button type="button" aria-pressed={!rdp} onclick={() => setKind("ssh")}><Icon name="terminal" size={13} />SSH</button>
+        <button type="button" aria-pressed={rdp} onclick={() => setKind("rdp")}><Icon name="monitor" size={13} />{t("editor.kind.rdp")}</button>
+      </div>
+    {:else if rdp}
+      <p class="hint kindnote"><Icon name="monitor" size={13} />{t("editor.kind.rdp")}</p>
+    {/if}
     <label class="field">
       <span class="label">{t("editor.name")}</span>
       <input class="input" bind:value={c.name} placeholder="web-01" />
@@ -146,7 +170,8 @@
     </div>
     <label class="field">
       <span class="label">{t("editor.user")}</span>
-      <input class="input mono" bind:value={c.user} placeholder="deploy" spellcheck="false" autocapitalize="off" />
+      <input class="input mono" bind:value={c.user} placeholder={rdp ? "DOMAIN\\user" : "deploy"} spellcheck="false" autocapitalize="off" />
+      {#if rdp}<span class="hint">{t("editor.rdpUser")}</span>{/if}
     </label>
     <label class="field">
       <span class="label">{t("editor.folder")}</span>
@@ -157,8 +182,8 @@
     </label>
 
     <fieldset class="field">
-      <legend class="label">{t("editor.auth")}</legend>
-      <div class="seg" role="group">
+      <legend class="label">{rdp ? t("editor.auth.password") : t("editor.auth")}</legend>
+      <div class="seg" role="group" hidden={rdp}>
         {#each ["password", "key", "agent", "prompt"] as const as a (a)}
           <button type="button" aria-pressed={authType === a} onclick={() => (authType = a)}>{t(`editor.auth.${a}`)}</button>
         {/each}
@@ -171,6 +196,7 @@
           </select>
         {/if}
         <input class="input" type="password" autocomplete="new-password" bind:value={password} placeholder={passwordId ? t("editor.passwordPlaceholder") : t("editor.auth.password")} />
+        {#if !rdpPasswordOk}<span class="hint">{t("editor.rdpPassword")}</span>{/if}
       {:else if authType === "key"}
         {#if credentials.keys.length}
           <select class="select" bind:value={keyId} aria-label={t("editor.savedKey")}>
@@ -195,6 +221,7 @@
 
     <fieldset class="field">
       <legend class="label">{t("editor.jump")}</legend>
+      {#if rdp}<p class="hint">{t("editor.rdpJump")}</p>{/if}
       {#if !jumpCandidates.length}
         <p class="hint">{t("editor.jumpNone")}</p>
       {:else}
@@ -208,7 +235,7 @@
       {/if}
     </fieldset>
 
-    <fieldset class="field">
+    <fieldset class="field" hidden={rdp}>
       <legend class="label">{t("editor.tunnels")}</legend>
       {#each c.tunnels as x, i (i)}
         {@const problem = tunnelProblem(x)}
@@ -263,7 +290,7 @@
       <input class="input" bind:value={tagsText} placeholder={t("editor.tagsPlaceholder")} />
     </label>
 
-    <label class="field">
+    <label class="field" hidden={rdp}>
       <span class="label">{t("editor.approval")}</span>
       <select class="select" bind:value={c.approval_mode}>
         <option value={null}>{t("editor.approvalDefault")}</option>
@@ -480,5 +507,16 @@
     from {
       opacity: 0;
     }
+  }
+  .kind button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .kindnote {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
   }
 </style>

@@ -112,6 +112,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Build the RDP helper
+        shell: bash
+        run: node scripts/build-rdp-helper.mjs ${{ matrix.args }}
+
       - name: Stamp version and release config
         shell: bash
         run: |

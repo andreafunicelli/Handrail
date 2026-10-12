@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -60,6 +60,13 @@ export function createTauriApi(): Api {
     sftpDownload: (session_id, path, transfer_id, root = false) => invoke("sftp_download", { session_id, path, transfer_id, root }),
     sftpUpload: (session_id, local_path, dir, transfer_id, root = false) => invoke("sftp_upload", { session_id, local_path, dir, transfer_id, root }),
     copyBetween: (from, path, to, to_dir, overwrite, transfer_id) => invoke("copy_between", { from, path, to, to_dir, overwrite, transfer_id }),
+    rdpOpen: (connection_id, size, onMessage) => {
+      const on_event = new Channel<ArrayBuffer>(onMessage);
+      return invoke("rdp_open", { connection_id, size, on_event });
+    },
+    rdpInput: (id, events) => invoke("rdp_input", { id, events }),
+    rdpResize: (id, size) => invoke("rdp_resize", { id, size }),
+    rdpClose: (id) => invoke("rdp_close", { id }),
     sftpReadText: (session_id, path, root = false) => invoke("sftp_read_text", { session_id, path, root }),
     sftpWriteText: (session_id, path, text, expected, backup, root = false) => invoke("sftp_write_text", { session_id, path, text, expected, backup, root }),
     editProposalDecide: (proposal_id, outcome, note) => invoke("edit_proposal_decide", { proposal_id, outcome, note }),
