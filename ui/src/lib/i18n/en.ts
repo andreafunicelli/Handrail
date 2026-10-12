@@ -587,6 +587,8 @@ export const en = {
   "rdp.failedTitle": "Could not stay connected to {name}",
   "rdp.ended": "The remote desktop session ended.",
   "rdp.reconnect": "Reconnect",
+  "rdp.matchSize": "Match window size",
+  "rdp.matchSizeHint": "Change the remote resolution to this pane's size. Servers without dynamic resize reconnect to do it.",
   "tour.count": "{n} of {total}",
   "tour.next": "Next",
   "tour.back": "Back",
