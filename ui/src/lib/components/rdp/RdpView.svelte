@@ -108,11 +108,17 @@
     return Math.abs(s.width - desk.width) > 8 || Math.abs(s.height - desk.height) > 8;
   }
 
-  /** Ask for the pane's resolution. Servers without dynamic resize (Display Control) make
-   *  IronRDP reconnect for it, so this only happens when the user asks. */
-  function matchSize() {
+  /** Reconnect at the pane's size. Windows keeps the session (and its programs) across a
+   *  disconnect, so this lands back in the same desktop. IronRDP's live resize (Display Control)
+   *  broke the session's bitmap decoding on a Windows Server 2019, so it is not used. */
+  async function matchSize() {
     stale = false;
-    if (id && phase === "live") void api.rdpResize(id, paneSize()).catch(() => {});
+    const old = id;
+    if (!old || phase !== "live") return;
+    id = null;
+    attempt++;
+    await api.rdpClose(old).catch(() => {});
+    await connect();
   }
 
   async function connect() {
