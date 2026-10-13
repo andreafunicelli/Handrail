@@ -110,6 +110,7 @@ export function createTauriApi(): Api {
     agentCancel: (run_id) => invoke("agent_cancel", { run_id }),
     harnessOpenNative: (session_id, profile_id, cols, rows) =>
       invoke("harness_open_native", { session_id, profile_id, cols, rows }),
+    openChamberOpen: (session_id, profile_id) => invoke("openchamber_open", { session_id, profile_id }),
     harnessLogin: (kind, cols, rows) => invoke("harness_login", { kind, cols, rows }),
 
     importDetect: () => invoke("import_detect"),

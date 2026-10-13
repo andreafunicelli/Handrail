@@ -209,6 +209,8 @@ pub enum HarnessDisplay {
     #[default]
     Sidebar,
     Native,
+    /// OpenCode only: the OpenChamber web UI in a window of its own.
+    OpenChamber,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

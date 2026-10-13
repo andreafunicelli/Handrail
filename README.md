@@ -25,6 +25,7 @@
 - **Bring your own brain:**
   - API keys for Anthropic, OpenAI, DeepSeek, OpenCode Go/Zen, OpenRouter, or local models through Ollama and LM Studio.
   - Your own **Claude Code**, **Codex** or **OpenCode** CLI, on your own subscription, with your skills and plugins.
+  - **OpenChamber**, OpenCode's web UI, in a window of its own (a display option of OpenCode profiles), with the same tools.
 - **End-to-end encrypted vault:**
   - Your master password plus a Secret Key (Argon2id, XChaCha20-Poly1305), with an Emergency Kit to save once.
   - Snapshots you can roll back to.

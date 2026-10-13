@@ -1277,6 +1277,9 @@ export function createMockApi(): Api {
       void boot(sh, null);
       return sh.info;
     },
+    async openChamberOpen() {
+      throw new Error("OpenChamber opens in its own window in the desktop app.");
+    },
     async harnessLogin(kind) {
       const sh = newSession({ title: `${kind} login`, user: "dev", host: "localhost" }, true);
       sh.native = `${C.dim}$ ${kind === "claude_code" ? "claude /login" : kind === "codex" ? "codex login" : "opencode auth login"}${C.reset}\r\nOpening your browser to sign in…\r\n`;

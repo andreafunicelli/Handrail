@@ -199,6 +199,7 @@ pub fn run() {
             terminal::agent_cancel,
             terminal::agent_reset,
             terminal::harness_open_native,
+            terminal::openchamber_open,
             terminal::harness_login,
         ])
         .run(tauri::generate_context!())
