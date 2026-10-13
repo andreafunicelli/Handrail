@@ -197,6 +197,9 @@ export const en = {
   // terminal
   "term.agentBanner": "{actor} is working in this terminal",
   "term.takeOver": "Esc to take over",
+  "term.clear": "Clear scrollback",
+  "term.copyFailed": "Could not copy to the clipboard.",
+  "term.pasteFailed": "Could not read the clipboard.",
   "term.limited": "Limited AI mode",
   "term.limitedHint": "Shell integration not detected — exit codes are unknown.",
   "term.disconnected": "Session ended",
