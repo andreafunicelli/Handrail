@@ -588,7 +588,7 @@ export const en = {
   "rdp.ended": "The remote desktop session ended.",
   "rdp.reconnect": "Reconnect",
   "rdp.matchSize": "Match window size",
-  "rdp.matchSizeHint": "Change the remote resolution to this pane's size. Servers without dynamic resize reconnect to do it.",
+  "rdp.matchSizeHint": "Reconnect at this pane's size. Windows keeps the session, so your programs stay open.",
   "tour.count": "{n} of {total}",
   "tour.next": "Next",
   "tour.back": "Back",
