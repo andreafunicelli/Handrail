@@ -22,11 +22,16 @@
   let menu = $state<{ x: number; y: number; items: MenuEntry[] } | null>(null);
 
   /** xterm's selection is not a DOM selection, so the webview never copies it on its own. */
-  function copySelection(): boolean {
+  async function copySelection(): Promise<boolean> {
     const text = terminals.peek(sessionId)?.term.getSelection();
     if (!text) return false;
-    void navigator.clipboard.writeText(text).catch(() => toasts.error(t("term.copyFailed")));
-    return true;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      toasts.error(t("term.copyFailed"));
+      return false;
+    }
   }
 
   async function paste() {
@@ -40,6 +45,12 @@
     term?.focus();
   }
 
+  /** The menu focuses its first item; typing must go back to the terminal when it closes. */
+  function closeMenu() {
+    menu = null;
+    terminals.peek(sessionId)?.term.focus();
+  }
+
   /** The terminal's own right-click menu (the webview's is turned off app-wide). */
   function openMenu(e: MouseEvent) {
     e.preventDefault();
@@ -50,7 +61,7 @@
       x: e.clientX,
       y: e.clientY,
       items: [
-        { label: t("edit.copy"), icon: "copy", disabled: !term.hasSelection(), shortcut: isMac ? "⌘C" : "Ctrl+Shift+C", action: () => copySelection() },
+        { label: t("edit.copy"), icon: "copy", disabled: !term.hasSelection(), shortcut: isMac ? "⌘C" : "Ctrl+Shift+C", action: () => void copySelection() },
         { label: t("edit.paste"), shortcut: isMac ? "⌘V" : "Ctrl+Shift+V", action: () => void paste() },
         { label: t("edit.selectAll"), action: () => term.selectAll() },
         "sep",
@@ -80,7 +91,8 @@
       const ctrlC = !isMac && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && k === "c" && host.term.hasSelection();
       if (copyKey || ctrlC) {
         e.preventDefault();
-        if (e.type === "keydown" && copySelection() && ctrlC) host.term.clearSelection();
+        // Ctrl+C clears the selection only once it is on the clipboard, so a failed copy can be retried.
+        if (e.type === "keydown") void copySelection().then((ok) => ok && ctrlC && host.term.clearSelection());
         return false;
       }
       // Leave app shortcuts to the window handler.
@@ -180,7 +192,7 @@
     </div>
   {/if}
   <div class="xterm-box" bind:this={box}></div>
-  {#if menu}<ContextMenu {...menu} onclose={() => (menu = null)} />{/if}
+  {#if menu}<ContextMenu {...menu} onclose={closeMenu} />{/if}
   {#if info?.connection_id && settings.sessionBar}<SessionBar {sessionId} />{/if}
   {#if info?.integration === "limited"}
     <span class="badge pill warn" title={t("term.limitedHint")}>{t("term.limited")}</span>
