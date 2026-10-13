@@ -116,8 +116,10 @@
     const old = id;
     if (!old || phase !== "live") return;
     id = null;
-    attempt++;
+    const n = ++attempt;
     await api.rdpClose(old).catch(() => {});
+    // Closed meanwhile (the pane's cleanup bumps `attempt`) or reconnected another way.
+    if (n !== attempt) return;
     await connect();
   }
 
