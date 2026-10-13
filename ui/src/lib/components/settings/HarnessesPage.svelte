@@ -75,7 +75,7 @@
   function setHarness(k: HarnessKind) {
     if (!editing) return;
     editing.harness = k;
-    editing.display = k === "claude_code" ? "native" : editing.display;
+    editing.display = k === "claude_code" ? "native" : k !== "open_code" && editing.display === "open_chamber" ? "native" : editing.display;
     editing.skills = [];
     editing.plugins = [];
     void loadExt();
@@ -146,7 +146,7 @@
     {#each agent.profiles as p (p.id)}
       <div class="list-row">
         <span class="hname">{p.name}</span>
-        <span class="path">{HARNESS_NAMES[p.harness]} · {p.display === "native" ? t("harn.display.native") : t("harn.display.sidebar")}</span>
+        <span class="path">{HARNESS_NAMES[p.harness]} · {p.display === "native" ? t("harn.display.native") : p.display === "open_chamber" ? t("harn.display.openChamber") : t("harn.display.sidebar")}</span>
         <span class="grow"></span>
         {#if p.server_mode}<span class="pill accent">{t("harn.serverMode")}</span>{/if}
         <button class="btn sm ghost" onclick={() => edit(p)}><Icon name="edit" size={13} />{t("ctx.edit")}</button>
@@ -171,7 +171,13 @@
       <div class="seg" role="group">
         <button aria-pressed={editing.display === "native"} onclick={() => (editing!.display = "native")}>{t("harn.display.native")}</button>
         <button aria-pressed={editing.display === "sidebar"} onclick={() => (editing!.display = "sidebar")}>{t("harn.display.sidebar")}</button>
+        {#if editing.harness === "open_code"}
+          <button aria-pressed={editing.display === "open_chamber"} onclick={() => (editing!.display = "open_chamber")}>{t("harn.display.openChamber")}</button>
+        {/if}
       </div>
+      {#if editing.display === "open_chamber"}
+        <p class="note"><Icon name="info" size={13} />{t("harn.openChamberNote")}</p>
+      {/if}
       {#if editing.harness === "claude_code"}
         <p class="note"><Icon name="info" size={13} />{t("harn.claudeNote")}</p>
       {/if}

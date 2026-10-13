@@ -25,7 +25,10 @@
   const sid = $derived(session?.session_id ?? null);
   const chat = $derived(sid ? agent.chats[sid] : undefined);
   const brain = $derived(agent.brainFor(sid));
-  const native = $derived(brain?.harness?.display === "native");
+  const chamber = $derived(brain?.harness?.display === "open_chamber");
+  /** The harness runs outside this sidebar (a pane or the OpenChamber window). */
+  const native = $derived(brain?.harness?.display === "native" || chamber);
+  let opening = $state(false);
   const running = $derived(!!chat?.runId);
 
   let input = $state("");
@@ -97,6 +100,18 @@
     }
   }
 
+  async function openChamber() {
+    if (!sid || !brain?.harness || opening) return;
+    opening = true;
+    try {
+      await api.openChamberOpen(sid, brain.harness.id);
+    } catch (e) {
+      toasts.error(e);
+    } finally {
+      opening = false;
+    }
+  }
+
   function close() {
     if (ui.narrow) ui.aiDrawer = false;
     else settings.aiOpen = false;
@@ -138,6 +153,15 @@
         <Icon name="sparkle" size={18} />
         <p>{t("ai.noBrains")}</p>
         <button class="btn sm" onclick={() => ui.openSettings("providers")}>{t("ai.openSettings")}</button>
+      </div>
+    {:else if chamber}
+      <div class="empty">
+        <Icon name="terminal" size={18} />
+        <strong>{t("ai.chamber.title", { name: brain.label })}</strong>
+        <p>{t("ai.chamber.body")}</p>
+        <button class="btn primary sm" onclick={openChamber} disabled={opening}>
+          <Icon name="link" size={13} />{opening ? t("ai.chamber.starting") : t("ai.chamber.open")}
+        </button>
       </div>
     {:else if native}
       <div class="empty">

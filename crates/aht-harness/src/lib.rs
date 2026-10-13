@@ -7,6 +7,7 @@
 pub mod detect;
 pub mod extensions;
 pub mod launch;
+pub mod openchamber;
 pub mod profile;
 pub mod runner;
 pub mod stream;

@@ -1343,10 +1343,18 @@ async fn start_harness(
     let state = app.state::<AppState>();
     let hub = &state.terminal;
     let profile = load_profile(&state, &profile_id).await?;
-    if profile.display == HarnessDisplay::Native {
-        return Err(Error::Invalid(
-            "this profile runs in Native mode — open it in a pane next to the terminal".into(),
-        ));
+    match profile.display {
+        HarnessDisplay::Sidebar => {}
+        HarnessDisplay::Native => {
+            return Err(Error::Invalid(
+                "this profile runs in Native mode — open it in a pane next to the terminal".into(),
+            ))
+        }
+        HarnessDisplay::OpenChamber => {
+            return Err(Error::Invalid(
+                "this profile runs in OpenChamber — open it in its own window".into(),
+            ))
+        }
     }
     // Claude Code keeps one streaming process per tab, so follow-ups keep their context.
     let key = (session_id, profile_id.clone());
@@ -1523,6 +1531,76 @@ pub async fn harness_open_native(
         aht_harness_cleanup(&files);
     }
     opened
+}
+
+/// Open an OpenCode profile in OpenChamber (its web UI) for `session_id`: a private
+/// OpenChamber server with Handrail's tools, shown in a window of its own. Closing the window
+/// stops the server (and its OpenCode) and revokes the tools' token.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn openchamber_open(
+    app: AppHandle,
+    session_id: SessionId,
+    profile_id: String,
+) -> Result<()> {
+    use aht_harness::openchamber::{auto_login_script, OpenChamber};
+    let state = app.state::<AppState>();
+    let profile = load_profile(&state, &profile_id).await?;
+    if profile.harness != HarnessKind::OpenCode {
+        return Err(Error::Invalid(
+            "OpenChamber works with OpenCode profiles".into(),
+        ));
+    }
+    let info = state.terminal.session(session_id).await?.info();
+    let (ctx, token) = launch_context(&app, &profile, &info).await?;
+    let spec = aht_harness::native_spec(HarnessKind::OpenCode, &profile, &ctx);
+    // OpenChamber listens on 127.0.0.1 with Handrail's tools behind it: never without a password.
+    let password = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let server = match OpenChamber::start(&spec, &password).await {
+        Ok(s) => s,
+        Err(e) => {
+            state.terminal.revoke(&token);
+            return Err(e);
+        }
+    };
+    let origin = format!("http://127.0.0.1:{}", server.port);
+    let script = auto_login_script(&origin, &password);
+    let url = server.url().parse::<tauri::Url>().map_err(err);
+    let server = Arc::new(Mutex::new(server));
+    let built = url.and_then(|url| {
+        tauri::WebviewWindowBuilder::new(
+            &app,
+            format!("openchamber-{}", uuid::Uuid::new_v4().simple()),
+            tauri::WebviewUrl::External(url),
+        )
+        .title(format!("OpenChamber · {}", info.title))
+        .inner_size(1280.0, 860.0)
+        .initialization_script(&script)
+        .build()
+        .map_err(|e| Error::Other(format!("could not open the OpenChamber window: {e}")))
+    });
+    let window = match built {
+        Ok(w) => w,
+        Err(e) => {
+            server.lock().await.stop().await;
+            state.terminal.revoke(&token);
+            return Err(e);
+        }
+    };
+    let app2 = app.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Destroyed = event {
+            let (server, token, app) = (server.clone(), token.clone(), app2.clone());
+            tauri::async_runtime::spawn(async move {
+                server.lock().await.stop().await;
+                app.state::<AppState>().terminal.revoke(&token);
+            });
+        }
+    });
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]

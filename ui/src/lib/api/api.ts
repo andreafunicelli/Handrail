@@ -198,6 +198,8 @@ export interface Api {
   agentSend(sessionId: string, brain: Brain, message: string): Promise<{ run_id: string }>;
   agentCancel(runId: string): Promise<void>;
   harnessOpenNative(sessionId: string, profileId: string, cols: number, rows: number): Promise<SessionInfo>;
+  /** Start OpenChamber for an OpenCode profile and open it in its own window. */
+  openChamberOpen(sessionId: string, profileId: string): Promise<void>;
   harnessLogin(kind: HarnessKind, cols: number, rows: number): Promise<SessionInfo>;
 
   // import & sync

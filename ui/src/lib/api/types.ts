@@ -127,7 +127,8 @@ export interface Provider {
 }
 
 export type HarnessKind = "claude_code" | "codex" | "open_code";
-export type HarnessDisplay = "sidebar" | "native";
+/** `open_chamber`: OpenCode only, the OpenChamber web UI in a window of its own. */
+export type HarnessDisplay = "sidebar" | "native" | "open_chamber";
 
 export interface HarnessProfile {
   id: HarnessProfileId;
