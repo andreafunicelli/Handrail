@@ -33,8 +33,14 @@ pub fn find() -> Option<PathBuf> {
         .or_else(|| find_in_dirs(BINARY, &known_dirs(HarnessKind::OpenCode)))
 }
 
-/// The arguments of `openchamber serve` for a private, foreground server.
-pub fn serve_args(port: u16, password: &str) -> Vec<String> {
+/// Environment variable OpenChamber reads its UI password from when `--ui-password` is not
+/// given (`bin/lib/cli-args.js`). The password never goes on the command line, which other
+/// local users can read.
+pub const PASSWORD_ENV: &str = "OPENCHAMBER_UI_PASSWORD";
+
+/// The arguments of `openchamber serve` for a private, foreground server (the password is
+/// passed in [`PASSWORD_ENV`]).
+pub fn serve_args(port: u16) -> Vec<String> {
     [
         "serve",
         "--foreground",
@@ -43,8 +49,6 @@ pub fn serve_args(port: u16, password: &str) -> Vec<String> {
         "127.0.0.1",
         "--port",
         &port.to_string(),
-        "--ui-password",
-        password,
     ]
     .map(String::from)
     .to_vec()
@@ -81,7 +85,7 @@ impl OpenChamber {
         let port = free_port()?;
         let files = write_files(spec)?;
         let mut cmd = command_for(&program);
-        cmd.args(serve_args(port, password))
+        cmd.args(serve_args(port))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -95,6 +99,7 @@ impl OpenChamber {
         if let Some(dir) = &spec.cwd {
             cmd.current_dir(dir);
         }
+        cmd.env(PASSWORD_ENV, password);
         if let Some(opencode) = find_binary(HarnessKind::OpenCode) {
             cmd.env("OPENCODE_BINARY", opencode);
         }
@@ -218,7 +223,7 @@ mod tests {
 
     #[test]
     fn private_foreground_server() {
-        let a = serve_args(4100, "s3cret");
+        let a = serve_args(4100);
         assert_eq!(a[0], "serve");
         for f in ["--foreground", "--quiet"] {
             assert!(a.iter().any(|x| x == f), "{f}");
@@ -226,8 +231,8 @@ mod tests {
         let after = |flag: &str| a[a.iter().position(|x| x == flag).unwrap() + 1].clone();
         assert_eq!(after("--host"), "127.0.0.1");
         assert_eq!(after("--port"), "4100");
-        assert_eq!(after("--ui-password"), "s3cret");
-        assert!(!a.iter().any(|x| x == "--lan"));
+        // The password goes through the environment, never argv; never on the LAN.
+        assert!(!a.iter().any(|x| x == "--ui-password" || x == "--lan"));
     }
 
     #[test]
