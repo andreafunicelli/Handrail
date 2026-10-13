@@ -319,6 +319,11 @@ fn opencode(
         "instructions": [ctx_file.to_string_lossy()],
         "permission": {format!("{MCP_SERVER_NAME}_*"): "allow"},
     });
+    // Also as config (not only `-m`): launches that don't take OpenCode's argv, such as
+    // OpenChamber's `opencode serve`, still use the profile's model.
+    if let Some(m) = &profile.model {
+        cfg["model"] = json!(m);
+    }
     if profile.server_mode {
         cfg["tools"] = json!({
             "bash": false, "edit": false, "write": false, "patch": false, "webfetch": false
@@ -588,6 +593,39 @@ mod tests {
             .contains("r1-opencode-context.md"));
         assert!(s.env_remove.is_empty());
         assert_token_not_leaked(&s);
+    }
+
+    #[test]
+    fn opencode_model_is_in_the_config_too() {
+        let mut p = profile(HarnessKind::OpenCode, true);
+        p.model = Some("anthropic/claude-sonnet-4-5".into());
+        let s = native_spec(HarnessKind::OpenCode, &p, &ctx());
+        assert!(s
+            .args
+            .windows(2)
+            .any(|w| w == ["-m", "anthropic/claude-sonnet-4-5"]));
+        let (_, raw) = s
+            .env
+            .iter()
+            .find(|(k, _)| k == "OPENCODE_CONFIG_CONTENT")
+            .unwrap();
+        let v: Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(v["model"], "anthropic/claude-sonnet-4-5");
+        // No model in the profile: none in the config either (OpenCode keeps its own default).
+        let s = native_spec(
+            HarnessKind::OpenCode,
+            &profile(HarnessKind::OpenCode, true),
+            &ctx(),
+        );
+        let (_, raw) = s
+            .env
+            .iter()
+            .find(|(k, _)| k == "OPENCODE_CONFIG_CONTENT")
+            .unwrap();
+        assert!(serde_json::from_str::<Value>(raw)
+            .unwrap()
+            .get("model")
+            .is_none());
     }
 
     #[test]
