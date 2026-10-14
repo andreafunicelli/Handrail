@@ -11,6 +11,14 @@
     action: () => void;
   }
   export type MenuEntry = MenuItem | "sep";
+
+  /** Whether the last input was a key (Shift+F10, the Menu key, Enter on a "…" button): such a
+   *  menu opens with its first item focused, so Enter acts at once. */
+  let keyboardLast = false;
+  if (typeof window !== "undefined") {
+    addEventListener("keydown", () => (keyboardLast = true), true);
+    addEventListener("pointerdown", () => (keyboardLast = false), true);
+  }
 </script>
 
 <script lang="ts">
@@ -41,8 +49,10 @@
     const left = clamp(x + r.width + 8 <= vw ? x : x - r.width, 8, vw - r.width - 8);
     const top = clamp(y + r.height + 8 <= vh ? y : y - r.height, 8, vh - r.height - 8);
     pos = { left, top, origin: `${clamp(x - left, 0, r.width)}px ${clamp(y - top, 0, r.height)}px` };
-    // Opened by the pointer, nothing is highlighted until the pointer or a key picks something.
-    el.focus({ preventScroll: true });
+    // Opened by the pointer, nothing is highlighted until the pointer or a key picks something;
+    // opened from the keyboard, the first item is.
+    if (keyboardLast) (enabled()[0] ?? el).focus({ preventScroll: true });
+    else el.focus({ preventScroll: true });
     const away = (e: Event) => !el.contains(e.target as Node) && onclose();
     const id = setTimeout(() => {
       addEventListener("pointerdown", away, true);

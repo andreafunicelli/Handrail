@@ -232,6 +232,9 @@ function runFake(sh: Shell, cmd: string): string {
       return sh.cwd === "~" ? `/home/${sh.info.user}` : sh.cwd;
     case "echo":
       return args.join(" ");
+    case "rm":
+      // Silent success, like the real thing (the "clean" agent demo runs `rm -rf ./build-cache`).
+      return "";
     case "clear":
       return "\x1b[2J\x1b[H";
     case "help":

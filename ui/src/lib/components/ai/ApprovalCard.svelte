@@ -17,6 +17,7 @@
   /** A destructive command is approved by holding, never by a single click or keystroke. */
   const mustHold = $derived(risk === "destructive");
   let hold = $state<HoldButton>();
+  let holdEdited = $state<HoldButton>();
 
   onMount(() => {
     // Take focus only if the user is already working in the sidebar (never steal it from a terminal).
@@ -40,7 +41,10 @@
     if (editing) {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
         e.preventDefault();
-        runEdited();
+        // An edited destructive command still has to be held; the key's release lands on the
+        // focused hold button.
+        if (!mustHold) runEdited();
+        else if (!e.repeat && holdEdited) (holdEdited.focus(), holdEdited.begin());
       } else if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
@@ -98,7 +102,13 @@
   {#if pending}
     <div class="actions">
       {#if editing}
-        <button class="btn sm primary" onclick={runEdited}>{t("approval.runEdited")} <span class="k">⏎</span></button>
+        {#if mustHold}
+          <HoldButton bind:this={holdEdited} size="sm" onconfirm={runEdited} confirmLabel={t("approval.approvedEdited")} title={t("approval.holdHint")}
+            >{t("approval.holdRunEdited")} <span class="k">⏎</span></HoldButton
+          >
+        {:else}
+          <button class="btn sm primary" onclick={runEdited}>{t("approval.runEdited")} <span class="k">⏎</span></button>
+        {/if}
         <button class="btn sm ghost" onclick={() => (editing = false)}>{t("common.cancel")} <span class="k">Esc</span></button>
       {:else}
         {#if mustHold}

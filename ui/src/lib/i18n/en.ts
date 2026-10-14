@@ -294,6 +294,7 @@ export const en = {
   "approval.edit": "Edit",
   "approval.deny": "Deny",
   "approval.runEdited": "Run edited",
+  "approval.holdRunEdited": "Hold to run edited",
   "approval.approved": "Approved",
   "approval.approvedEdited": "Approved (edited)",
   "approval.denied": "Denied",
