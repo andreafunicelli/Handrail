@@ -4,6 +4,7 @@
   import { t } from "../../i18n";
   import { sessions } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
+  import { copyText } from "../../util/clipboard";
   import { formatBytes } from "../../util/time";
   import { tunnelLabel, tunnelAddress } from "../../util/tunnels";
 
@@ -67,12 +68,8 @@
   async function copy(x: TunnelStatus) {
     const addr = tunnelAddress(x);
     if (!addr) return;
-    try {
-      await navigator.clipboard.writeText(addr);
-      toasts.success(t("bar.copied", { addr }));
-    } catch {
-      /* no clipboard */
-    }
+    if (await copyText(addr)) toasts.success(t("bar.copied", { addr }));
+    else toasts.error(t("copy.failed"));
   }
 
   const has = (v: number | null | undefined): v is number => v != null && Number.isFinite(v);

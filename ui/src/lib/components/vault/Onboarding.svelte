@@ -1,4 +1,6 @@
 <script lang="ts">
+  import BusyButton from "../common/BusyButton.svelte";
+  import CopyButton from "../common/CopyButton.svelte";
   import VaultFrame from "./VaultFrame.svelte";
   import Icon from "../icons/Icon.svelte";
   import { t, type MessageKey } from "../../i18n";
@@ -10,7 +12,6 @@
   let confirm = $state("");
   let busy = $state(false);
   let saved = $state(false);
-  let copied = $state(false);
   /** Where "Download as text" saved the kit. */
   let savedPath = $state<string | null>(null);
 
@@ -32,16 +33,6 @@
     }
   }
 
-  async function copy() {
-    if (!vault.secretKey) return;
-    try {
-      await navigator.clipboard.writeText(vault.secretKey);
-      copied = true;
-      setTimeout(() => (copied = false), 1600);
-    } catch (err) {
-      toasts.error(err);
-    }
-  }
 
   async function download() {
     if (!vault.secretKey) return;
@@ -65,7 +56,7 @@
         {#each vault.secretKey.split("-") as part, i (i)}<span>{part}</span>{/each}
       </div>
       <div class="kit-actions">
-        <button class="btn sm" onclick={copy}><Icon name={copied ? "check" : "copy"} size={13} />{copied ? t("vault.kit.copied") : t("vault.kit.copy")}</button>
+        <CopyButton text={vault.secretKey} label={t("vault.kit.copy")} doneLabel={t("vault.kit.copied")} />
         <button class="btn sm" onclick={download}><Icon name={savedPath ? "check" : "download"} size={13} />{t("vault.kit.download")}</button>
       </div>
       {#if savedPath}<p class="hint saved" role="status">{t("vault.kit.savedTo", { path: savedPath })}</p>{/if}
@@ -97,9 +88,9 @@
         <input class="input lg" type="password" autocomplete="new-password" bind:value={confirm} aria-invalid={mismatch} />
         {#if mismatch}<span class="err">{t("vault.mismatch")}</span>{/if}
       </label>
-      <button class="btn primary lg wide" type="submit" disabled={!canSubmit}>
-        {busy ? t("vault.creating") : t("vault.create.submit")}
-      </button>
+      <BusyButton class="primary lg wide" type="submit" {busy} busyLabel={t("vault.creating")} disabled={!canSubmit}>
+        {t("vault.create.submit")}
+      </BusyButton>
     </form>
     <button type="button" class="link join" onclick={() => (vault.phase = "join")}>{t("vault.create.join")}</button>
   {/if}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BusyButton from "../common/BusyButton.svelte";
   import VaultFrame from "./VaultFrame.svelte";
   import DeleteVaultDialog from "./DeleteVaultDialog.svelte";
   import { t } from "../../i18n";
@@ -48,9 +49,9 @@
       </label>
     {/if}
     {#if error}<p class="err" role="alert">{error}</p>{/if}
-    <button class="btn primary lg" type="submit" disabled={!password || busy || (newDevice && !secretKey.trim())}>
-      {busy ? t("vault.unlocking") : t("vault.unlock.submit")}
-    </button>
+    <BusyButton class="primary lg" type="submit" {busy} busyLabel={t("vault.unlocking")} disabled={!password || (newDevice && !secretKey.trim())}>
+      {t("vault.unlock.submit")}
+    </BusyButton>
     {#if !newDevice}
       <button type="button" class="link" onclick={() => (newDevice = true)}>{t("vault.unlock.newDevice")}</button>
     {/if}

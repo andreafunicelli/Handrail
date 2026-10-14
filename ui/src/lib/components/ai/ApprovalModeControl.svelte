@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { segmented } from "../../actions/segmented";
   import Modal from "../common/Modal.svelte";
   import { t } from "../../i18n";
   import { api } from "../../api";
@@ -32,7 +33,7 @@
   }
 </script>
 
-<div class="seg" role="group" aria-label={t("ai.mode")}>
+<div class="seg" role="group" use:segmented aria-label={t("ai.mode")}>
   {#each modes as m (m)}
     <button aria-pressed={session.approval_mode === m} class:auto={m === "auto"} onclick={() => set(m)}>{t(`ai.mode.${m}`)}</button>
   {/each}

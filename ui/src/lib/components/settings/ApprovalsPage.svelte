@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { segmented } from "../../actions/segmented";
   import { onMount } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
@@ -70,7 +71,7 @@
 
   <h3>{t("appr.steps")}</h3>
   <p class="hint sub">{t("appr.stepsHint")}</p>
-  <div class="seg" role="group" aria-label={t("appr.steps")}>
+  <div class="seg" role="group" use:segmented aria-label={t("appr.steps")}>
     {#each stepChoices as n (n)}
       <button aria-pressed={(s.max_steps ?? 50) === n} onclick={() => s && ((s.max_steps = n), persist())}>{n}</button>
     {/each}

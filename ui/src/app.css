@@ -389,6 +389,36 @@ button:disabled {
   background: var(--active);
   color: var(--text);
 }
+/* use:segmented — the highlight is a thumb that slides between the choices. */
+.has-thumb {
+  position: relative;
+  isolation: isolate;
+}
+.has-thumb > button,
+.has-thumb > [role="tab"] {
+  position: relative;
+  z-index: 1;
+}
+.seg.has-thumb button[aria-pressed="true"] {
+  background: transparent;
+}
+.seg-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  border-radius: var(--r-sm);
+  background: var(--active);
+  pointer-events: none;
+  opacity: 0;
+}
+.seg-thumb.moving {
+  transition:
+    transform var(--t) var(--ease),
+    width var(--t) var(--ease),
+    height var(--t) var(--ease),
+    opacity var(--t-fast) var(--ease);
+}
 
 .check {
   display: flex;
