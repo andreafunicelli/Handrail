@@ -8,7 +8,7 @@
 use aht_core::{Error, Result};
 use data_encoding::BASE64;
 use hmac::{Hmac, KeyInit, Mac};
-use russh::keys::{HashAlg, PublicKey};
+use russh::keys::{Algorithm, HashAlg, PublicKey};
 use sha1::Sha1;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -176,6 +176,15 @@ impl KnownHosts {
             .iter()
             .flat_map(|p| parse_file(p))
             .filter(|e| matches_patterns(token, &e.patterns))
+            .collect()
+    }
+
+    /// Algorithms of the keys recorded for `host:port`, to ask the server for one of those.
+    pub fn algorithms(&self, host: &str, port: u16) -> Vec<Algorithm> {
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.entries_for(&host_token(host, port))
+            .iter()
+            .map(|e| e.key.algorithm())
             .collect()
     }
 
