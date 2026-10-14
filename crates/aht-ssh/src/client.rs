@@ -676,7 +676,7 @@ mod tests {
         let p256 = Algorithm::Ecdsa {
             curve: EcdsaCurve::NistP256,
         };
-        let order = host_key_order(&default, &[p256.clone()]);
+        let order = host_key_order(&default, std::slice::from_ref(&p256));
         assert_eq!(order[0], p256);
         assert_eq!(order.len(), default.len());
         // A recorded `ssh-rsa` key puts every RSA signature hash first, in russh's order.
