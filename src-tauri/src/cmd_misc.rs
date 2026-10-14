@@ -428,6 +428,7 @@ async fn github_login(token: &str) -> Result<String> {
         .bearer_auth(token)
         .header("User-Agent", "Handrail")
         .header("Accept", "application/vnd.github+json")
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| Error::Network(e.to_string()))?

@@ -186,9 +186,12 @@ impl KnownHosts {
         if entries.iter().any(|e| e.key.key_data() == key.key_data()) {
             return HostKeyStatus::Known;
         }
+        // Any stored key counts, not only one of the same type: otherwise a man in the middle
+        // could offer a different key type and get the mild "new host" prompt.
         if let Some(old) = entries
             .iter()
             .find(|e| e.key.algorithm() == key.algorithm())
+            .or(entries.first())
         {
             return HostKeyStatus::Changed {
                 old: fingerprint(&old.key),
@@ -309,6 +312,20 @@ mod tests {
         assert_eq!(kh.check("h", 2222, &k2), HostKeyStatus::Known);
         assert!(matches!(
             kh.check("h", 2222, &k1),
+            HostKeyStatus::Changed { .. }
+        ));
+        // A key of another type for a known host is a change, not a new host.
+        let ecdsa = PrivateKey::random(
+            &mut rand::rng(),
+            Algorithm::Ecdsa {
+                curve: russh::keys::EcdsaCurve::NistP256,
+            },
+        )
+        .unwrap()
+        .public_key()
+        .clone();
+        assert!(matches!(
+            kh.check("h", 2222, &ecdsa),
             HostKeyStatus::Changed { .. }
         ));
     }

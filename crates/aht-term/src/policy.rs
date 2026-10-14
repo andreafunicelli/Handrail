@@ -480,7 +480,6 @@ const READ_ONLY: &[&str] = &[
     "export",
     "alias",
     "set",
-    "watch",
     "column",
     "fold",
     "fmt",
@@ -515,6 +514,18 @@ fn has_flag(args: &[String], short: char, long: &str) -> bool {
     })
 }
 
+/// Index of the first word after leading options; `with_value` options also take the next word.
+fn skip_opts(args: &[String], with_value: &[&str]) -> usize {
+    let mut j = 0;
+    while j < args.len() && args[j].starts_with('-') {
+        if with_value.contains(&args[j].as_str()) {
+            j += 1;
+        }
+        j += 1;
+    }
+    j.min(args.len())
+}
+
 fn classify_words(words: &[String]) -> RiskClass {
     // Skip leading environment assignments.
     let mut idx = 0;
@@ -539,15 +550,24 @@ fn classify_words(words: &[String]) -> RiskClass {
 
     match cmd {
         "sudo" | "doas" => {
-            // Skip sudo options (and their values for the common ones).
-            let mut j = 0;
-            while j < args.len() && args[j].starts_with('-') {
-                if matches!(args[j].as_str(), "-u" | "-g" | "-C" | "-h" | "-p" | "-U") {
-                    j += 1;
-                }
-                j += 1;
-            }
-            return max_risk(RiskClass::Write, classify_words(&args[j.min(args.len())..]));
+            let j = skip_opts(args, &["-u", "-g", "-C", "-h", "-p", "-U"]);
+            return max_risk(RiskClass::Write, classify_words(&args[j..]));
+        }
+        "sh" | "bash" | "zsh" | "dash" | "ksh" => {
+            // `bash -c '<script>'` (also `-lc`, `-ec`): classify the script itself.
+            let script = args
+                .iter()
+                .position(|a| a.starts_with('-') && !a.starts_with("--") && a.contains('c'))
+                .and_then(|p| args.get(p + 1));
+            return match script {
+                Some(s) => max_risk(RiskClass::Write, classify(s)),
+                None => RiskClass::Write,
+            };
+        }
+        "watch" => {
+            // watch runs its arguments through `sh -c`.
+            let j = skip_opts(args, &["-n", "--interval", "-q", "--equexit"]);
+            return classify(&args[j..].join(" "));
         }
         "time" | "nice" | "nohup" | "command" | "builtin" | "exec" | "stdbuf" | "ionice"
         | "unbuffer" => {
@@ -559,24 +579,16 @@ fn classify_words(words: &[String]) -> RiskClass {
             return classify_words(&rest);
         }
         "timeout" => {
-            let rest: Vec<String> = args
-                .iter()
-                .skip_while(|a| a.starts_with('-'))
-                .skip(1)
-                .cloned()
-                .collect();
-            return classify_words(&rest);
+            // Options, then the duration, then the command.
+            let j = skip_opts(args, &["-s", "--signal", "-k", "--kill-after"]);
+            return classify_words(&args[(j + 1).min(args.len())..]);
         }
         "xargs" => {
-            let rest: Vec<String> = args
-                .iter()
-                .skip_while(|a| a.starts_with('-'))
-                .cloned()
-                .collect();
-            return if rest.is_empty() {
+            let j = skip_opts(args, &["-n", "-P", "-I", "-L", "-s", "-d", "-E", "-a"]);
+            return if j == args.len() {
                 RiskClass::Read
             } else {
-                classify_words(&rest)
+                classify_words(&args[j..])
             };
         }
         "env" if !args.is_empty() => {
@@ -1087,6 +1099,16 @@ mod tests {
             (":(){ :|:& };:", Destructive),
             ("redis-cli FLUSHALL", Destructive),
             ("cat x | sudo dd of=/dev/nvme0n1", Destructive),
+            // Wrappers must expose the command they run.
+            ("bash -c \"rm -rf /srv/data\"", Destructive),
+            ("sh -lc 'rm -rf build'", Destructive),
+            ("bash -c 'ls -la'", Write),
+            ("watch -n1 'rm -rf ~/app'", Destructive),
+            ("watch -n 2 df -h", Read),
+            ("ls | xargs -n 1 rm -rf", Destructive),
+            ("xargs -P4 -I % rm -rf %", Destructive),
+            ("timeout -s KILL 10 rm -rf x", Destructive),
+            ("timeout 5 ls", Read),
         ];
         let mut failures = Vec::new();
         for (cmd, want) in cases {
