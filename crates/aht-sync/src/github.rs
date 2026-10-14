@@ -57,8 +57,11 @@ struct Head {
 }
 
 fn new_client() -> reqwest::Client {
+    // Sync runs while the vault is locked: a stalled request must not hang the app.
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(60))
         .build()
         .expect("reqwest client")
 }

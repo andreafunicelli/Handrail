@@ -63,7 +63,10 @@ impl std::fmt::Debug for PollResult {
 }
 
 async fn post_form(base: &str, path: &str, form: &[(&str, &str)]) -> Result<Value> {
-    let client = reqwest::Client::builder().user_agent("Handrail").build()?;
+    let client = reqwest::Client::builder()
+        .user_agent("Handrail")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
     let resp = client
         .post(format!("{}{path}", base.trim_end_matches('/')))
         .header("Accept", "application/json")

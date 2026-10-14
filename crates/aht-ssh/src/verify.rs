@@ -2,7 +2,7 @@
 
 use crate::known_hosts::{HostKeyStatus, KnownHosts};
 use async_trait::async_trait;
-use russh::keys::PublicKey;
+use russh::keys::{Algorithm, PublicKey};
 use std::sync::Arc;
 
 /// What to do with a server's host key.
@@ -22,6 +22,10 @@ pub enum HostKeyDecision {
 #[async_trait]
 pub trait HostKeyVerifier: Send + Sync {
     async fn verify(&self, host: &str, port: u16, key: &PublicKey) -> HostKeyDecision;
+    /// Key types already recorded for `host:port`; the connection asks for these first.
+    fn known_algorithms(&self, _host: &str, _port: u16) -> Vec<Algorithm> {
+        Vec::new()
+    }
 }
 
 /// UI callback used by [`PromptingVerifier`].
@@ -48,6 +52,10 @@ impl PromptingVerifier {
 
 #[async_trait]
 impl HostKeyVerifier for PromptingVerifier {
+    fn known_algorithms(&self, host: &str, port: u16) -> Vec<Algorithm> {
+        self.store.algorithms(host, port)
+    }
+
     async fn verify(&self, host: &str, port: u16, key: &PublicKey) -> HostKeyDecision {
         match self.store.check(host, port, key) {
             HostKeyStatus::Known => HostKeyDecision::Accept,
@@ -85,6 +93,10 @@ pub struct StrictVerifier {
 
 #[async_trait]
 impl HostKeyVerifier for StrictVerifier {
+    fn known_algorithms(&self, host: &str, port: u16) -> Vec<Algorithm> {
+        self.store.algorithms(host, port)
+    }
+
     async fn verify(&self, host: &str, port: u16, key: &PublicKey) -> HostKeyDecision {
         match self.store.check(host, port, key) {
             HostKeyStatus::Known => HostKeyDecision::Accept,

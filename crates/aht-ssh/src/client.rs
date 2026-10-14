@@ -155,6 +155,23 @@ impl client::Handler for ClientHandler {
     }
 }
 
+/// `default` with the key types already recorded for the host first, like OpenSSH: a server
+/// with several host keys then shows the one we know, so a different type means a real change.
+fn host_key_order(default: &[Algorithm], known: &[Algorithm]) -> Vec<Algorithm> {
+    // An RSA key signs with any RSA hash.
+    let family = |a: &Algorithm| match a {
+        Algorithm::Rsa { .. } => Algorithm::Rsa { hash: None },
+        other => other.clone(),
+    };
+    let known: Vec<Algorithm> = known.iter().map(family).collect();
+    let (mut first, rest): (Vec<Algorithm>, Vec<Algorithm>) = default
+        .iter()
+        .cloned()
+        .partition(|a| known.contains(&family(a)));
+    first.extend(rest);
+    first
+}
+
 pub(crate) fn net(e: impl std::fmt::Display) -> Error {
     Error::Network(e.to_string())
 }
@@ -180,12 +197,17 @@ impl std::fmt::Debug for SshConnection {
 impl SshConnection {
     /// Connect, verify host keys and authenticate every hop, ending at the target.
     pub async fn connect(params: &SshParams, verifier: Arc<dyn HostKeyVerifier>) -> Result<Self> {
-        let config = Arc::new(client::Config {
-            keepalive_interval: params.keepalive,
-            keepalive_max: 3,
-            nodelay: true,
-            ..Default::default()
-        });
+        let config_for = |ep: &JumpHop| {
+            let mut c = client::Config {
+                keepalive_interval: params.keepalive,
+                keepalive_max: 3,
+                nodelay: true,
+                ..Default::default()
+            };
+            let known = verifier.known_algorithms(&ep.host, ep.port);
+            c.preferred.key = host_key_order(&c.preferred.key, &known).into();
+            Arc::new(c)
+        };
         let mut endpoints = params.jump.clone();
         endpoints.push(params.target());
 
@@ -193,6 +215,7 @@ impl SshConnection {
         let mut last_lost = None;
         let remote = RemoteForwards::default();
         for ep in &endpoints {
+            let config = config_for(ep);
             let decision: SharedSlot<HostKeyDecision> = Default::default();
             let lost: SharedSlot<String> = Default::default();
             let handler = ClientHandler {
@@ -639,4 +662,33 @@ async fn agent_auth(h: &mut Handle<ClientHandler>, user: &str) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use russh::keys::EcdsaCurve;
+
+    #[test]
+    fn known_host_key_types_come_first() {
+        let default = client::Config::default().preferred.key.to_vec();
+        assert_eq!(host_key_order(&default, &[]), default);
+        let p256 = Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP256,
+        };
+        let order = host_key_order(&default, std::slice::from_ref(&p256));
+        assert_eq!(order[0], p256);
+        assert_eq!(order.len(), default.len());
+        // A recorded `ssh-rsa` key puts every RSA signature hash first, in russh's order.
+        let order = host_key_order(&default, &[Algorithm::Rsa { hash: None }]);
+        assert!(order[..3]
+            .iter()
+            .all(|a| matches!(a, Algorithm::Rsa { .. })));
+        assert_eq!(
+            order[0],
+            Algorithm::Rsa {
+                hash: Some(HashAlg::Sha512)
+            }
+        );
+    }
 }

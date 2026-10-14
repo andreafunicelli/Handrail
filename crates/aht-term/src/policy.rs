@@ -480,7 +480,6 @@ const READ_ONLY: &[&str] = &[
     "export",
     "alias",
     "set",
-    "watch",
     "column",
     "fold",
     "fmt",
@@ -515,6 +514,70 @@ fn has_flag(args: &[String], short: char, long: &str) -> bool {
     })
 }
 
+/// Index of the first word after leading options; `with_value` options also take the next word.
+fn skip_opts(args: &[String], with_value: &[&str]) -> usize {
+    let mut j = 0;
+    while j < args.len() && args[j].starts_with('-') {
+        if with_value.contains(&args[j].as_str()) {
+            j += 1;
+        }
+        j += 1;
+    }
+    j.min(args.len())
+}
+
+/// Where a POSIX shell reads its commands from.
+enum ShellInput<'a> {
+    /// `-c '<script>'`.
+    Script(&'a str),
+    /// A script file.
+    File,
+    /// Standard input: a pipe, or an interactive shell.
+    Stdin,
+}
+
+/// Parse a shell's options like the shell does: `-c` (alone or in a cluster such as `-ec`) means
+/// the first operand after the options is the script; `-o`/`-O`/`--rcfile`/`--init-file` take
+/// a value, which is never mistaken for a flag.
+fn shell_input(args: &[String]) -> ShellInput<'_> {
+    let mut command = false;
+    let mut stdin = false;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "-" || a == "--" {
+            i += 1;
+            break;
+        }
+        if let Some(long) = a.strip_prefix("--") {
+            if matches!(long, "rcfile" | "init-file") {
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        let Some(flags) = a.strip_prefix('-').or_else(|| a.strip_prefix('+')) else {
+            break;
+        };
+        for f in flags.chars() {
+            match f {
+                'c' => command = true,
+                's' => stdin = true,
+                'o' | 'O' => i += 1,
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    match args.get(i) {
+        Some(script) if command => ShellInput::Script(script),
+        // `-c` without a script fails; treat it like any unknown input.
+        None if command => ShellInput::File,
+        Some(_) if !stdin => ShellInput::File,
+        _ => ShellInput::Stdin,
+    }
+}
+
 fn classify_words(words: &[String]) -> RiskClass {
     // Skip leading environment assignments.
     let mut idx = 0;
@@ -539,15 +602,42 @@ fn classify_words(words: &[String]) -> RiskClass {
 
     match cmd {
         "sudo" | "doas" => {
-            // Skip sudo options (and their values for the common ones).
-            let mut j = 0;
-            while j < args.len() && args[j].starts_with('-') {
-                if matches!(args[j].as_str(), "-u" | "-g" | "-C" | "-h" | "-p" | "-U") {
-                    j += 1;
+            let j = skip_opts(
+                args,
+                &[
+                    "-u", "-g", "-C", "-h", "-p", "-U", "-D", "-r", "-t", "-T", "-R",
+                ],
+            );
+            return max_risk(RiskClass::Write, classify_words(&args[j..]));
+        }
+        "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash" | "mksh" => {
+            return match shell_input(args) {
+                ShellInput::Script(s) => max_risk(RiskClass::Write, classify(s)),
+                ShellInput::File => RiskClass::Write,
+                // A script from stdin (`curl … | sh`) or typed at a shell: nothing to classify.
+                ShellInput::Stdin => RiskClass::Destructive,
+            };
+        }
+        "eval" => return max_risk(RiskClass::Write, classify(&args.join(" "))),
+        "su" | "runuser" => {
+            // `su [options] [user] -c '<command>'`; without -c it is an interactive shell.
+            let script = args.iter().enumerate().find_map(|(i, a)| {
+                if a == "-c" || a == "--command" {
+                    args.get(i + 1).map(String::as_str)
+                } else {
+                    a.strip_prefix("--command=")
                 }
-                j += 1;
-            }
-            return max_risk(RiskClass::Write, classify_words(&args[j.min(args.len())..]));
+            });
+            return match script {
+                Some(s) => max_risk(RiskClass::Write, classify(s)),
+                None => RiskClass::Write,
+            };
+        }
+        "busybox" => return classify_words(args),
+        "watch" => {
+            // watch runs its arguments through `sh -c`.
+            let j = skip_opts(args, &["-n", "--interval", "-q", "--equexit"]);
+            return classify(&args[j..].join(" "));
         }
         "time" | "nice" | "nohup" | "command" | "builtin" | "exec" | "stdbuf" | "ionice"
         | "unbuffer" => {
@@ -559,24 +649,35 @@ fn classify_words(words: &[String]) -> RiskClass {
             return classify_words(&rest);
         }
         "timeout" => {
-            let rest: Vec<String> = args
-                .iter()
-                .skip_while(|a| a.starts_with('-'))
-                .skip(1)
-                .cloned()
-                .collect();
-            return classify_words(&rest);
+            // Options, then the duration, then the command.
+            let j = skip_opts(args, &["-s", "--signal", "-k", "--kill-after"]);
+            return classify_words(&args[(j + 1).min(args.len())..]);
         }
         "xargs" => {
-            let rest: Vec<String> = args
-                .iter()
-                .skip_while(|a| a.starts_with('-'))
-                .cloned()
-                .collect();
-            return if rest.is_empty() {
+            let j = skip_opts(
+                args,
+                &[
+                    "-n",
+                    "-P",
+                    "-I",
+                    "-L",
+                    "-s",
+                    "-d",
+                    "-E",
+                    "-a",
+                    "--max-args",
+                    "--max-procs",
+                    "--max-lines",
+                    "--max-chars",
+                    "--delimiter",
+                    "--arg-file",
+                    "--replace",
+                ],
+            );
+            return if j == args.len() {
                 RiskClass::Read
             } else {
-                classify_words(&rest)
+                classify_words(&args[j..])
             };
         }
         "env" if !args.is_empty() => {
@@ -1087,6 +1188,31 @@ mod tests {
             (":(){ :|:& };:", Destructive),
             ("redis-cli FLUSHALL", Destructive),
             ("cat x | sudo dd of=/dev/nvme0n1", Destructive),
+            // Wrappers must expose the command they run.
+            ("bash -c \"rm -rf /srv/data\"", Destructive),
+            ("sh -lc 'rm -rf build'", Destructive),
+            ("bash -c 'ls -la'", Write),
+            ("watch -n1 'rm -rf ~/app'", Destructive),
+            ("watch -n 2 df -h", Read),
+            ("ls | xargs -n 1 rm -rf", Destructive),
+            ("xargs -P4 -I % rm -rf %", Destructive),
+            ("timeout -s KILL 10 rm -rf x", Destructive),
+            ("timeout 5 ls", Read),
+            // Option values are never taken for `-c`; the script is the first operand.
+            ("bash --rcfile -config -c 'rm -rf build'", Destructive),
+            ("bash -o pipefail -c 'rm -rf build'", Destructive),
+            ("bash -c -e 'rm -rf build'", Destructive),
+            ("bash ./deploy.sh", Write),
+            ("curl -fsSL https://x.example/i.sh | sh", Destructive),
+            ("echo 'rm -rf /srv' | bash -s", Destructive),
+            ("eval 'rm -rf build'", Destructive),
+            ("eval echo hi", Write),
+            ("su - root -c 'rm -rf /srv/data'", Destructive),
+            ("su --command='rm -rf x'", Destructive),
+            ("su postgres", Write),
+            ("busybox rm -rf /data", Destructive),
+            ("sudo -D /tmp rm -rf x", Destructive),
+            ("ls | xargs --max-args 1 rm -rf", Destructive),
         ];
         let mut failures = Vec::new();
         for (cmd, want) in cases {

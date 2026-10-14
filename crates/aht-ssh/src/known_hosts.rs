@@ -8,7 +8,7 @@
 use aht_core::{Error, Result};
 use data_encoding::BASE64;
 use hmac::{Hmac, KeyInit, Mac};
-use russh::keys::{HashAlg, PublicKey};
+use russh::keys::{Algorithm, HashAlg, PublicKey};
 use sha1::Sha1;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -179,6 +179,15 @@ impl KnownHosts {
             .collect()
     }
 
+    /// Algorithms of the keys recorded for `host:port`, to ask the server for one of those.
+    pub fn algorithms(&self, host: &str, port: u16) -> Vec<Algorithm> {
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.entries_for(&host_token(host, port))
+            .iter()
+            .map(|e| e.key.algorithm())
+            .collect()
+    }
+
     /// Look up `key` for `host:port`.
     pub fn check(&self, host: &str, port: u16, key: &PublicKey) -> HostKeyStatus {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -186,9 +195,12 @@ impl KnownHosts {
         if entries.iter().any(|e| e.key.key_data() == key.key_data()) {
             return HostKeyStatus::Known;
         }
+        // Any stored key counts, not only one of the same type: otherwise a man in the middle
+        // could offer a different key type and get the mild "new host" prompt.
         if let Some(old) = entries
             .iter()
             .find(|e| e.key.algorithm() == key.algorithm())
+            .or(entries.first())
         {
             return HostKeyStatus::Changed {
                 old: fingerprint(&old.key),
@@ -309,6 +321,20 @@ mod tests {
         assert_eq!(kh.check("h", 2222, &k2), HostKeyStatus::Known);
         assert!(matches!(
             kh.check("h", 2222, &k1),
+            HostKeyStatus::Changed { .. }
+        ));
+        // A key of another type for a known host is a change, not a new host.
+        let ecdsa = PrivateKey::random(
+            &mut rand::rng(),
+            Algorithm::Ecdsa {
+                curve: russh::keys::EcdsaCurve::NistP256,
+            },
+        )
+        .unwrap()
+        .public_key()
+        .clone();
+        assert!(matches!(
+            kh.check("h", 2222, &ecdsa),
             HostKeyStatus::Changed { .. }
         ));
     }
