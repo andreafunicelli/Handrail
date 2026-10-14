@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts">
+  import { segmented } from "../../actions/segmented";
   import { onMount } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
@@ -168,7 +169,7 @@
     </div>
     <div class="field">
       <span class="label">{t("harn.display")}</span>
-      <div class="seg" role="group">
+      <div class="seg" role="group" use:segmented>
         <button aria-pressed={editing.display === "native"} onclick={() => (editing!.display = "native")}>{t("harn.display.native")}</button>
         <button aria-pressed={editing.display === "sidebar"} onclick={() => (editing!.display = "sidebar")}>{t("harn.display.sidebar")}</button>
         {#if editing.harness === "open_code"}

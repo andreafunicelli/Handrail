@@ -9,6 +9,7 @@
   import { errorMessage } from "../../api/errors";
   import type { FileEntry } from "../../api/types";
   import { toasts } from "../../stores/toasts.svelte";
+  import { copyText } from "../../util/clipboard";
   import { transfers } from "../../stores/transfers.svelte";
   import { ui } from "../../stores/ui.svelte";
   import { changedOnServer, editable, isFolder, type FileBackend } from "../../util/fileBackends";
@@ -19,6 +20,12 @@
   import { formatBytes, relativeTime } from "../../util/time";
 
   /** Browser for one remote file system; `label` names it (user@host, account name). */
+
+  /** The menu closes on click, so the result is said in a toast. */
+  async function copyPath(path: string) {
+    if (await copyText(path)) toasts.success(t("files.pathCopied"));
+    else toasts.error(t("copy.failed"));
+  }
   let { fs: base, label }: { fs: FileBackend; label: string } = $props();
 
   /** The same file system as root, while the root toggle is on. */
@@ -224,7 +231,7 @@
         { label: t("files.upload"), icon: "upload", disabled: !writable, action: upload },
         "sep",
         { label: t("files.refresh"), icon: "refresh", action: refresh },
-        { label: t("files.copyPath"), icon: "copy", disabled: !path, action: () => void navigator.clipboard?.writeText(path).catch(() => {}) },
+        { label: t("files.copyPath"), icon: "copy", disabled: !path, action: () => void copyPath(path) },
       ],
     };
   }
@@ -239,7 +246,7 @@
       items: [
         ...(isFile && fs.readText ? [{ label: t("files.edit"), icon: "edit" as const, action: () => edit(e) }] : []),
         isFile ? { label: t("files.download"), icon: "download", action: () => download(e) } : { label: t("files.open"), icon: "folder", action: () => go(e.path) },
-        { label: t("files.copyPath"), icon: "copy", action: () => void navigator.clipboard?.writeText(e.path).catch(() => {}) },
+        { label: t("files.copyPath"), icon: "copy", action: () => void copyPath(e.path) },
         // Folders only go server to server; files also between a server and S3.
         ...(fs.kind === "sftp" || isFile ? [{ label: t("files.copyToServer"), icon: "server" as const, action: () => (copying = e) }] : []),
         "sep",

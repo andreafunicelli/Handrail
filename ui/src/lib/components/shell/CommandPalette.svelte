@@ -31,6 +31,9 @@
   let query = $state("");
   let index = $state(0);
   let list = $state<HTMLDivElement>();
+  /** Last pointer position: only a real move changes the highlight, not the list scrolling
+   *  under a still mouse while arrowing (from Interior's command-palette, MIT). */
+  let pointer = { x: -1, y: -1 };
 
   const pages: SettingsPage[] = ["providers", "harnesses", "approvals", "import", "sync", "appearance", "vault", "about"];
 
@@ -119,11 +122,26 @@
     }
   }
 
+  function hover(e: PointerEvent, i: number) {
+    if (e.clientX === pointer.x && e.clientY === pointer.y) return;
+    pointer = { x: e.clientX, y: e.clientY };
+    index = i;
+  }
+
+  function moveTo(i: number) {
+    index = i;
+    requestAnimationFrame(() => list?.querySelector(`[data-i="${index}"]`)?.scrollIntoView({ block: "nearest" }));
+  }
+
   function key(e: KeyboardEvent) {
+    const n = Math.max(1, results.length);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      index = (index + (e.key === "ArrowDown" ? 1 : -1) + results.length) % Math.max(1, results.length);
-      requestAnimationFrame(() => list?.querySelector(`[data-i="${index}"]`)?.scrollIntoView({ block: "nearest" }));
+      moveTo((index + (e.key === "ArrowDown" ? 1 : -1) + n) % n);
+    } else if (e.key === "PageDown" || e.key === "PageUp") {
+      // Page jumps stop at the ends instead of wrapping.
+      e.preventDefault();
+      moveTo(Math.max(0, Math.min(n - 1, index + (e.key === "PageDown" ? 8 : -8))));
     } else if (e.key === "Enter") {
       e.preventDefault();
       void run(results[index]);
@@ -135,15 +153,35 @@
   <div class="palette">
     <div class="q">
       <Icon name="search" size={15} />
-      <input bind:value={query} placeholder={t("palette.placeholder")} onkeydown={key} aria-label={t("palette.placeholder")} aria-controls="palette-list" />
+      <input
+        bind:value={query}
+        placeholder={t("palette.placeholder")}
+        onkeydown={key}
+        role="combobox"
+        aria-label={t("palette.placeholder")}
+        aria-expanded="true"
+        aria-controls="palette-list"
+        aria-autocomplete="list"
+        aria-activedescendant={results[index] ? `palette-opt-${index}` : undefined}
+      />
       <span class="kbd">Esc</span>
     </div>
-    <div class="list" id="palette-list" role="listbox" bind:this={list}>
+    <div class="list" id="palette-list" role="listbox" aria-label={t("palette.placeholder")} bind:this={list}>
       {#each results as a, i (a.id)}
         {#if i === 0 || results[i - 1].group !== a.group}
           <div class="grp">{t(`palette.group.${a.group}`)}</div>
         {/if}
-        <button role="option" aria-selected={i === index} class:on={i === index} data-i={i} onmousemove={() => (index = i)} onclick={() => run(a)}>
+        <button
+          id="palette-opt-{i}"
+          role="option"
+          tabindex="-1"
+          aria-selected={i === index}
+          class:on={i === index}
+          data-i={i}
+          onpointermove={(e) => hover(e, i)}
+          onmousedown={(e) => e.preventDefault()}
+          onclick={() => run(a)}
+        >
           <Icon name={a.icon} size={14} />
           <span class="lbl">{a.label}</span>
           {#if a.hint}<span class="hint">{a.hint}</span>{/if}
@@ -152,6 +190,7 @@
         <p class="none">{t("palette.empty")}</p>
       {/each}
     </div>
+    <span class="visually-hidden" role="status" aria-live="polite">{query.trim() ? t("palette.count", { n: results.length }) : ""}</span>
   </div>
 </Modal>
 

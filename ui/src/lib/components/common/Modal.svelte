@@ -1,6 +1,13 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { onMount } from "svelte";
+  import { cubicOut } from "svelte/easing";
+  import { fade } from "svelte/transition";
+
+  /** Closing animates out as well as in (skipped under reduced motion), and the backdrop closes
+   *  the dialog only for a press that starts and ends on it: dragging a text selection out of an
+   *  input no longer dismisses the form. From Interior's modal (github.com/ddoemonn/interior,
+   *  MIT). */
 
   let {
     onclose,
@@ -19,6 +26,16 @@
   } = $props();
 
   let box: HTMLDivElement;
+  let pressedBackdrop = false;
+  const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function rise(_: Element, { out = false } = {}) {
+    return {
+      duration: still ? 0 : out ? 120 : 160,
+      easing: cubicOut,
+      css: (k: number) => `opacity: ${k}; transform: translateY(${(1 - k) * 6}px) scale(${0.99 + k * 0.01})`,
+    };
+  }
 
   onMount(() => {
     const restore = document.activeElement as HTMLElement | null;
@@ -52,8 +69,17 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="backdrop {tone}" onkeydown={onkeydown} onmousedown={(e) => e.target === e.currentTarget && dismissable && onclose?.()}>
-  <div class="box {tone}" role="dialog" aria-modal="true" aria-label={label} bind:this={box} style:--w={width}>
+<div
+  class="backdrop {tone}"
+  transition:fade={{ duration: still ? 0 : 140 }}
+  {onkeydown}
+  onpointerdown={(e) => (pressedBackdrop = e.target === e.currentTarget)}
+  onclick={(e) => {
+    if (pressedBackdrop && e.target === e.currentTarget && dismissable) onclose?.();
+    pressedBackdrop = false;
+  }}
+>
+  <div class="box {tone}" role="dialog" aria-modal="true" aria-label={label} bind:this={box} style:--w={width} in:rise out:rise={{ out: true }}>
     {@render children()}
   </div>
 </div>
@@ -67,7 +93,6 @@
     place-items: center;
     padding: 16px;
     background: rgba(5, 6, 8, 0.55);
-    animation: fade var(--t) var(--ease);
   }
   :global([data-theme="light"]) .backdrop {
     background: rgba(30, 32, 40, 0.25);
@@ -83,20 +108,8 @@
     border-radius: 10px;
     background: var(--panel);
     box-shadow: var(--shadow-float);
-    animation: rise var(--t) var(--ease);
   }
   .box.danger {
     box-shadow: 0 0 0 1px var(--danger), var(--shadow-float);
-  }
-  @keyframes fade {
-    from {
-      opacity: 0;
-    }
-  }
-  @keyframes rise {
-    from {
-      opacity: 0;
-      transform: translateY(6px) scale(0.99);
-    }
   }
 </style>

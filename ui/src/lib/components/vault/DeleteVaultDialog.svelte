@@ -1,33 +1,33 @@
 <script lang="ts">
+  import HoldButton from "../common/HoldButton.svelte";
   import Modal from "../common/Modal.svelte";
   import { t } from "../../i18n";
   import { toasts } from "../../stores/toasts.svelte";
   import { vault } from "../../stores/vault.svelte";
 
-  /** Confirm deleting the vault from this device; the word must be typed, nothing else undoes it. */
+  /** Confirm deleting the vault from this device: the button must be held, since nothing undoes
+   *  it. */
   let { onclose }: { onclose: () => void } = $props();
 
-  const word = t("vaultdel.word");
-  let typed = $state("");
   let busy = $state(false);
-  const ok = $derived(typed.trim().toLowerCase() === word.toLowerCase());
+  let hold: HoldButton;
 
-  async function go(e: SubmitEvent) {
-    e.preventDefault();
-    if (!ok || busy) return;
+  async function go() {
+    if (busy) return;
     busy = true;
     try {
       // Reloads the app on success.
       await vault.erase();
     } catch (err) {
       busy = false;
+      hold.reset();
       toasts.error(err);
     }
   }
 </script>
 
 <Modal label={t("vaultdel.title")} onclose={() => !busy && onclose()} tone="danger" width="460px" dismissable={!busy}>
-  <form class="pad" onsubmit={go}>
+  <div class="pad">
     <h2>{t("vaultdel.title")}</h2>
     <p>{t("vaultdel.body")}</p>
     <ul>
@@ -36,15 +36,11 @@
       <li>{t("vaultdel.other")}</li>
     </ul>
     <p class="hint">{t("vaultdel.synced")}</p>
-    <label class="field">
-      <span class="label">{t("vaultdel.type", { word })}</span>
-      <input class="input mono" bind:value={typed} placeholder={word} autocomplete="off" spellcheck="false" disabled={busy} data-autofocus />
-    </label>
     <div class="actions">
-      <button type="button" class="btn ghost" onclick={onclose} disabled={busy}>{t("common.cancel")}</button>
-      <button type="submit" class="btn danger" disabled={!ok || busy}>{busy ? t("vaultdel.busy") : t("vaultdel.go")}</button>
+      <button type="button" class="btn ghost" onclick={onclose} disabled={busy} data-autofocus>{t("common.cancel")}</button>
+      <HoldButton bind:this={hold} onconfirm={go} disabled={busy} confirmLabel={t("vaultdel.busy")} duration={2000}>{t("vaultdel.hold")}</HoldButton>
     </div>
-  </form>
+  </div>
 </Modal>
 
 <style>

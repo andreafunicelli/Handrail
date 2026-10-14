@@ -14,6 +14,7 @@
 </script>
 
 <script lang="ts">
+  import BusyButton from "../common/BusyButton.svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import { api } from "../../api";
@@ -164,7 +165,7 @@
     </label>
   </div>
   <div class="actions">
-    <button class="btn" onclick={test} disabled={testing}>{testing ? t("prov.testing") : t("prov.test")}</button>
+    <BusyButton onclick={test} busy={testing} busyLabel={t("prov.testing")}>{t("prov.test")}</BusyButton>
     {#if testResult}
       <span class="result" class:ok={testResult.ok}><Icon name={testResult.ok ? "check" : "alert"} size={13} />{testResult.message}</span>
     {/if}

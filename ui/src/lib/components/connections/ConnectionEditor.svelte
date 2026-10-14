@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { segmented } from "../../actions/segmented";
   import { onMount } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
@@ -149,7 +150,7 @@
 
   <form class="body" onsubmit={(e) => (e.preventDefault(), save())}>
     {#if isNew}
-      <div class="seg kind" role="group" aria-label={t("editor.kind")}>
+      <div class="seg kind" role="group" use:segmented aria-label={t("editor.kind")}>
         <button type="button" aria-pressed={!rdp} onclick={() => setKind("ssh")}><Icon name="terminal" size={13} />SSH</button>
         <button type="button" aria-pressed={rdp} onclick={() => setKind("rdp")}><Icon name="monitor" size={13} />{t("editor.kind.rdp")}</button>
       </div>
@@ -185,7 +186,7 @@
 
     <fieldset class="field">
       <legend class="label">{rdp ? t("editor.auth.password") : t("editor.auth")}</legend>
-      <div class="seg" role="group" hidden={rdp}>
+      <div class="seg" role="group" hidden={rdp} use:segmented>
         {#each ["password", "key", "agent", "prompt"] as const as a (a)}
           <button type="button" aria-pressed={authType === a} onclick={() => (authType = a)}>{t(`editor.auth.${a}`)}</button>
         {/each}
@@ -285,7 +286,7 @@
 
     <fieldset class="field">
       <legend class="label">{t("editor.env")}</legend>
-      <div class="seg" role="group">
+      <div class="seg" role="group" use:segmented>
         {#each envs as e (e)}
           <button type="button" aria-pressed={c.env === e} onclick={() => (c.env = e)}>
             <span class="envdot env-{e}"></span>{t(`env.${e}`)}

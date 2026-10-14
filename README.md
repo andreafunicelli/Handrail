@@ -123,3 +123,7 @@ Two environment variables help when testing:
 | `aht-import` | Importers for other SSH managers |
 
 Design spec: [`docs/superpowers/specs/2026-10-10-aihubterm-design.md`](docs/superpowers/specs/2026-10-10-aihubterm-design.md). It was written while the project was called AIHubTerm.
+
+## Credits
+
+Several interface behaviours are adapted from [Interior](https://github.com/ddoemonn/interior) by ozzy (MIT): hold-to-confirm, busy and copy buttons, the sliding choice marker, and parts of the menu, modal and command palette. Interior is React; Handrail's versions are Svelte rewrites of its behaviour, credited in each file.

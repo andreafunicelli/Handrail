@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { segmented } from "../../actions/segmented";
   import Icon from "../icons/Icon.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
   import { t } from "../../i18n";
@@ -344,7 +345,7 @@
     }}><Icon name="plus" /></button>
   </div>
 
-  <div class="kinds" role="tablist" data-tour="kinds">
+  <div class="kinds" role="tablist" data-tour="kinds" use:segmented>
     <button role="tab" aria-selected={kind === "ssh"} class="kind" class:on={kind === "ssh"} onclick={() => (kind = "ssh")}>{t("sidebar.servers")}</button>
     <button role="tab" aria-selected={kind === "s3"} class="kind" class:on={kind === "s3"} onclick={() => (kind = "s3")}>S3</button>
     <button role="tab" aria-selected="false" class="kind" disabled>MySQL <span class="pill">{t("sidebar.soon")}</span></button>
@@ -512,7 +513,6 @@
     color: var(--muted);
   }
   .kind.on {
-    background: var(--active);
     color: var(--text);
   }
   .kind:disabled {

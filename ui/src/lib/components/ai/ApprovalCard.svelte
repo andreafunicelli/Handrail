@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import HoldButton from "../common/HoldButton.svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import { agent, type ChatItem } from "../../stores/agent.svelte";
@@ -13,6 +14,9 @@
 
   const pending = $derived(!item.decision);
   const risk = $derived(item.req.risk);
+  /** A destructive command is approved by holding, never by a single click or keystroke. */
+  const mustHold = $derived(risk === "destructive");
+  let hold = $state<HoldButton>();
 
   onMount(() => {
     // Take focus only if the user is already working in the sidebar (never steal it from a terminal).
@@ -46,7 +50,11 @@
       return;
     }
     if (e.target !== card) return;
-    if (e.key === "Enter") (e.preventDefault(), approve());
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (!mustHold) approve();
+      else if (!e.repeat && hold) (hold.focus(), hold.begin());
+    }
     else if (e.key.toLowerCase() === "e") (e.preventDefault(), startEdit());
     else if (e.key === "Escape") (e.preventDefault(), e.stopPropagation(), deny());
   }
@@ -93,7 +101,13 @@
         <button class="btn sm primary" onclick={runEdited}>{t("approval.runEdited")} <span class="k">⏎</span></button>
         <button class="btn sm ghost" onclick={() => (editing = false)}>{t("common.cancel")} <span class="k">Esc</span></button>
       {:else}
-        <button class="btn sm primary" onclick={approve}>{t("approval.approve")} <span class="k">⏎</span></button>
+        {#if mustHold}
+          <HoldButton bind:this={hold} size="sm" onconfirm={approve} confirmLabel={t("approval.approved")} title={t("approval.holdHint")}
+            >{t("approval.holdApprove")} <span class="k">⏎</span></HoldButton
+          >
+        {:else}
+          <button class="btn sm primary" onclick={approve}>{t("approval.approve")} <span class="k">⏎</span></button>
+        {/if}
         <button class="btn sm" onclick={startEdit}>{t("approval.edit")} <span class="k">E</span></button>
         <button class="btn sm ghost" onclick={deny}>{t("approval.deny")} <span class="k">Esc</span></button>
       {/if}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BusyButton from "../common/BusyButton.svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import { api } from "../../api";
@@ -139,7 +140,7 @@
 
 {#if step === "start"}
   <div class="actions start">
-    <button class="btn primary" onclick={scan} disabled={busy}><Icon name="search" size={14} />{busy ? t("imp.scanning") : t("imp.detect")}</button>
+    <BusyButton class="primary" onclick={scan} {busy} busyLabel={t("imp.scanning")}><Icon name="search" size={14} />{t("imp.detect")}</BusyButton>
     <button class="btn" onclick={() => goto("file")} disabled={busy}><Icon name="folder" size={14} />{t("imp.fromFile")}</button>
   </div>
 {:else if step === "sources"}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BusyButton from "../common/BusyButton.svelte";
   import { tick } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import Markdown from "../common/Markdown.svelte";
@@ -159,9 +160,9 @@
         <Icon name="terminal" size={18} />
         <strong>{t("ai.chamber.title", { name: brain.label })}</strong>
         <p>{t("ai.chamber.body")}</p>
-        <button class="btn primary sm" onclick={openChamber} disabled={opening}>
-          <Icon name="link" size={13} />{opening ? t("ai.chamber.starting") : t("ai.chamber.open")}
-        </button>
+        <BusyButton class="primary sm" onclick={openChamber} busy={opening} busyLabel={t("ai.chamber.starting")}>
+          <Icon name="link" size={13} />{t("ai.chamber.open")}
+        </BusyButton>
       </div>
     {:else if native}
       <div class="empty">

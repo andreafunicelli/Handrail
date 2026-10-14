@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BusyButton from "../common/BusyButton.svelte";
   import { onMount, untrack } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
@@ -254,9 +255,9 @@
       <button class="icon-btn" title={`${t("edit.find")} (${mod}F)`} aria-label={t("edit.find")} disabled={!ready || pending} onclick={() => command("find")}><Icon name="search" size={14} /></button>
       <button class="icon-btn" title={t("edit.view")} aria-label={t("edit.view")} aria-haspopup="menu" onclick={viewMenu}><Icon name="layout" size={14} /></button>
       <button class="icon-btn" title={t("edit.reload")} aria-label={t("edit.reload")} disabled={doc.loading || !doc.stamp} onclick={reload}><Icon name="refresh" size={14} /></button>
-      <button class="btn sm primary" title={t("edit.saveHint", { name: doc.name })} disabled={!dirty || doc.saving || pending} onclick={() => save()}>
-        {doc.saving ? t("edit.saving") : t("edit.save")}
-      </button>
+      <BusyButton class="sm primary" title={t("edit.saveHint", { name: doc.name })} busy={doc.saving} busyLabel={t("edit.saving")} disabled={!dirty || pending} onclick={() => save()}>
+        {t("edit.save")}
+      </BusyButton>
     </div>
 
     {#if pending && doc.proposal}

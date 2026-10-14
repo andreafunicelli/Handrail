@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { segmented } from "../../actions/segmented";
   import Icon from "../icons/Icon.svelte";
   import DeleteVaultDialog from "../vault/DeleteVaultDialog.svelte";
   import { t } from "../../i18n";
@@ -22,7 +23,7 @@
 <button class="btn" onclick={lock}><Icon name="lock" size={14} />{t("vaultset.lockNow")}</button>
 
 <h3>{t("vaultset.autoLock")}</h3>
-<div class="seg" role="group" aria-label={t("vaultset.autoLock")}>
+<div class="seg" role="group" use:segmented aria-label={t("vaultset.autoLock")}>
   {#each options as m (m)}
     <button aria-pressed={settings.autoLock === m} onclick={() => setAutoLock(m)}>{m ? t("vaultset.minutes", { n: m }) : t("vaultset.never")}</button>
   {/each}

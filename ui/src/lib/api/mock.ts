@@ -525,7 +525,9 @@ export function createMockApi(): Api {
     };
     if (/nginx|gzip|config/i.test(message) && !sh.local) return proposeNginx();
     const wantsUptime = /uptime|load/i.test(message);
-    const command = wantsUptime ? "uptime" : "df -h";
+    // "clean …" demos a destructive command, which always asks and must be held to approve.
+    const wantsClean = /\bclean/i.test(message);
+    const command = wantsClean ? "rm -rf ./build-cache" : wantsUptime ? "uptime" : "df -h";
     const host = sh.info.host ?? "this host";
 
     if (!(await stream(`I'll check ${wantsUptime ? "the load" : "disk usage"} on **${host}** first.\n\n`))) return finishCancelled();
@@ -534,18 +536,18 @@ export function createMockApi(): Api {
     await sleep(250);
 
     let finalCommand = command;
-    if (sh.info.approval_mode !== "auto") {
+    if (sh.info.approval_mode !== "auto" || wantsClean) {
       const approval_id = uuid();
       const req = {
         approval_id,
         session_id,
         actor_label: actor,
         command,
-        reason: wantsUptime ? "Read load averages" : "See which filesystems are filling up",
-        risk: "read" as const,
+        reason: wantsClean ? "Remove the stale build cache" : wantsUptime ? "Read load averages" : "See which filesystems are filling up",
+        risk: wantsClean ? ("destructive" as const) : ("read" as const),
         policy_note: sh.info.approval_mode === "confirm_all" ? "Approval mode: ask for every command" : null,
       };
-      if (sh.info.approval_mode === "confirm_all") {
+      if (sh.info.approval_mode === "confirm_all" || wantsClean) {
         ev({ type: "approval_requested", ...req });
         const decision = await new Promise<ApprovalDecision>((res) => pendingApprovals.set(approval_id, res));
         ev({ type: "approval_resolved", approval_id, decision });

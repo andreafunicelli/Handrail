@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { segmented } from "../../actions/segmented";
   import { t } from "../../i18n";
   import { settings, type Theme } from "../../stores/settings.svelte";
   import { SCHEMES } from "../../terminal/schemes";
@@ -8,7 +9,7 @@
 
 <div class="field">
   <span class="label">{t("app.theme")}</span>
-  <div class="seg" role="group" aria-label={t("app.theme")}>
+  <div class="seg" role="group" use:segmented aria-label={t("app.theme")}>
     {#each themes as th (th)}
       <button aria-pressed={settings.theme === th} onclick={() => (settings.theme = th)}>{t(`app.theme.${th}`)}</button>
     {/each}
