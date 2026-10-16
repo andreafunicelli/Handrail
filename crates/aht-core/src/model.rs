@@ -74,6 +74,10 @@ pub struct Connection {
     /// For `Rdp`: connect to the console (administrative) session, like `mstsc /admin`.
     #[serde(default)]
     pub rdp_admin: bool,
+    /// Shown before the name in the sidebar: a built-in icon name (`"database"`) or a single
+    /// emoji. Unknown values are shown as text, so newer icon names degrade gracefully.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

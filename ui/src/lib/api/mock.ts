@@ -91,6 +91,7 @@ function seed() {
     conn({ name: "web-02", host: "10.0.1.12", env: "prod", group_id: prodEu.id, jump: [bastion.id], tags: ["nginx", "web"], auth: keyAuth }),
     conn({
       name: "legacy-db",
+      icon: "database",
       host: "10.0.2.40",
       env: "prod",
       group_id: prodEu.id,
@@ -104,8 +105,8 @@ function seed() {
     }),
     conn({ name: "api-staging", host: "api.staging.acme.io", env: "staging", group_id: staging.id, tags: ["api"] }),
     conn({ name: "edge-proxy", host: "edge.staging.acme.io", env: "staging", group_id: staging.id, port: 2222 }),
-    conn({ name: "dev-box", host: "192.168.1.50", env: "dev", group_id: dev.id, user: "andrea" }),
-    conn({ name: "ci-runner", host: "ci.internal", env: "dev", group_id: dev.id, user: "runner" }),
+    conn({ name: "dev-box", icon: "🐧", host: "192.168.1.50", env: "dev", group_id: dev.id, user: "andrea" }),
+    conn({ name: "ci-runner", icon: "git", host: "ci.internal", env: "dev", group_id: dev.id, user: "runner" }),
     conn({ name: "raspberry", host: "pi.local", group_id: personal.id, user: "pi", auth: { type: "prompt" } }),
     conn({
       name: "dc-01",
