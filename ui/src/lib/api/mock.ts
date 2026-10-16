@@ -266,6 +266,8 @@ export function createMockApi(): Api {
   const cancelled = new Set<string>();
   const trusted = new Set<string>();
   const previews = new Map<string, ImportPreview>();
+  /** Secrets an import preview would store, kept until it is applied. */
+  const previewSecrets = new Map<string, Secret[]>();
   const tunnelState = new Map<string, TunnelStatus[]>();
   /** Per session: a slowly drifting load, so the stats bar moves. */
   const load = new Map<string, number>();
@@ -1313,6 +1315,8 @@ export function createMockApi(): Api {
       const gr = g("Imported · OpenSSH", 10);
       const sub = g("homelab", 0, gr.id);
       const existing = db.connections[1];
+      // RDP connects only with a saved password, like the real importers bring in.
+      const fsPassword: Secret = { id: uuid(), kind: "password", label: "fileserver password", value: "Autumn2026!" };
       // Like the real importers: SSH servers get the Linux icon, RDP ones the Windows icon.
       const items = [
         conn({ name: "web-01", host: existing.host, user: existing.user, group_id: gr.id, icon: "linux" }),
@@ -1321,7 +1325,7 @@ export function createMockApi(): Api {
         conn({ name: "gitlab", host: "git.acme.io", user: "git", group_id: gr.id, icon: "linux" }),
         conn({ name: "vpn", host: "vpn.acme.io", user: "ops", port: 2200, group_id: gr.id, icon: "linux" }),
         conn({ name: "minecraft", host: "mc.home", user: "mc", group_id: sub.id, icon: "linux" }),
-        conn({ name: "fileserver", kind: "rdp", host: "fs01.corp", user: "CORP\\ops", port: 3389, group_id: gr.id, icon: "windows" }),
+        conn({ name: "fileserver", kind: "rdp", host: "fs01.corp", user: "CORP\\ops", port: 3389, group_id: gr.id, icon: "windows", auth: { type: "password", secret: fsPassword.id } }),
       ];
       const preview: ImportPreview = {
         preview_id: uuid(),
@@ -1333,6 +1337,7 @@ export function createMockApi(): Api {
         duplicates: [{ index: 0, existing_id: existing.id }],
       };
       previews.set(preview.preview_id, preview);
+      previewSecrets.set(preview.preview_id, [fsPassword]);
       return structuredClone(preview);
     },
     async importApply(preview_id, skipIndices) {
@@ -1340,9 +1345,16 @@ export function createMockApi(): Api {
       const p = previews.get(preview_id);
       if (!p) throw fail("not_found", "Import preview expired — scan again.");
       previews.delete(preview_id);
+      const secrets = previewSecrets.get(preview_id) ?? [];
+      previewSecrets.delete(preview_id);
       db.groups.push(...p.groups);
       const add = p.connections.filter((_, i) => !skipIndices.includes(i));
       db.connections.push(...add);
+      // Store only the secrets the kept connections use, as the real import does.
+      for (const c of add) {
+        const used = c.auth.type === "password" ? secrets.find((x) => x.id === (c.auth as { secret: string }).secret) : undefined;
+        if (used) db.secrets.push(used);
+      }
       return { imported: add.length };
     },
     async syncStatus() {
