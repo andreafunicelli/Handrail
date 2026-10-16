@@ -97,6 +97,7 @@ export const en = {
   "editor.icon": "Icon",
   "editor.iconNone": "No icon",
   "editor.iconEmoji": "…or type an emoji",
+  "editor.iconOne": "One emoji or character only",
   "editor.host": "Host",
   "editor.port": "Port",
   "editor.user": "User",

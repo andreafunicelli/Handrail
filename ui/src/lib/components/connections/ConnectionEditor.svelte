@@ -23,9 +23,21 @@
   // svelte-ignore state_referenced_locally
   let c = $state({ ...connection, tunnels: connection.tunnels ?? [] });
   let iconOpen = $state(false);
+  /** What is typed in the emoji field. It, not the last valid glyph, decides the icon: cleared
+   *  means no icon, more than one glyph blocks saving until fixed. */
+  // svelte-ignore state_referenced_locally
+  let emojiDraft = $state(c.icon && !isIconName(c.icon) ? c.icon : "");
+  const emojiBad = $derived(emojiDraft.trim() !== "" && !singleGlyph(emojiDraft));
   function setIcon(icon: string | null) {
     c.icon = icon;
+    emojiDraft = "";
     iconOpen = false;
+  }
+  function typeEmoji(value: string) {
+    emojiDraft = value;
+    const g = singleGlyph(value);
+    if (g) c.icon = g;
+    else if (!value.trim() && c.icon && !isIconName(c.icon)) c.icon = null;
   }
   let authType = $state<"password" | "key" | "agent" | "prompt">(c.auth.type);
   let password = $state("");
@@ -48,7 +60,7 @@
   const rdp = $derived(c.kind === "rdp");
   /** RDP logs in with a saved password only (NLA needs it before the session starts). */
   const rdpPasswordOk = $derived(!rdp || !!password || !!passwordId);
-  const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk && rdpPasswordOk);
+  const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk && rdpPasswordOk && !emojiBad);
 
   function setKind(kind: "ssh" | "rdp") {
     if (c.kind === kind) return;
@@ -175,7 +187,7 @@
           title={t("editor.icon")}
           aria-label={t("editor.icon")}
           aria-expanded={iconOpen}
-          onclick={() => (iconOpen = !iconOpen)}
+          onclick={() => (iconOpen = !iconOpen || emojiBad)}
         >
           {#if c.icon}<ConnIcon icon={c.icon} size={15} />{:else}<Icon name="plus" size={13} />{/if}
         </button>
@@ -193,12 +205,12 @@
             class="input emoji-in"
             placeholder={t("editor.iconEmoji")}
             aria-label={t("editor.iconEmoji")}
-            value={c.icon && !isIconName(c.icon) ? c.icon : ""}
-            oninput={(e) => {
-              const g = singleGlyph(e.currentTarget.value);
-              if (g) c.icon = g;
-            }}
+            aria-invalid={emojiBad}
+            aria-describedby={emojiBad ? "emoji-err" : undefined}
+            value={emojiDraft}
+            oninput={(e) => typeEmoji(e.currentTarget.value)}
           />
+          {#if emojiBad}<span class="err emoji-in" id="emoji-err">{t("editor.iconOne")}</span>{/if}
         </div>
       {/if}
     </div>
@@ -415,6 +427,10 @@
   }
   .emoji-in {
     grid-column: 1 / -1;
+  }
+  .err {
+    color: var(--danger);
+    font-size: var(--fs-meta);
   }
   .scrim {
     position: fixed;
