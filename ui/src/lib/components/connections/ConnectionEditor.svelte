@@ -1,4 +1,7 @@
 <script lang="ts">
+  import ConnIcon from "../common/ConnIcon.svelte";
+  import { isIconName } from "../icons/Icon.svelte";
+  import { CONNECTION_ICONS, singleGlyph } from "../../util/connIcon";
   import { segmented } from "../../actions/segmented";
   import { onMount } from "svelte";
   import Icon from "../icons/Icon.svelte";
@@ -19,6 +22,23 @@
   // Local editable copy (the prop is already a detached clone made by ui.edit).
   // svelte-ignore state_referenced_locally
   let c = $state({ ...connection, tunnels: connection.tunnels ?? [] });
+  let iconOpen = $state(false);
+  /** What is typed in the emoji field. It, not the last valid glyph, decides the icon: cleared
+   *  means no icon, more than one glyph blocks saving until fixed. */
+  // svelte-ignore state_referenced_locally
+  let emojiDraft = $state(c.icon && !isIconName(c.icon) ? c.icon : "");
+  const emojiBad = $derived(emojiDraft.trim() !== "" && !singleGlyph(emojiDraft));
+  function setIcon(icon: string | null) {
+    c.icon = icon;
+    emojiDraft = "";
+    iconOpen = false;
+  }
+  function typeEmoji(value: string) {
+    emojiDraft = value;
+    const g = singleGlyph(value);
+    if (g) c.icon = g;
+    else if (!value.trim() && c.icon && !isIconName(c.icon)) c.icon = null;
+  }
   let authType = $state<"password" | "key" | "agent" | "prompt">(c.auth.type);
   let password = $state("");
   let keyText = $state("");
@@ -40,7 +60,7 @@
   const rdp = $derived(c.kind === "rdp");
   /** RDP logs in with a saved password only (NLA needs it before the session starts). */
   const rdpPasswordOk = $derived(!rdp || !!password || !!passwordId);
-  const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk && rdpPasswordOk);
+  const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk && rdpPasswordOk && !emojiBad);
 
   function setKind(kind: "ssh" | "rdp") {
     if (c.kind === kind) return;
@@ -69,6 +89,7 @@
     try {
       const out: Connection = $state.snapshot(c) as Connection;
       out.name = out.name.trim();
+      out.icon = out.icon || null;
       out.host = out.host.trim();
       out.user = out.user.trim();
       out.tags = tagsText.split(",").map((s) => s.trim()).filter(Boolean);
@@ -157,10 +178,42 @@
     {:else if rdp}
       <p class="hint kindnote"><Icon name="monitor" size={13} />{t("editor.kind.rdp")}</p>
     {/if}
-    <label class="field">
-      <span class="label">{t("editor.name")}</span>
-      <input class="input" bind:value={c.name} placeholder="web-01" />
-    </label>
+    <div class="field">
+      <span class="label" id="conn-name-label">{t("editor.name")}</span>
+      <div class="namerow">
+        <button
+          type="button"
+          class="icon-pick"
+          title={t("editor.icon")}
+          aria-label={t("editor.icon")}
+          aria-expanded={iconOpen}
+          onclick={() => (iconOpen = !iconOpen || emojiBad)}
+        >
+          {#if c.icon}<ConnIcon icon={c.icon} size={15} />{:else}<Icon name="plus" size={13} />{/if}
+        </button>
+        <input class="input" bind:value={c.name} placeholder="web-01" aria-labelledby="conn-name-label" />
+      </div>
+      {#if iconOpen}
+        <div class="icon-grid" role="group" aria-label={t("editor.icon")}>
+          <button type="button" aria-pressed={!c.icon} title={t("editor.iconNone")} aria-label={t("editor.iconNone")} onclick={() => setIcon(null)}>
+            <Icon name="x" size={13} />
+          </button>
+          {#each CONNECTION_ICONS as n (n)}
+            <button type="button" aria-pressed={c.icon === n} title={n} aria-label={n} onclick={() => setIcon(n)}><Icon name={n} size={15} /></button>
+          {/each}
+          <input
+            class="input emoji-in"
+            placeholder={t("editor.iconEmoji")}
+            aria-label={t("editor.iconEmoji")}
+            aria-invalid={emojiBad}
+            aria-describedby={emojiBad ? "emoji-err" : undefined}
+            value={emojiDraft}
+            oninput={(e) => typeEmoji(e.currentTarget.value)}
+          />
+          {#if emojiBad}<span class="err emoji-in" id="emoji-err">{t("editor.iconOne")}</span>{/if}
+        </div>
+      {/if}
+    </div>
     <div class="grid3">
       <label class="field host">
         <span class="label">{t("editor.host")}</span>
@@ -327,6 +380,58 @@
 </div>
 
 <style>
+  .namerow {
+    display: flex;
+    gap: 6px;
+  }
+  .icon-pick {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--r);
+    border: 1px solid var(--border-strong);
+    background: var(--bg);
+    color: var(--muted);
+  }
+  .icon-pick:hover,
+  .icon-pick[aria-expanded="true"] {
+    border-color: var(--accent-line);
+    color: var(--text);
+  }
+  .icon-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(30px, 1fr));
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    background: var(--bg);
+  }
+  .icon-grid button {
+    display: grid;
+    place-items: center;
+    height: 30px;
+    border-radius: var(--r-sm);
+    color: var(--text-2);
+  }
+  .icon-grid button:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .icon-grid button[aria-pressed="true"] {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
+  }
+  .emoji-in {
+    grid-column: 1 / -1;
+  }
+  .err {
+    color: var(--danger);
+    font-size: var(--fs-meta);
+  }
   .scrim {
     position: fixed;
     inset: 0;

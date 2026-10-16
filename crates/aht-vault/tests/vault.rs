@@ -51,6 +51,7 @@ fn connection(name: &str) -> Connection {
         notes: "primary".into(),
         tunnels: vec![],
         rdp_admin: false,
+        icon: None,
     }
 }
 

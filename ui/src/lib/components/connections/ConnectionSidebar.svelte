@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ConnIcon from "../common/ConnIcon.svelte";
   import { segmented } from "../../actions/segmented";
   import Icon from "../icons/Icon.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
@@ -238,6 +239,7 @@
     ondrop={(e) => dropOnConnection(e, c)}
   >
     <span class="env env-{c.env}" aria-label={t(`env.${c.env}`)}></span>
+    <ConnIcon icon={c.icon} />
     <span class="name">{c.name}</span>
     {#if c.kind === "rdp"}<span class="kindic" title={t("editor.kind.rdp")}><Icon name="monitor" size={12} /></span>{/if}
     {#if showPath}
@@ -543,18 +545,24 @@
     user-select: none;
     outline-offset: -2px;
   }
+  /* Folders read as headings of the tree: bright, semibold. (Issue #30: they were dimmer than
+     the connections inside them, and the chevrons nearly invisible.) */
   .folder {
-    color: var(--muted);
+    color: var(--text-2);
     font-size: var(--fs-meta);
-    font-weight: 550;
+    font-weight: 600;
   }
-  .folder :global(svg) {
+  .folder > :global(svg) {
     flex: none;
-    color: var(--faint);
+    color: var(--muted);
+    transition: color var(--t-fast) var(--ease);
+  }
+  .folder:hover > :global(svg) {
+    color: var(--text);
   }
   .folder:hover,
   .row:hover {
-    background: var(--hover);
+    background: var(--active);
   }
   .folder.drop,
   .row.drop {
@@ -571,7 +579,7 @@
   }
   .count {
     font-size: var(--fs-small);
-    color: var(--faint);
+    color: var(--meta);
     font-variant-numeric: tabular-nums;
   }
   .rename {
@@ -589,11 +597,14 @@
   .row {
     padding-left: calc(22px + var(--depth, 0) * 14px);
   }
+  /* The open connection: accent tint plus a bar, distinct from hover in both themes. */
   .row.active {
-    background: var(--active);
+    background: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent);
   }
   .row.active .name {
     color: var(--text);
+    font-weight: 550;
   }
   .env {
     width: 3px;
@@ -619,7 +630,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--text-2);
+    color: var(--text);
   }
   .meta {
     flex: 1;
@@ -628,7 +639,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: var(--fs-small);
-    color: var(--faint);
+    color: var(--meta);
   }
   .section {
     padding: 12px 8px 4px;

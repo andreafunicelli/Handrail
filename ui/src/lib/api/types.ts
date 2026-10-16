@@ -40,6 +40,8 @@ export interface Connection {
   tunnels: Tunnel[];
   /** RDP: connect to the console (administrative) session, like `mstsc /admin`. */
   rdp_admin?: boolean;
+  /** Shown before the name: a built-in icon name or a single emoji. */
+  icon?: string | null;
 }
 
 /** local: `ssh -L` (listen here, connect from the server); remote: `ssh -R` (listen on the

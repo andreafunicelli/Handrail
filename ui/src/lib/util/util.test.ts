@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { singleGlyph } from "./connIcon";
 import { fuzzyFilter, fuzzyScore } from "./fuzzy";
 import { parseQuickConnect } from "./quickconnect";
 import { escapeHtml, renderMarkdown } from "./markdown";
@@ -318,5 +319,20 @@ describe("editor", () => {
     expect(editable(fs, f("Dockerfile"))).toBe(true);
     expect(editable(fs, f("backup.tar.gz"))).toBe(false);
     expect(editable(fs, f("big.log", 6 * 1024 * 1024))).toBe(false);
+  });
+});
+
+describe("singleGlyph", () => {
+  it("keeps one emoji or character, including multi-codepoint emoji", () => {
+    expect(singleGlyph("🐧")).toBe("🐧");
+    expect(singleGlyph(" 🐳 ")).toBe("🐳");
+    expect(singleGlyph("👩‍💻")).toBe("👩‍💻");
+    expect(singleGlyph("🇮🇹")).toBe("🇮🇹");
+    expect(singleGlyph("A")).toBe("A");
+  });
+  it("rejects empty or longer text", () => {
+    expect(singleGlyph("")).toBeNull();
+    expect(singleGlyph("db")).toBeNull();
+    expect(singleGlyph("🐧🐳")).toBeNull();
   });
 });
