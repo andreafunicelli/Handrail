@@ -1,5 +1,6 @@
 <script lang="ts">
   import BusyButton from "../common/BusyButton.svelte";
+  import ConnIcon from "../common/ConnIcon.svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import { api } from "../../api";
@@ -207,6 +208,7 @@
       {#each g.items as { c, i } (i)}
         <label class="list-row item" class:dup={dupIndex.has(i)}>
           <input type="checkbox" checked={selected.has(i)} onchange={() => toggle(i)} />
+          <ConnIcon icon={c.icon} size={12} />
           <span class="cname">{c.name}</span>
           <span class="path mono">{c.user}@{c.host}{c.port !== 22 ? `:${c.port}` : ""}</span>
           {#if dupIndex.has(i)}<span class="pill warn" title={t("imp.duplicateHint")}>{t("imp.duplicate")}</span>{/if}

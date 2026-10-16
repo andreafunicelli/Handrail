@@ -87,6 +87,10 @@ describe("mock api", () => {
     const { imported } = await api.importApply(preview.preview_id, [0]);
     expect(imported).toBe(preview.connections.length - 1);
     expect((await api.listConnections()).length).toBe(before + imported);
+    // Imported rows carry an OS icon, and the Windows one can be opened (it has its password).
+    const fs = (await api.listConnections()).find((c) => c.name === "fileserver")!;
+    expect(fs.icon).toBe("windows");
+    expect(await api.rdpOpen(fs.id, { width: 800, height: 600, scale: 1 }, () => {})).toBeTruthy();
     await expect(api.importApply(preview.preview_id, [])).rejects.toMatchObject({ kind: "not_found" });
   });
 

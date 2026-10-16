@@ -483,6 +483,12 @@ mod tests {
         let rdp1 = b.connections.iter().find(|c| c.name == "rdp1").unwrap();
         assert_eq!(rdp1.kind, aht_core::model::ConnectionKind::Rdp);
         assert_eq!((rdp1.port, rdp1.group_id), (3389, Some(eu.id)));
+        // Each gets an OS icon from its kind.
+        let icons: Vec<_> = b.connections.iter().map(|c| c.icon.as_deref()).collect();
+        assert_eq!(
+            icons,
+            [Some("linux"), Some("linux"), Some("windows"), Some("linux")]
+        );
         assert!(
             b.warnings
                 .iter()
@@ -508,6 +514,7 @@ mod tests {
         let b = parse_text(&text, &ImportOptions::default()).unwrap();
         let dc = b.connections.iter().find(|c| c.name == "dc01").unwrap();
         assert_eq!(dc.kind, aht_core::model::ConnectionKind::Rdp);
+        assert_eq!(dc.icon.as_deref(), Some("windows"));
         assert_eq!(dc.user, "CORP\\admin");
         assert_eq!(dc.port, 3389);
         assert!(dc.rdp_admin);
