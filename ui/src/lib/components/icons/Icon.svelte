@@ -57,6 +57,10 @@
     flask: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3",
     chart: "M4 20V4M4 20h16M8 16v-4M12 16V8M16 16v-6",
     link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
+    // Operating systems: a penguin for Linux and the four-pane window for Windows.
+    linux:
+      "M12 3c-2 0-3.2 1.6-3.2 3.8 0 1.5-.4 2.5-1.4 3.9C6.1 12.3 5 14.2 5 16.4 5 18.6 6.4 20 8.2 20.5h7.6c1.8-.5 3.2-1.9 3.2-4.1 0-2.2-1.1-4.1-2.4-5.7-1-1.4-1.4-2.4-1.4-3.9C15.2 4.6 14 3 12 3ZM9.6 12.6c0 2.9 1 4.9 2.4 4.9s2.4-2 2.4-4.9M10.6 6.4h.01M13.4 6.4h.01M11 8.4h2l-1 1.1ZM6.5 20.5h3.5M14 20.5h3.5",
+    windows: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
   } as const;
   export type IconName = keyof typeof P;
   export const isIconName = (s: string): s is IconName => Object.prototype.hasOwnProperty.call(P, s);

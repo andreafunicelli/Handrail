@@ -193,7 +193,9 @@ impl Builder {
             notes,
             tunnels: Vec::new(),
             rdp_admin: false,
-            icon: None,
+            // Imported servers get an OS icon from their kind: SSH reads as Linux, RDP as
+            // Windows. The user can change it in the editor.
+            icon: Some("linux".into()),
         });
         id
     }
@@ -215,6 +217,7 @@ impl Builder {
         let c = self.connections.last_mut().expect("just added");
         c.kind = ConnectionKind::Rdp;
         c.rdp_admin = admin;
+        c.icon = Some("windows".into());
         id
     }
 

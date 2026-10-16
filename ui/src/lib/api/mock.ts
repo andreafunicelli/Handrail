@@ -1313,13 +1313,15 @@ export function createMockApi(): Api {
       const gr = g("Imported · OpenSSH", 10);
       const sub = g("homelab", 0, gr.id);
       const existing = db.connections[1];
+      // Like the real importers: SSH servers get the Linux icon, RDP ones the Windows icon.
       const items = [
-        conn({ name: "web-01", host: existing.host, user: existing.user, group_id: gr.id }),
-        conn({ name: "nas", host: "nas.home", user: "admin", group_id: sub.id }),
-        conn({ name: "router", host: "192.168.1.1", user: "root", group_id: sub.id }),
-        conn({ name: "gitlab", host: "git.acme.io", user: "git", group_id: gr.id }),
-        conn({ name: "vpn", host: "vpn.acme.io", user: "ops", port: 2200, group_id: gr.id }),
-        conn({ name: "minecraft", host: "mc.home", user: "mc", group_id: sub.id }),
+        conn({ name: "web-01", host: existing.host, user: existing.user, group_id: gr.id, icon: "linux" }),
+        conn({ name: "nas", host: "nas.home", user: "admin", group_id: sub.id, icon: "linux" }),
+        conn({ name: "router", host: "192.168.1.1", user: "root", group_id: sub.id, icon: "linux" }),
+        conn({ name: "gitlab", host: "git.acme.io", user: "git", group_id: gr.id, icon: "linux" }),
+        conn({ name: "vpn", host: "vpn.acme.io", user: "ops", port: 2200, group_id: gr.id, icon: "linux" }),
+        conn({ name: "minecraft", host: "mc.home", user: "mc", group_id: sub.id, icon: "linux" }),
+        conn({ name: "fileserver", kind: "rdp", host: "fs01.corp", user: "CORP\\ops", port: 3389, group_id: gr.id, icon: "windows" }),
       ];
       const preview: ImportPreview = {
         preview_id: uuid(),

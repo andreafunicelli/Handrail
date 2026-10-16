@@ -2,7 +2,7 @@ import type { IconName } from "../components/icons/Icon.svelte";
 
 /** Built-in icons offered for connections, in picker order. */
 export const CONNECTION_ICONS: IconName[] = [
-  "server", "monitor", "terminal", "database", "globe", "cloud", "box", "cpu", "bucket",
+  "server", "linux", "windows", "monitor", "terminal", "database", "globe", "cloud", "box", "cpu", "bucket",
   "git", "mail", "chart", "wifi", "home", "flask", "shield", "lock", "key", "bolt", "sparkle",
 ];
 
