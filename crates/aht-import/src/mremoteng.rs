@@ -209,6 +209,7 @@ pub(crate) fn parse_text(text: &str, opts: &ImportOptions) -> Result<ImportBundl
 struct Creds {
     user: String,
     pass_blob: String,
+    domain: String,
 }
 
 fn effective_creds(n: Node, parent: &Creds) -> Creds {
@@ -222,6 +223,11 @@ fn effective_creds(n: Node, parent: &Creds) -> Creds {
             parent.pass_blob.clone()
         } else {
             attr(n, "Password").to_string()
+        },
+        domain: if is_true(attr(n, "InheritDomain")) {
+            parent.domain.clone()
+        } else {
+            attr(n, "Domain").to_string()
         },
     }
 }
@@ -238,8 +244,9 @@ fn walk(parent: Node, path: &mut Vec<String>, inherited: &Creds, b: &mut Builder
             continue;
         }
         let proto = attr(n, "Protocol");
-        if !(proto.eq_ignore_ascii_case("SSH2") || proto.eq_ignore_ascii_case("SSH1")) {
-            b.skip("non-SSH mRemoteNG connections");
+        let rdp = proto.eq_ignore_ascii_case("RDP");
+        if !(rdp || proto.eq_ignore_ascii_case("SSH2") || proto.eq_ignore_ascii_case("SSH1")) {
+            b.skip("mRemoteNG connections that are neither SSH nor RDP");
             continue;
         }
         let host = attr(n, "Hostname").trim();
@@ -259,18 +266,43 @@ fn walk(parent: Node, path: &mut Vec<String>, inherited: &Creds, b: &mut Builder
                 }
             }
         };
-        let port = parse_port(attr(n, "Port")).unwrap_or(22);
         let group = b.group_path(path);
         let display = if name.is_empty() { host } else { &name };
-        b.add(
-            display,
-            group,
-            host,
-            port,
-            &creds.user,
-            auth,
-            attr(n, "Descr").to_string(),
-        );
+        if rdp {
+            // Windows logs in as DOMAIN\user; mRemoteNG keeps the domain apart.
+            let domain = creds.domain.trim();
+            let user = if domain.is_empty() || creds.user.contains('\\') || creds.user.contains('@')
+            {
+                creds.user.clone()
+            } else {
+                format!("{domain}\\{}", creds.user)
+            };
+            if matches!(auth, aht_core::model::SshAuth::Prompt) {
+                b.warn(format!(
+                    "{display}: no saved password; add one before connecting (RDP needs it)"
+                ));
+            }
+            b.add_rdp(
+                display,
+                group,
+                host,
+                parse_port(attr(n, "Port")).unwrap_or(3389),
+                &user,
+                auth,
+                attr(n, "Descr").to_string(),
+                is_true(attr(n, "UseConsoleSession")),
+            );
+        } else {
+            b.add(
+                display,
+                group,
+                host,
+                parse_port(attr(n, "Port")).unwrap_or(22),
+                &creds.user,
+                auth,
+                attr(n, "Descr").to_string(),
+            );
+        }
     }
 }
 
@@ -429,7 +461,7 @@ mod tests {
         let text = std::fs::read_to_string(fixture("mremoteng/confCons.xml")).unwrap();
         let b = parse_text(&text, &ImportOptions::default()).unwrap();
         let names: Vec<_> = b.connections.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["top ssh", "web1", "legacy ssh1"]);
+        assert_eq!(names, ["top ssh", "web1", "rdp1", "legacy ssh1"]);
         assert_eq!(b.groups.len(), 3); // Prod, Prod/EU, Empty
         let eu = b.groups.iter().find(|g| g.name == "EU").unwrap();
         let prod = b.groups.iter().find(|g| g.name == "Prod").unwrap();
@@ -439,7 +471,49 @@ mod tests {
         // Username inherited from the container "Prod".
         assert_eq!(b.connections[1].user, "prodadmin");
         assert_eq!(b.connections[1].port, 2222);
-        assert!(b.warnings.iter().any(|w| w.contains("Skipped 2 non-SSH")));
+        // Windows servers come in as RDP (issue #31); only Telnet is left out.
+        let rdp1 = b.connections.iter().find(|c| c.name == "rdp1").unwrap();
+        assert_eq!(rdp1.kind, aht_core::model::ConnectionKind::Rdp);
+        assert_eq!((rdp1.port, rdp1.group_id), (3389, Some(eu.id)));
+        assert!(
+            b.warnings
+                .iter()
+                .any(|w| w.contains("Skipped 1 mRemoteNG connections that are neither SSH nor RDP")),
+            "{:?}",
+            b.warnings
+        );
+    }
+
+    #[test]
+    fn rdp_connections_keep_domain_password_and_console() {
+        let pw = encrypt_gcm("W1nd0ws!", "mR3m", 1000, SALT, NONCE);
+        let protected = encrypt_gcm(PROTECTED_PLAINTEXT, "mR3m", 1000, SALT, NONCE);
+        let text = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<Connections Name="Connections" EncryptionEngine="AES" BlockCipherMode="GCM" KdfIterations="1000" FullFileEncryption="False" Protected="{protected}" ConfVersion="2.6">
+  <Node Name="AD" Type="Container" Username="admin" Domain="CORP" Password="{pw}" Hostname="" Protocol="RDP" Port="3389">
+    <Node Name="dc01" Type="Connection" Username="" Password="" Hostname="dc01.corp.test" Protocol="RDP" Port="" UseConsoleSession="True" InheritUsername="True" InheritDomain="True" InheritPassword="True" />
+    <Node Name="file01" Type="Connection" Username="svc@corp.test" Domain="CORP" Password="" Hostname="file01.corp.test" Protocol="RDP" Port="3390" />
+  </Node>
+</Connections>"#
+        );
+        let b = parse_text(&text, &ImportOptions::default()).unwrap();
+        let dc = b.connections.iter().find(|c| c.name == "dc01").unwrap();
+        assert_eq!(dc.kind, aht_core::model::ConnectionKind::Rdp);
+        assert_eq!(dc.user, "CORP\\admin");
+        assert_eq!(dc.port, 3389);
+        assert!(dc.rdp_admin);
+        assert_eq!(pw_of(&b, "dc01").as_deref(), Some("W1nd0ws!"));
+        // A UPN keeps its own form; no password means a warning, not a skip.
+        let file = b.connections.iter().find(|c| c.name == "file01").unwrap();
+        assert_eq!(
+            (file.user.as_str(), file.port, file.rdp_admin),
+            ("svc@corp.test", 3390, false)
+        );
+        assert!(b
+            .warnings
+            .iter()
+            .any(|w| w.contains("file01: no saved password")));
     }
 
     #[test]
