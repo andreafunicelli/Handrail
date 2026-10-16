@@ -210,6 +210,8 @@ struct Creds {
     user: String,
     pass_blob: String,
     domain: String,
+    /// RDP: connect to the console (administrative) session.
+    console: bool,
 }
 
 fn effective_creds(n: Node, parent: &Creds) -> Creds {
@@ -228,6 +230,12 @@ fn effective_creds(n: Node, parent: &Creds) -> Creds {
             parent.domain.clone()
         } else {
             attr(n, "Domain").to_string()
+        },
+        // mRemoteNG writes the setting as ConnectToConsole; its inherit flag keeps the old name.
+        console: if is_true(attr(n, "InheritUseConsoleSession")) {
+            parent.console
+        } else {
+            is_true(attr(n, "ConnectToConsole"))
         },
     }
 }
@@ -290,7 +298,7 @@ fn walk(parent: Node, path: &mut Vec<String>, inherited: &Creds, b: &mut Builder
                 &user,
                 auth,
                 attr(n, "Descr").to_string(),
-                is_true(attr(n, "UseConsoleSession")),
+                creds.console,
             );
         } else {
             b.add(
@@ -491,9 +499,9 @@ mod tests {
         let text = format!(
             r#"<?xml version="1.0" encoding="utf-8"?>
 <Connections Name="Connections" EncryptionEngine="AES" BlockCipherMode="GCM" KdfIterations="1000" FullFileEncryption="False" Protected="{protected}" ConfVersion="2.6">
-  <Node Name="AD" Type="Container" Username="admin" Domain="CORP" Password="{pw}" Hostname="" Protocol="RDP" Port="3389">
-    <Node Name="dc01" Type="Connection" Username="" Password="" Hostname="dc01.corp.test" Protocol="RDP" Port="" UseConsoleSession="True" InheritUsername="True" InheritDomain="True" InheritPassword="True" />
-    <Node Name="file01" Type="Connection" Username="svc@corp.test" Domain="CORP" Password="" Hostname="file01.corp.test" Protocol="RDP" Port="3390" />
+  <Node Name="AD" Type="Container" Username="admin" Domain="CORP" Password="{pw}" Hostname="" Protocol="RDP" Port="3389" ConnectToConsole="True">
+    <Node Name="dc01" Type="Connection" Username="" Password="" Hostname="dc01.corp.test" Protocol="RDP" Port="" ConnectToConsole="False" InheritUseConsoleSession="True" InheritUsername="True" InheritDomain="True" InheritPassword="True" />
+    <Node Name="file01" Type="Connection" Username="svc@corp.test" Domain="CORP" Password="" Hostname="file01.corp.test" Protocol="RDP" Port="3390" ConnectToConsole="False" InheritUseConsoleSession="False" />
   </Node>
 </Connections>"#
         );
