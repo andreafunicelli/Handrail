@@ -198,6 +198,26 @@ impl Builder {
         id
     }
 
+    /// Add a remote desktop (RDP) connection; `admin` connects to the console session.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_rdp(
+        &mut self,
+        name: &str,
+        group: Option<GroupId>,
+        host: &str,
+        port: u16,
+        user: &str,
+        auth: SshAuth,
+        notes: String,
+        admin: bool,
+    ) -> ConnectionId {
+        let id = self.add(name, group, host, port, user, auth, notes);
+        let c = self.connections.last_mut().expect("just added");
+        c.kind = ConnectionKind::Rdp;
+        c.rdp_admin = admin;
+        id
+    }
+
     pub fn finish(mut self) -> ImportBundle {
         let skipped = std::mem::take(&mut self.skipped);
         for (what, n) in skipped {

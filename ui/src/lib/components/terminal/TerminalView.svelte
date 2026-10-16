@@ -268,14 +268,18 @@
     height: 16px;
     font-size: 9.5px;
   }
+  /* Overlays above xterm's own layers (link layer z-index 2, helpers 5, decorations 6-8,
+     message 10, accessibility 11), or those swallow the clicks (issue #33). */
   .badge {
     position: absolute;
     right: 14px;
     bottom: 8px;
+    z-index: 20;
     cursor: help;
   }
   .ended {
     position: absolute;
+    z-index: 20;
     left: 50%;
     bottom: 18px;
     transform: translateX(-50%);
