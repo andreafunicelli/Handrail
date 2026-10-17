@@ -18,6 +18,13 @@ ignore = [
     # rdp-helper workspace only (rdp-helper/deny.toml links here). Re-check on IronRDP upgrades.
     { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill: archived; via IronRDP's sspi -> winscard -> iso7816 -> heapless 0.7 (smart-card path). No upgrade until IronRDP moves off heapless 0.7." },
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: archived thin wrapper over rustls-pki-types; only via ironrdp-server, a test-only dependency of rdp-helper." },
+    # zip 4.x: extraction keeps SUID/SGID bits and follows/creates symlinks outside the target
+    # (Unix behaviour). zip reaches us only through tauri-plugin-updater, which builds it for
+    # Windows alone and extracts only after the minisign signature check against our key.
+    # Fixed in zip 9; no tauri-plugin-updater release accepts it yet (all need ^4).
+    { id = "RUSTSEC-2026-0367", reason = "zip 4.x SUID bits on extract; Windows-only via tauri-plugin-updater, signed archives only. Re-check when the updater moves to zip >= 9." },
+    { id = "RUSTSEC-2026-0368", reason = "zip 4.x symlink escape on extract; Windows-only via tauri-plugin-updater, signed archives only. Re-check when the updater moves to zip >= 9." },
+    { id = "RUSTSEC-2026-0369", reason = "zip 4.x permissions through symlinks; Windows-only via tauri-plugin-updater, signed archives only. Re-check when the updater moves to zip >= 9." },
     { id = "RUSTSEC-2023-0071", reason = "Marvin timing attack; russh uses rsa only for client-side signing during login (a few operations per connection). No patched rsa release (RustCrypto/RSA#626); RSA key login must stay supported. Re-check when rsa ships a fix." },
 ]
 
