@@ -60,7 +60,7 @@ jobs:
             echo 'The builds are not code-signed yet:'
             echo '- macOS: open the .dmg, drag Handrail to Applications; the first time, open System Settings > Privacy & Security and click "Open Anyway".'
             echo '- Windows: on the SmartScreen warning click "More info" > "Run anyway".'
-            echo '- Linux: install the .deb (Debian, Ubuntu) or .rpm (Fedora, openSUSE), or make the .AppImage executable (chmod +x) and run it. Only the AppImage updates itself.'
+            echo '- Linux (glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later): install the .deb (Debian, Ubuntu) or .rpm (Fedora, openSUSE), or make the .AppImage executable (chmod +x) and run it.'
             echo 'HANDRAIL_NOTES_EOF'
           } >> "$GITHUB_OUTPUT"
       - id: v

@@ -37,9 +37,9 @@ The agent uses the terminal you are looking at. Its commands and their output ap
    | --- | --- |
    | macOS, Apple silicon or Intel | Universal `.dmg` |
    | Windows, x64 | `.exe` installer or `.msi` |
-   | Linux, x64 | `.AppImage` (any distribution), `.deb` (Debian, Ubuntu) or `.rpm` (Fedora, openSUSE) |
+   | Linux, x64 (glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later) | `.AppImage`, `.deb` (Debian, Ubuntu) or `.rpm` (Fedora, openSUSE) |
 
-   Current installers and the installed app use the name **Handrail**. Builds are not code-signed yet: on macOS, use **System Settings › Privacy & Security › Open Anyway** after attempting to open the app; on Windows, use **More info › Run anyway** if SmartScreen appears. On Linux, only the AppImage updates itself; the `.deb` and `.rpm` update by installing the newer package. Without a keychain service (GNOME Keyring, KWallet), the app asks for the Secret Key at each unlock.
+   Current installers and the installed app use the name **Handrail**. Builds are not code-signed yet: on macOS, use **System Settings › Privacy & Security › Open Anyway** after attempting to open the app; on Windows, use **More info › Run anyway** if SmartScreen appears. On Linux, make the AppImage executable (`chmod +x`) before running it. Without a keychain service (GNOME Keyring, KWallet), the app asks for the Secret Key at each unlock.
 
 2. **Create your vault.** Choose a master password and save the Emergency Kit containing your Secret Key.
 3. **Add a connection.** Enter an SSH host or import existing connections from another client.
