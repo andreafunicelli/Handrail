@@ -1,7 +1,8 @@
 //! Persistent domain model. These are the payloads stored (encrypted) in the vault and synced.
 
 use crate::{
-    ConnectionId, GroupId, HarnessProfileId, ProviderId, S3AccountId, SecretId, SnippetId,
+    ConnectionId, GroupId, HarnessProfileId, IdentityId, ProviderId, S3AccountId, SecretId,
+    SnippetId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -78,6 +79,21 @@ pub struct Connection {
     /// emoji. Unknown values are shown as text, so newer icon names degrade gracefully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// Log in as this saved identity: its user and authentication replace `user` and `auth`
+    /// at connect time, so changing the identity changes every connection that uses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<IdentityId>,
+}
+
+/// A reusable login: a user name with its password or key, shared by many connections.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Identity {
+    pub id: IdentityId,
+    pub label: String,
+    pub user: String,
+    /// `Password`, `Key` or `Agent`; never `Prompt` (an identity without saved credentials is
+    /// just a user name).
+    pub auth: SshAuth,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,8 +1,10 @@
-//! Vault lifecycle and stored records (connections, groups, secrets, providers, profiles).
+//! Vault lifecycle and stored records (connections, groups, secrets, identities, providers,
+//! profiles).
 
 use crate::state::{err, AppState};
 use aht_core::model::{
-    Connection, Group, HarnessProfile, Provider, S3Account, Secret, SecretKind, Snippet, SshAuth,
+    Connection, Group, HarnessProfile, Identity, Provider, S3Account, Secret, SecretKind, Snippet,
+    SshAuth,
 };
 use aht_core::{Error, Result, SecretId};
 use aht_vault::{
@@ -323,20 +325,33 @@ pub async fn update_secret(
     Ok(())
 }
 
-/// What uses secret `id`: names of connections, S3 accounts and AI providers.
-fn secret_users(
-    id: SecretId,
-    connections: &[Connection],
-    s3: &[S3Account],
-    providers: &[Provider],
-) -> Vec<String> {
-    let by_connection = connections.iter().filter(|c| match &c.auth {
+fn auth_uses(auth: &SshAuth, id: SecretId) -> bool {
+    match auth {
         SshAuth::Password { secret } => *secret == id,
         SshAuth::Key { key, passphrase } => *key == id || *passphrase == Some(id),
         SshAuth::Agent | SshAuth::Prompt => false,
-    });
-    by_connection
+    }
+}
+
+/// What uses secret `id`: names of connections, identities, S3 accounts and AI providers. A
+/// connection that logs in with an identity counts through the identity, not its own `auth`.
+fn secret_users(
+    id: SecretId,
+    connections: &[Connection],
+    identities: &[Identity],
+    s3: &[S3Account],
+    providers: &[Provider],
+) -> Vec<String> {
+    connections
+        .iter()
+        .filter(|c| c.identity.is_none() && auth_uses(&c.auth, id))
         .map(|c| c.name.clone())
+        .chain(
+            identities
+                .iter()
+                .filter(|i| auth_uses(&i.auth, id))
+                .map(|i| i.label.clone()),
+        )
         .chain(
             s3.iter()
                 .filter(|a| a.secret == Some(id))
@@ -358,6 +373,7 @@ pub async fn delete_secret(state: State<'_, AppState>, id: SecretId) -> Result<(
     let users = secret_users(
         id,
         &vault.list::<Connection>().map_err(Error::from)?,
+        &vault.list::<Identity>().map_err(Error::from)?,
         &vault.list::<S3Account>().map_err(Error::from)?,
         &vault.list::<Provider>().map_err(Error::from)?,
     );
@@ -429,6 +445,95 @@ pub async fn save_s3_account(
     }
     put(&state, &account).await?;
     Ok(account)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_identities(state: State<'_, AppState>) -> Result<Vec<Identity>> {
+    list(&state).await
+}
+
+/// Save an identity. Its user name, password or key apply from the next login of every
+/// connection that uses it.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn save_identity(state: State<'_, AppState>, mut identity: Identity) -> Result<Identity> {
+    identity.label = identity.label.trim().to_string();
+    identity.user = identity.user.trim().to_string();
+    if identity.label.is_empty() {
+        return Err(Error::Invalid("an identity needs a name".into()));
+    }
+    if identity.user.is_empty() {
+        return Err(Error::Invalid("an identity needs a user name".into()));
+    }
+    let mut vault = state.vault.lock().await;
+    let exists = |id: SecretId| -> Result<bool> {
+        Ok(vault
+            .get::<Secret>(&id.to_string())
+            .map_err(Error::from)?
+            .is_some())
+    };
+    let ok = match &identity.auth {
+        SshAuth::Password { secret } => exists(*secret)?,
+        SshAuth::Key { key, passphrase } => exists(*key)? && passphrase.map_or(Ok(true), exists)?,
+        SshAuth::Agent => true,
+        SshAuth::Prompt => {
+            return Err(Error::Invalid(
+                "an identity needs a password, a key or the SSH agent".into(),
+            ))
+        }
+    };
+    if !ok {
+        return Err(Error::NotFound(
+            "the identity's password or key is no longer in the vault".into(),
+        ));
+    }
+    vault.put(&identity).map_err(Error::from)?;
+    Ok(identity)
+}
+
+/// Delete an identity no connection uses. Its password or key stay in the vault (they may be
+/// shared); unused ones can be cleaned up in Settings.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn delete_identity(state: State<'_, AppState>, id: String) -> Result<()> {
+    let mut vault = state.vault.lock().await;
+    let users: Vec<String> = vault
+        .list::<Connection>()
+        .map_err(Error::from)?
+        .into_iter()
+        .filter(|c| c.identity.is_some_and(|i| i.to_string() == id))
+        .map(|c| c.name)
+        .collect();
+    if !users.is_empty() {
+        return Err(Error::Invalid(format!(
+            "still used by {}",
+            users.join(", ")
+        )));
+    }
+    vault
+        .delete::<Identity>(&id)
+        .map(|_| ())
+        .map_err(Error::from)
+}
+
+/// For a connection that logs in with an identity, put the identity's user and
+/// authentication in place of its own. A missing identity (deleted, or not synced to this
+/// device yet) is an error rather than a silent fallback to the connection's old login.
+pub(crate) fn apply_identity(vault: &Vault, c: &mut Connection) -> Result<()> {
+    let Some(id) = c.identity else {
+        return Ok(());
+    };
+    let identity = vault
+        .get::<Identity>(&id.to_string())
+        .map_err(Error::from)?
+        .ok_or_else(|| {
+            Error::NotFound(format!(
+                "the identity {} logs in with is no longer in the vault: choose another in its \
+                 settings",
+                c.name
+            ))
+        })?;
+    c.user = identity.user;
+    c.auth = identity.auth;
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -681,12 +786,37 @@ mod tests {
             conn("pi", SshAuth::Agent),
         ];
         assert_eq!(
-            secret_users(key, &connections, &[], &[]),
+            secret_users(key, &connections, &[], &[], &[]),
             ["web-01", "web-02"]
         );
         assert_eq!(
-            secret_users(SecretId::new(), &connections, &[], &[]),
+            secret_users(SecretId::new(), &connections, &[], &[], &[]),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn secret_users_counts_identities_not_the_connections_on_them() {
+        let key = SecretId::new();
+        let identity = Identity {
+            id: aht_core::IdentityId::new(),
+            label: "ops".into(),
+            user: "ops".into(),
+            auth: SshAuth::Key {
+                key,
+                passphrase: None,
+            },
+        };
+        let mut on_identity: Connection = serde_json::from_value(serde_json::json!({
+            "id": aht_core::ConnectionId::new(), "name": "web-03", "kind": "ssh", "group_id": null,
+            "host": "h", "port": 22, "user": "u", "auth": {"type": "password", "secret": key},
+            "color": null, "approval_mode": null, "local_shell": null
+        }))
+        .unwrap();
+        on_identity.identity = Some(identity.id);
+        assert_eq!(
+            secret_users(key, &[on_identity], &[identity], &[], &[]),
+            ["ops"]
         );
     }
 

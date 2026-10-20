@@ -576,14 +576,15 @@ pub(crate) async fn auth_material(
     })
 }
 
+/// A connection as it logs in: with its identity's user and authentication when it uses one.
 pub(crate) async fn load_connection(state: &AppState, id: ConnectionId) -> Result<Connection> {
-    state
-        .vault
-        .lock()
-        .await
+    let vault = state.vault.lock().await;
+    let mut c = vault
         .get::<Connection>(&id.to_string())
         .map_err(Error::from)?
-        .ok_or_else(|| Error::NotFound(format!("connection {id}")))
+        .ok_or_else(|| Error::NotFound(format!("connection {id}")))?;
+    crate::cmd_vault::apply_identity(&vault, &mut c)?;
+    Ok(c)
 }
 
 pub async fn open_ssh(
@@ -900,12 +901,12 @@ impl Tools {
 impl TerminalTools for Tools {
     async fn list_connections(&self, _actor: &Actor) -> Result<Vec<ConnectionSummary>> {
         let state = self.app.state::<AppState>();
-        let conns = state
-            .vault
-            .lock()
-            .await
-            .list::<Connection>()
-            .map_err(Error::from)?;
+        let vault = state.vault.lock().await;
+        let mut conns = vault.list::<Connection>().map_err(Error::from)?;
+        for c in &mut conns {
+            // The user it logs in as; a missing identity shows the connection's own.
+            let _ = crate::cmd_vault::apply_identity(&vault, c);
+        }
         Ok(conns
             .into_iter()
             .map(|c| ConnectionSummary {

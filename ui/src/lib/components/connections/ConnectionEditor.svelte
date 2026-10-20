@@ -40,6 +40,11 @@
     else if (!value.trim() && c.icon && !isIconName(c.icon)) c.icon = null;
   }
   let authType = $state<"password" | "key" | "agent" | "prompt">(c.auth.type);
+  /** Log in as this saved identity instead of the connection's own user and login. */
+  let identityId = $state(c.identity ?? "");
+  const identity = $derived(credentials.identity(identityId));
+  /** RDP needs a saved password, so it offers only identities that have one. */
+  const identityChoices = $derived(credentials.identities.filter((i) => c.kind !== "rdp" || i.auth.type === "password"));
   let password = $state("");
   let keyText = $state("");
   let passphrase = $state("");
@@ -59,7 +64,7 @@
   const tunnelsOk = $derived(c.tunnels.every((x) => !tunnelProblem(x)));
   const rdp = $derived(c.kind === "rdp");
   /** RDP logs in with a saved password only (NLA needs it before the session starts). */
-  const rdpPasswordOk = $derived(!rdp || !!password || !!passwordId);
+  const rdpPasswordOk = $derived(!rdp || (identityId ? identity?.auth.type === "password" : !!password || !!passwordId));
   const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk && rdpPasswordOk && !emojiBad);
 
   function setKind(kind: "ssh" | "rdp") {
@@ -102,7 +107,12 @@
       } else {
         out.rdp_admin = false;
       }
-      if (authType === "password") {
+      out.identity = identityId || null;
+      if (identity) {
+        // The identity's user and login apply when connecting; keep the user for lists.
+        out.user = identity.user;
+        out.auth = { type: "prompt" };
+      } else if (authType === "password") {
         // A typed password is new (for this connection only); else the saved one picked.
         if (password) out.auth = { type: "password", secret: await secret("password", password, `${out.name} password`) };
         else if (passwordId) out.auth = { type: "password", secret: passwordId };
@@ -224,11 +234,25 @@
         <input class="input mono" type="number" min="1" max="65535" bind:value={c.port} />
       </label>
     </div>
+    {#if identityChoices.length || identityId}
+      <label class="field">
+        <span class="label">{t("editor.loginAs")}</span>
+        <select class="select" bind:value={identityId}>
+          <option value="">{t("editor.ownLogin")}</option>
+          {#each identityChoices as i (i.id)}<option value={i.id}>{i.label} — {i.user}</option>{/each}
+          {#if identityId && !identity}<option value={identityId}>{t("editor.identityMissing")}</option>{/if}
+        </select>
+        {#if identity}<span class="hint">{t("editor.identityNote", { user: identity.user })}</span>{/if}
+        {#if identityId && !identity}<span class="hint">{t("editor.identityMissingHint")}</span>{/if}
+      </label>
+    {/if}
+    {#if !identityId}
     <label class="field">
       <span class="label">{t("editor.user")}</span>
       <input class="input mono" bind:value={c.user} placeholder={rdp ? "DOMAIN\\user" : "deploy"} spellcheck="false" autocapitalize="off" />
       {#if rdp}<span class="hint">{t("editor.rdpUser")}</span>{/if}
     </label>
+    {/if}
     <label class="field">
       <span class="label">{t("editor.folder")}</span>
       <select class="select" bind:value={c.group_id}>
@@ -237,6 +261,7 @@
       </select>
     </label>
 
+    {#if !identityId}
     <fieldset class="field">
       <legend class="label">{rdp ? t("editor.auth.password") : t("editor.auth")}</legend>
       <div class="seg" role="group" hidden={rdp} use:segmented>
@@ -274,6 +299,7 @@
         <p class="hint">{t("editor.promptNote")}</p>
       {/if}
     </fieldset>
+    {/if}
 
     {#if rdp}
       <label class="check admin">
