@@ -4,6 +4,7 @@ export type Uuid = string;
 export type ConnectionId = Uuid;
 export type GroupId = Uuid;
 export type SecretId = Uuid;
+export type IdentityId = Uuid;
 export type ProviderId = Uuid;
 export type HarnessProfileId = Uuid;
 export type SessionId = Uuid;
@@ -42,6 +43,18 @@ export interface Connection {
   rdp_admin?: boolean;
   /** Shown before the name: a built-in icon name or a single emoji. */
   icon?: string | null;
+  /** Log in as this identity: its user and authentication replace `user` and `auth` when
+   *  connecting, so changing the identity changes every connection using it. */
+  identity?: IdentityId | null;
+}
+
+/** A reusable login: a user name with its password, key or the SSH agent. */
+export interface Identity {
+  id: IdentityId;
+  label: string;
+  user: string;
+  /** Never `prompt`. */
+  auth: SshAuth;
 }
 
 /** local: `ssh -L` (listen here, connect from the server); remote: `ssh -R` (listen on the

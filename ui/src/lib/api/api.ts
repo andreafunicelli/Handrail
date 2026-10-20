@@ -24,6 +24,7 @@ import type {
   AuthPromptEvent,
   GithubDeviceStart,
   GithubPoll,
+  Identity,
   ImportPreview,
   ImportPreviewArgs,
   ImportSource,
@@ -95,8 +96,13 @@ export interface Api {
   listSecrets(): Promise<SecretInfo[]>;
   /** Rename a secret, or replace its value (for everything that uses it). */
   updateSecret(id: string, label: string | null, value: string | null): Promise<void>;
-  /** Rejects while a connection, S3 account or provider still uses it. */
+  /** Rejects while a connection, identity, S3 account or provider still uses it. */
   deleteSecret(id: string): Promise<void>;
+  listIdentities(): Promise<Identity[]>;
+  /** Rejects without a name or user, or with `prompt` authentication. */
+  saveIdentity(identity: Identity): Promise<Identity>;
+  /** Rejects while a connection logs in with it. */
+  deleteIdentity(id: string): Promise<void>;
 
   // sessions
   /** `promptRef` lets a connection without saved credentials ask for them while logging in

@@ -14,6 +14,34 @@ const wait = (cond: () => boolean, ms = 5000) =>
   });
 
 describe("mock api", () => {
+  it("logs connections in with their identity and guards what identities use", async () => {
+    const api = createMockApi();
+    const pw = await api.saveSecret({ id: "pw-1", kind: "password", label: "ops password", value: "s3cret" });
+    await expect(api.saveIdentity({ id: "id-1", label: " ", user: "ops", auth: { type: "agent" } })).rejects.toMatchObject({ kind: "invalid" });
+    await expect(api.saveIdentity({ id: "id-1", label: "Ops", user: "ops", auth: { type: "prompt" } })).rejects.toMatchObject({ kind: "invalid" });
+    await expect(api.saveIdentity({ id: "id-1", label: "Ops", user: "ops", auth: { type: "password", secret: "gone" } })).rejects.toMatchObject({ kind: "not_found" });
+    const ident = await api.saveIdentity({ id: "id-1", label: " Ops ", user: "Administrator", auth: { type: "password", secret: pw } });
+    expect(ident.label).toBe("Ops");
+    // An RDP connection with no password of its own logs in with the identity's.
+    const [any] = await api.listConnections();
+    const conn = await api.saveConnection({ ...any, id: "rdp-1", name: "fs", kind: "rdp", port: 3389, auth: { type: "prompt" }, identity: ident.id, jump: [] });
+    expect(await api.rdpOpen(conn.id, { width: 800, height: 600, scale: 1 }, () => {})).toBeTruthy();
+    // The password is in use through the identity; the identity through the connection.
+    await expect(api.deleteSecret(pw)).rejects.toMatchObject({ kind: "invalid" });
+    await expect(api.deleteIdentity(ident.id)).rejects.toMatchObject({ kind: "invalid" });
+    await api.deleteConnection(conn.id);
+    await api.deleteIdentity(ident.id);
+    expect((await api.listIdentities()).some((i) => i.id === ident.id)).toBe(false);
+    await api.deleteSecret(pw);
+  });
+
+  it("refuses to connect when a connection's identity is gone", async () => {
+    const api = createMockApi();
+    const [any] = await api.listConnections();
+    const conn = await api.saveConnection({ ...any, id: "c-gone", identity: "no-such-identity" });
+    await expect(api.openSession(conn.id, 80, 24)).rejects.toMatchObject({ kind: "not_found" });
+  });
+
   it("creates, locks and unlocks the vault", async () => {
     const api = createMockApi();
     expect(await api.vaultStatus()).toMatchObject({ initialized: false });

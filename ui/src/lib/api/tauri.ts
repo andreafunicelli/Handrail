@@ -31,6 +31,9 @@ export function createTauriApi(): Api {
     listSecrets: () => invoke("list_secrets"),
     updateSecret: (id, label, value) => invoke("update_secret", { id, label, value }),
     deleteSecret: (id) => invoke("delete_secret", { id }),
+    listIdentities: () => invoke("list_identities"),
+    saveIdentity: (identity) => invoke("save_identity", { identity }),
+    deleteIdentity: (id) => invoke("delete_identity", { id }),
 
     openSession: (connection_id, cols, rows, prompt_ref) =>
       invoke("open_session", { connection_id, cols, rows, prompt_ref: prompt_ref ?? null }),

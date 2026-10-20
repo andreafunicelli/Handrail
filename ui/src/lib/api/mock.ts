@@ -8,6 +8,7 @@ import type {
   CommandResult,
   Connection,
   Group,
+  Identity,
   HarnessProfile,
   ImportPreview,
   Provider,
@@ -173,7 +174,8 @@ function seed() {
     { id: uuid(), name: "Backups (R2)", endpoint: "https://acct.r2.cloudflarestorage.com", region: "auto", bucket: "backups", access_key_id: "r2-key", secret: uuid(), path_style: false },
     { id: uuid(), name: "AWS production", endpoint: "", region: "eu-west-1", bucket: null, access_key_id: "AKIA…", secret: uuid(), path_style: false },
   ];
-  return { groups, connections, providers, profiles, snippets, s3Accounts, secrets };
+  const identities: Identity[] = [{ id: uuid(), label: "Deploy key", user: "deploy", auth: structuredClone(keyAuth) }];
+  return { groups, connections, providers, profiles, snippets, s3Accounts, secrets, identities };
 }
 
 // ---------- fake shell ----------
@@ -447,6 +449,16 @@ export function createMockApi(): Api {
     const sh: Shell = { info, local, line: "", cwd: "~" };
     shells.set(info.session_id, sh);
     return sh;
+  }
+
+  /** The connection as it logs in: with its identity's user and authentication (like the
+   *  backend's load_connection); a missing identity is an error, not the old login. */
+  function loginOf(id: string): Connection | undefined {
+    const c = db.connections.find((x) => x.id === id);
+    if (!c?.identity) return c;
+    const i = db.identities.find((x) => x.id === c.identity);
+    if (!i) throw fail("not_found", `the identity ${c.name} logs in with is no longer in the vault: choose another in its settings`);
+    return { ...c, user: i.user, auth: structuredClone(i.auth) };
   }
 
   async function boot(sh: Shell, c: Connection | null) {
@@ -744,6 +756,27 @@ export function createMockApi(): Api {
       else db.secrets.push(structuredClone(secret));
       return secret.id;
     },
+    async listIdentities() {
+      return structuredClone(db.identities);
+    },
+    async saveIdentity(identity) {
+      const x = { ...structuredClone(identity), label: identity.label.trim(), user: identity.user.trim() };
+      if (!x.label) throw fail("invalid", "an identity needs a name");
+      if (!x.user) throw fail("invalid", "an identity needs a user name");
+      if (x.auth.type === "prompt") throw fail("invalid", "an identity needs a password, a key or the SSH agent");
+      const has = (s: string | null) => s === null || db.secrets.some((v) => v.id === s);
+      if ((x.auth.type === "password" && !has(x.auth.secret)) || (x.auth.type === "key" && !(has(x.auth.key) && has(x.auth.passphrase))))
+        throw fail("not_found", "the identity's password or key is no longer in the vault");
+      const i = db.identities.findIndex((v) => v.id === x.id);
+      if (i >= 0) db.identities[i] = x;
+      else db.identities.push(x);
+      return structuredClone(x);
+    },
+    async deleteIdentity(id) {
+      const users = db.connections.filter((c) => c.identity === id).map((c) => c.name);
+      if (users.length) throw fail("invalid", `still used by ${users.join(", ")}`);
+      db.identities = db.identities.filter((i) => i.id !== id);
+    },
     async listSecrets() {
       return db.secrets.map(({ id, kind, label }) => ({ id, kind, label }));
     },
@@ -760,8 +793,10 @@ export function createMockApi(): Api {
       }
     },
     async deleteSecret(id) {
+      const uses = (a: Identity["auth"]) => (a.type === "password" && a.secret === id) || (a.type === "key" && (a.key === id || a.passphrase === id));
       const users = [
-        ...db.connections.filter((c) => (c.auth.type === "password" && c.auth.secret === id) || (c.auth.type === "key" && (c.auth.key === id || c.auth.passphrase === id))).map((c) => c.name),
+        ...db.connections.filter((c) => !c.identity && uses(c.auth)).map((c) => c.name),
+        ...db.identities.filter((i) => uses(i.auth)).map((i) => i.label),
         ...db.s3Accounts.filter((a) => a.secret === id).map((a) => a.name),
         ...db.providers.filter((p) => p.api_key === id).map((p) => p.name),
       ];
@@ -770,7 +805,7 @@ export function createMockApi(): Api {
     },
 
     async openSession(connection_id, _cols, _rows, prompt_ref) {
-      const c = db.connections.find((x) => x.id === connection_id);
+      const c = loginOf(connection_id);
       if (!c) throw fail("not_found", "Connection not found.");
       await sleep(250);
       if ((downUntil.get(c.host) ?? 0) > Date.now()) throw fail("network", `connect to ${c.host}:${c.port}: Connection refused`);
@@ -982,7 +1017,7 @@ export function createMockApi(): Api {
       return remote;
     },
     async rdpOpen(connectionId, size, onMessage) {
-      const c = db.connections.find((x) => x.id === connectionId);
+      const c = loginOf(connectionId);
       if (!c || c.kind !== "rdp") throw fail("invalid", "not an RDP connection");
       if (c.auth.type !== "password") throw fail("invalid", `${c.name} needs a saved password for RDP`);
       const id = uuid();

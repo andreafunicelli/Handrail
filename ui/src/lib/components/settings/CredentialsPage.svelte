@@ -2,9 +2,10 @@
   import { onMount } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import Modal from "../common/Modal.svelte";
+  import IdentityDialog from "./IdentityDialog.svelte";
   import { t } from "../../i18n";
   import { api } from "../../api";
-  import type { SecretInfo } from "../../api/types";
+  import type { Identity, SecretInfo } from "../../api/types";
   import { credentials } from "../../stores/credentials.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { ui } from "../../stores/ui.svelte";
@@ -16,6 +17,23 @@
   let renaming = $state<{ id: string; value: string } | null>(null);
   let replacing = $state<{ secret: SecretInfo; value: string } | null>(null);
   let busy = $state(false);
+  /** The identity being added (null) or edited; undefined when the dialog is closed. */
+  let editing = $state<Identity | null | undefined>(undefined);
+
+  function authSummary(i: Identity) {
+    if (i.auth.type === "password") return t("ident.withPassword", { name: credentials.label(i.auth.secret) });
+    if (i.auth.type === "key") return t("ident.withKey", { name: credentials.label(i.auth.key) });
+    return t("editor.auth.agent");
+  }
+
+  async function removeIdentity(i: Identity) {
+    if (!(await ui.ask(t("ident.deleteTitle", { name: i.label }), { body: t("ident.deleteBody"), confirmLabel: t("common.delete"), danger: true }))) return;
+    try {
+      await credentials.removeIdentity(i.id);
+    } catch (e) {
+      toasts.error(e);
+    }
+  }
 
   onMount(() => void credentials.load().catch(toasts.error));
 
@@ -75,6 +93,29 @@
   const KIND_ICON = { private_key: "key", password: "lock", passphrase: "lock" } as const;
 </script>
 
+<div class="head">
+  <h3>{t("ident.title")}</h3>
+  <button class="btn sm" onclick={() => (editing = null)}><Icon name="plus" size={13} />{t("ident.add")}</button>
+</div>
+<p class="intro">{t("ident.body")}</p>
+<div class="card">
+  {#each credentials.identities as i (i.id)}
+    {@const users = credentials.identityUsers(i.id)}
+    <div class="list-row">
+      <Icon name="user" size={14} />
+      <span class="what">
+        <span class="name">{i.label}<span class="kind mono">{i.user}</span></span>
+        <span class="users">{authSummary(i)} · <span class:none={!users.length}>{users.length ? t("cred.usedBy", { names: users.join(", ") }) : t("cred.unused")}</span></span>
+      </span>
+      <button class="btn sm ghost" onclick={() => (editing = i)}>{t("ident.edit")}</button>
+      <button class="icon-btn" aria-label={t("common.delete")} title={users.length ? t("cred.inUse") : t("common.delete")} disabled={!!users.length} onclick={() => removeIdentity(i)}><Icon name="trash" size={14} /></button>
+    </div>
+  {:else}
+    <div class="list-row muted">{t("ident.empty")}</div>
+  {/each}
+</div>
+
+<h3 class="sub">{t("cred.title")}</h3>
 <p class="intro">{t("cred.body")}</p>
 
 <div class="card">
@@ -106,6 +147,10 @@
   <button class="btn sm ghost clean" onclick={removeUnused}><Icon name="trash" size={13} />{t("cred.clean", { n: unused.length })}</button>
 {/if}
 
+{#if editing !== undefined}
+  <IdentityDialog identity={editing} onclose={() => (editing = undefined)} />
+{/if}
+
 {#if replacing}
   {@const r = replacing}
   {@const users = credentials.usedBy(r.secret.id)}
@@ -131,6 +176,20 @@
 {/if}
 
 <style>
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  h3 {
+    margin: 0;
+    font-size: var(--fs-body);
+    font-weight: 600;
+  }
+  h3.sub {
+    margin-top: 24px;
+  }
   .what {
     flex: 1;
     display: grid;
@@ -156,6 +215,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .users .none,
   .users.none {
     color: var(--faint);
   }

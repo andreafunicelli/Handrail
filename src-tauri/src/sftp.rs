@@ -4,7 +4,7 @@
 
 use crate::cmd_vault::secret_value;
 use crate::state::{err, AppState};
-use aht_core::model::{Connection, SshAuth};
+use aht_core::model::SshAuth;
 use aht_core::{Error, Result, SessionId};
 use aht_ssh::sftp::SUDO_PASSWORD_REQUIRED;
 use aht_ssh::{EntryKind, FileStamp, RemoteEntry, Sftp};
@@ -88,12 +88,9 @@ async fn login_password(state: &AppState, session_id: SessionId) -> Option<Zeroi
         .ok()?
         .info()
         .connection_id?;
-    let conn = state
-        .vault
-        .lock()
+    let conn = crate::terminal::load_connection(state, conn_id)
         .await
-        .get::<Connection>(&conn_id.to_string())
-        .ok()??;
+        .ok()?;
     match conn.auth {
         SshAuth::Password { secret } => secret_value(state, secret).await.ok().map(Zeroizing::new),
         _ => None,

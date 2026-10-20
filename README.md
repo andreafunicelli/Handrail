@@ -80,7 +80,7 @@ Claude Code and Codex run as their official, unmodified CLIs. You sign in throug
 
 - **Organize your servers:** nested groups, search, environment colors, and SSH jump hosts through ProxyJump.
 - **Build your workspace:** tabs, split panes, saved workspaces, and a command palette with **Ctrl/⌘ K**.
-- **Reuse credentials:** share saved keys and passwords across connections, then rotate them in one place.
+- **Reuse credentials:** share saved keys and passwords across connections, then rotate them in one place. Identities bundle a user name with its password, key or agent: connections that log in as an identity pick up any change to it.
 - **Save repetitive work:** command snippets with `{{placeholders}}` and suggested read-only diagnostics.
 - **Manage tunnels:** saved local (`-L`), remote (`-R`), and SOCKS5 (`-D`) forwarding, restored after reconnect.
 - **Watch server health:** CPU, memory, disk, load, and uptime beneath Linux SSH terminals, collected over the existing connection.
