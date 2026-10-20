@@ -25,6 +25,12 @@ ignore = [
     { id = "RUSTSEC-2026-0367", reason = "zip 4.x SUID bits on extract; Windows-only via tauri-plugin-updater, signed archives only. Re-check when the updater moves to zip >= 9." },
     { id = "RUSTSEC-2026-0368", reason = "zip 4.x symlink escape on extract; Windows-only via tauri-plugin-updater, signed archives only. Re-check when the updater moves to zip >= 9." },
     { id = "RUSTSEC-2026-0369", reason = "zip 4.x permissions through symlinks; Windows-only via tauri-plugin-updater, signed archives only. Re-check when the updater moves to zip >= 9." },
+    # zbus 5's helper crates are no longer released on their own: zbus 6 absorbed them. They
+    # reach us only through keyring's Secret Service store (Linux keychain), and no keyring /
+    # secret-service release supports zbus 6 yet. Unmaintained, no known vulnerability.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant (zbus 5): via keyring's Linux Secret Service store; no release on zbus 6 yet. Re-check on keyring upgrades." },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names (zbus 5): via keyring's Linux Secret Service store; no release on zbus 6 yet. Re-check on keyring upgrades." },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive (zbus 5, proc macro): via keyring's Linux Secret Service store; no release on zbus 6 yet. Re-check on keyring upgrades." },
     { id = "RUSTSEC-2023-0071", reason = "Marvin timing attack; russh uses rsa only for client-side signing during login (a few operations per connection). No patched rsa release (RustCrypto/RSA#626); RSA key login must stay supported. Re-check when rsa ships a fix." },
 ]
 

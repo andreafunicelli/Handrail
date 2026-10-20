@@ -1,6 +1,7 @@
 name: Release
 
-# Every push to main builds installers (macOS universal .dmg, Windows .exe + .msi) and
+# Every push to main builds installers (macOS universal .dmg, Windows .exe + .msi, Linux
+# .AppImage + .deb + .rpm) and
 # publishes them as a GitHub Release of this repository named v<major>.<minor>.<patch>, the patch
 # one past the last release of that major.minor (the updater only offers newer versions; the
 # major.minor comes from the workspace version in Cargo.toml).
@@ -59,6 +60,7 @@ jobs:
             echo 'The builds are not code-signed yet:'
             echo '- macOS: open the .dmg, drag Handrail to Applications; the first time, open System Settings > Privacy & Security and click "Open Anyway".'
             echo '- Windows: on the SmartScreen warning click "More info" > "Run anyway".'
+            echo '- Linux (glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later): install the .deb (Debian, Ubuntu) or .rpm (Fedora, openSUSE), or make the .AppImage executable (chmod +x) and run it.'
             echo 'HANDRAIL_NOTES_EOF'
           } >> "$GITHUB_OUTPUT"
       - id: v
@@ -86,6 +88,12 @@ jobs:
             platform: windows-latest
             rust_targets: ""
             args: ""
+          # The oldest supported runner: binaries built against its glibc (2.35) also run on
+          # newer distributions, not the other way round.
+          - name: Linux x64
+            platform: ubuntu-22.04
+            rust_targets: ""
+            args: ""
     runs-on: ${{ matrix.platform }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -98,6 +106,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Install Tauri system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            build-essential \
+            file \
+            libxdo-dev
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -155,6 +177,9 @@ jobs:
             target/universal-apple-darwin/release/bundle/dmg/*.dmg
             target/release/bundle/nsis/*.exe
             target/release/bundle/msi/*.msi
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
 
   # Transition: apps installed from andreafunicelli/handrail-releases look for updates there.
   # Copy this release's latest.json (which links to the installers here) so they update to a
