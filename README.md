@@ -94,6 +94,7 @@ Import connections from `~/.ssh/config`, PuTTY, MobaXterm, mRemoteNG, WinSCP, Se
 - **Remote code editor:** syntax highlighting, multiple cursors, find and replace, minimap, and indentation guides. Saves check for remote changes and keep a `.bak` of the original.
 - **Agent-assisted edits:** ask about a file or selection, then accept or reject the proposed diff.
 - **S3-compatible storage:** work with Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO, and compatible services from the file browser.
+- **Search and select files:** in SFTP and S3 browsers, filter a folder or search its subfolders by name or pattern (`*.log`), and select many files (Ctrl/Cmd-click, Shift-click, Ctrl+A) to download, copy or delete them together.
 - **Copy between destinations:** stream files and folders between servers, or files between a server and S3, without first saving a local copy. Server-to-server transfers preserve permissions; replacements require confirmation.
 
 ### Remote desktops
