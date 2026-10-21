@@ -6,16 +6,18 @@
   import type { FileEntry } from "../../api/types";
   import { s3 } from "../../stores/s3.svelte";
   import { sessions } from "../../stores/sessions.svelte";
-  import { toasts } from "../../stores/toasts.svelte";
+  import { errorMessage, toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
   import { ui } from "../../stores/ui.svelte";
   import { alreadyExists, canCopy, s3Backend, sftpBackend, type FileBackend } from "../../util/fileBackends";
 
   /**
-   * Copy `entry` from `fs` into a folder of another file system: an open SSH session's server
-   * (or the same one), or an S3 account.
+   * Copy `entries` from `fs` into a folder of another file system: an open SSH session's server
+   * (or the same one), or an S3 account. They are copied one after the other.
    */
-  let { fs, entry, onclose }: { fs: FileBackend; entry: FileEntry; onclose: () => void } = $props();
+  let { fs, entries, onclose }: { fs: FileBackend; entries: FileEntry[]; onclose: () => void } = $props();
+  const one = $derived(entries.length === 1 ? entries[0] : null);
+  const title = $derived(one ? t("files.copyTitle", { name: one.name }) : t("files.copyTitleMany", { n: entries.length }));
 
   interface Target {
     /** `FileBackend.key` of the destination. */
@@ -39,7 +41,7 @@
       const key = `s3:${a.id}`;
       out.push({ key, kind: "s3", label: `${a.name} (S3)`, fs: open(key, () => s3Backend(a.id)) });
     }
-    return out.filter((x) => canCopy(fs, entry, x.fs));
+    return out.filter((x) => entries.every((e) => canCopy(fs, e, x.fs)));
   });
 
   // svelte-ignore state_referenced_locally
@@ -74,35 +76,41 @@
     ev.preventDefault();
     // Read everything first: closing the dialog drops its props.
     const d = dest;
-    const [src, where, item] = [fs, dir.trim(), { path: entry.path, name: entry.name, kind: entry.kind }];
+    const [src, where, items] = [fs, dir.trim(), entries.map((e) => ({ path: e.path, name: e.name, kind: e.kind }))];
     if (!d || !dirOk) return;
     onclose();
-    const run = (overwrite: boolean) => transfers.copy(src, item.path, d.fs, where, overwrite);
-    try {
-      let path: string;
+    let copied = 0;
+    let last = "";
+    for (const item of items) {
+      const run = (overwrite: boolean) => transfers.copy(src, item.path, d.fs, where, overwrite);
       try {
-        path = await run(false);
+        try {
+          last = await run(false);
+        } catch (e) {
+          if (!alreadyExists(e)) throw e;
+          const ok = await ui.ask(t("files.copyExists", { name: item.name }), {
+            body: t(item.kind === "dir" ? "files.copyMerge" : "files.copyReplace"),
+            confirmLabel: t("files.copyOverwrite"),
+            danger: true,
+          });
+          if (!ok) continue;
+          last = await run(true);
+        }
+        copied++;
       } catch (e) {
-        if (!alreadyExists(e)) throw e;
-        const ok = await ui.ask(t("files.copyExists", { name: item.name }), {
-          body: t(item.kind === "dir" ? "files.copyMerge" : "files.copyReplace"),
-          confirmLabel: t("files.copyOverwrite"),
-          danger: true,
-        });
-        if (!ok) return;
-        path = await run(true);
+        toasts.error(items.length > 1 ? `${item.name}: ${errorMessage(e)}` : e);
       }
-      toasts.success(t("files.copied", { path, where: d.label }));
-    } catch (e) {
-      toasts.error(e);
     }
+    if (copied === 1 && items.length === 1) toasts.success(t("files.copied", { path: last, where: d.label }));
+    else if (copied) toasts.success(t("files.copiedMany", { n: copied, where: d.label }));
   }
 </script>
 
-<Modal label={t("files.copyTitle", { name: entry.name })} {onclose} width="460px">
+<Modal label={title} {onclose} width="460px">
   <form class="dialog" onsubmit={go}>
-    <h2>{t("files.copyTitle", { name: entry.name })}</h2>
-    <p class="hint">{t(entry.kind === "dir" ? "files.copyBodyDir" : "files.copyBody")}</p>
+    <h2>{title}</h2>
+    {#if !one}<p class="names mono">{entries.slice(0, 6).map((e) => e.name).join(", ")}{entries.length > 6 ? ", …" : ""}</p>{/if}
+    <p class="hint">{t(entries.some((e) => e.kind === "dir") ? "files.copyBodyDir" : "files.copyBody")}</p>
     {#if !targets.length}
       <p class="hint">{t("files.copyNoTarget")}</p>
     {:else}
@@ -139,6 +147,12 @@
   }
   .hint {
     margin: 0;
+  }
+  .names {
+    margin: -6px 0 0;
+    color: var(--muted);
+    font-size: var(--fs-small);
+    overflow-wrap: anywhere;
   }
   .root {
     display: inline-flex;
