@@ -66,7 +66,11 @@ export async function searchTree(
     if (signal.aborted) break;
     state.folders++;
     for (const e of entries) {
-      if (match(e.name) && state.matches.length < limits.maxResults) state.matches.push(e);
+      if (match(e.name)) {
+        // One more match than fits: say the list is cut, even if no folder is left to walk.
+        if (state.matches.length < limits.maxResults) state.matches.push(e);
+        else state.truncated = true;
+      }
       if (e.kind === "dir" && !e.link) queue.push(e.path);
     }
     onProgress({ ...state, matches: [...state.matches] });

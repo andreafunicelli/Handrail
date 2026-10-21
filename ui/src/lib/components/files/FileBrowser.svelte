@@ -155,7 +155,9 @@
 
   function listKey(ev: KeyboardEvent) {
     const mod = ev.ctrlKey || ev.metaKey;
-    if (mod && ev.key.toLowerCase() === "a") {
+    // Text fields (path, search) keep their own Select All.
+    const typing = ev.target instanceof HTMLElement && (ev.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(ev.target.tagName));
+    if (mod && ev.key.toLowerCase() === "a" && !typing) {
       ev.preventDefault();
       sel = shown.map((e) => e.path);
     } else if (mod && ev.key.toLowerCase() === "f") {
@@ -262,7 +264,9 @@
     });
     if (!ok) return;
     const gone = new Set<string>();
-    for (const e of list) {
+    // Deepest first: a selected folder is removed after the selected things inside it.
+    const depth = (e: FileEntry) => e.path.split("/").length;
+    for (const e of [...list].sort((a, b) => depth(b) - depth(a))) {
       try {
         await fs.remove(e);
         gone.add(e.path);

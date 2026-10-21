@@ -61,6 +61,13 @@ describe("searchTree", () => {
     expect(few.truncated).toBe(true);
   });
 
+  it("says so when one folder holds more matches than fit", async () => {
+    const big = tree({ "/d": [entry("/d/a.log"), entry("/d/b.log"), entry("/d/c.log")] });
+    const r = await searchTree(big, "/d", "log", () => {}, new AbortController().signal, { maxFolders: 10, maxResults: 2 });
+    expect(r.matches).toHaveLength(2);
+    expect(r.truncated).toBe(true);
+  });
+
   it("stops when aborted", async () => {
     const ctl = new AbortController();
     const seen: number[] = [];
