@@ -85,6 +85,7 @@ export function createTauriApi(): Api {
     s3Mkdir: (account_id, path) => invoke("s3_mkdir", { account_id, path }),
     s3Rename: (account_id, from, to, is_dir) => invoke("s3_rename", { account_id, from, to, is_dir }),
     s3Remove: (account_id, path, is_dir) => invoke("s3_remove", { account_id, path, is_dir }),
+    s3ReadText: (account_id, path) => invoke("s3_read_text", { account_id, path }),
     s3Download: (account_id, path, transfer_id) => invoke("s3_download", { account_id, path, transfer_id }),
     s3Upload: (account_id, local_path, dir, transfer_id) => invoke("s3_upload", { account_id, local_path, dir, transfer_id }),
     listSnippets: () => invoke("list_snippets"),

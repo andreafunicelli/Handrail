@@ -19,6 +19,8 @@
   const doc = $derived(editors.docs[docId]);
   const dirty = $derived(editors.dirty(docId));
   const pending = $derived(!!doc?.proposal && !doc.proposal.accepted);
+  /** A file system the editor cannot save to (S3): the file is shown, not edited. */
+  const readOnly = $derived(!!doc && !doc.fs.writeText);
 
   let host = $state<HTMLDivElement>();
   let diffHost = $state<HTMLDivElement>();
@@ -80,6 +82,7 @@
           else settings.zoomEditor(a === "zoomIn" ? 1 : a === "zoomOut" ? -1 : 0);
         },
         onContextMenu: editMenu,
+        readOnly: !doc.fs.writeText,
       });
     });
     cm = ed;
@@ -169,15 +172,15 @@
       x: ev.clientX,
       y: ev.clientY,
       items: [
-        { label: t("edit.cut"), shortcut: `${mod}X`, disabled: !sel || pending, action: () => command("cut") },
+        ...(readOnly ? [] : [{ label: t("edit.cut"), shortcut: `${mod}X`, disabled: !sel || pending, action: () => command("cut") }]),
         { label: t("edit.copy"), icon: "copy", shortcut: `${mod}C`, disabled: !sel, action: () => command("copy") },
-        { label: t("edit.paste"), shortcut: `${mod}V`, disabled: pending, action: () => command("paste") },
+        ...(readOnly ? [] : [{ label: t("edit.paste"), shortcut: `${mod}V`, disabled: pending, action: () => command("paste") }]),
         "sep",
         { label: t("edit.find"), icon: "search", shortcut: `${mod}F`, action: () => command("find") },
-        { label: t("edit.replace"), shortcut: `${mod}H`, action: () => command("replace") },
+        ...(readOnly ? [] : [{ label: t("edit.replace"), shortcut: `${mod}H`, action: () => command("replace") }]),
         { label: t("edit.gotoLine"), icon: "jump", shortcut: `${mod}G`, action: () => command("gotoLine") },
         "sep",
-        { label: t("edit.toggleComment"), shortcut: `${mod}/`, action: () => command("comment") },
+        ...(readOnly ? [] : [{ label: t("edit.toggleComment"), shortcut: `${mod}/`, action: () => command("comment") }]),
         { label: t("edit.selectMatches"), shortcut: `${mod}Shift+L`.replace("⌘Shift+", "⇧⌘"), disabled: !sel, action: () => command("selectMatches") },
         { label: t("edit.selectAll"), shortcut: `${mod}A`, action: () => command("selectAll") },
         ...(doc?.fs.sessionId
@@ -250,14 +253,17 @@
       </span>
       {#if doc.fs.root}<span class="pill warn">root</span>{/if}
       {#if !doc.stamp && !doc.loading && !doc.error}<span class="pill">{t("edit.newFile")}</span>{/if}
+      {#if readOnly}<span class="pill" title={t("edit.readOnlyHint")}>{t("edit.readOnly")}</span>{/if}
       {#if dirty}<span class="dirty" title={t("edit.unsaved")} aria-label={t("edit.unsaved")}>●</span>{/if}
       <span class="grow"></span>
       <button class="icon-btn" title={`${t("edit.find")} (${mod}F)`} aria-label={t("edit.find")} disabled={!ready || pending} onclick={() => command("find")}><Icon name="search" size={14} /></button>
       <button class="icon-btn" title={t("edit.view")} aria-label={t("edit.view")} aria-haspopup="menu" onclick={viewMenu}><Icon name="layout" size={14} /></button>
       <button class="icon-btn" title={t("edit.reload")} aria-label={t("edit.reload")} disabled={doc.loading || !doc.stamp} onclick={reload}><Icon name="refresh" size={14} /></button>
-      <BusyButton class="sm primary" title={t("edit.saveHint", { name: doc.name })} busy={doc.saving} busyLabel={t("edit.saving")} disabled={!dirty || pending} onclick={() => save()}>
-        {t("edit.save")}
-      </BusyButton>
+      {#if !readOnly}
+        <BusyButton class="sm primary" title={t("edit.saveHint", { name: doc.name })} busy={doc.saving} busyLabel={t("edit.saving")} disabled={!dirty || pending} onclick={() => save()}>
+          {t("edit.save")}
+        </BusyButton>
+      {/if}
     </div>
 
     {#if pending && doc.proposal}

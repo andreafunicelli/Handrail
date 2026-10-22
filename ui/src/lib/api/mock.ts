@@ -1194,6 +1194,17 @@ export function createMockApi(): Api {
         b.objects.delete(key + "/");
       } else b.objects.delete(key);
     },
+    async s3ReadText(accountId, path) {
+      s3Account(accountId);
+      await sleep(80);
+      const { b, key } = s3Object(path);
+      const o = b.objects.get(key);
+      if (!o) throw fail("not_found", "NoSuchKey: The specified key does not exist.");
+      if (o.size > 5 * 1024 * 1024) throw fail("invalid", `${key} is larger than 5242880 bytes; files that big are not opened`);
+      if (/\.(gz|zip|tar|png|jpg|bin)$/.test(key)) throw fail("invalid", `${path} is a binary file`);
+      const text = texts.get(path) ?? `# ${key.split("/").pop()}\n\nStored in S3 (mock): ${path}\nThis copy is read-only in Handrail.\n`;
+      return { text, stamp: { size: text.length, modified: null, hash: hashOf(text) } };
+    },
     async s3Download(accountId, path, transfer_id) {
       s3Account(accountId);
       const { b, key } = s3Object(path);

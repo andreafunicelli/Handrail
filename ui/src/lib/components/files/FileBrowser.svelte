@@ -383,7 +383,7 @@
       x: ev.clientX,
       y: ev.clientY,
       items: [
-        ...(isFile && fs.readText ? [{ label: t("files.edit"), icon: "edit" as const, action: () => edit(e) }] : []),
+        ...(isFile && fs.readText ? [{ label: t(fs.writeText ? "files.edit" : "files.view"), icon: (fs.writeText ? "edit" : "file") as "edit" | "file", action: () => edit(e) }] : []),
         isFile ? { label: t("files.download"), icon: "download", action: () => download(e) } : { label: t("files.open"), icon: "folder", action: () => go(e.path) },
         { label: t("files.copyPath"), icon: "copy", action: () => void copyPath(e.path) },
         // Folders only go server to server; files also between a server and S3.
