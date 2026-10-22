@@ -185,6 +185,8 @@ export interface Api {
   /** Files only: S3 folders are key prefixes. */
   s3Rename(accountId: string, from: string, to: string, isDir: boolean): Promise<void>;
   s3Remove(accountId: string, path: string, isDir: boolean): Promise<void>;
+  /** An object as text, for the read-only editor; rejects binaries and objects over 5 MB. */
+  s3ReadText(accountId: string, path: string): Promise<TextFile>;
   s3Download(accountId: string, path: string, transferId: string): Promise<string>;
   s3Upload(accountId: string, localPath: string, dir: string, transferId: string): Promise<string>;
 

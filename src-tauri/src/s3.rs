@@ -2,7 +2,10 @@
 //! buckets. Transfers share the SFTP browser's Downloads handling and progress events.
 
 use crate::cmd_vault::secret_value;
-use crate::sftp::{downloads, free_local_path, local_name, picked_name, reporter, FileEntry};
+use crate::sftp::{
+    as_text, downloads, free_local_path, local_name, picked_name, reporter, FileEntry, Stamp,
+    TextFile, MAX_TEXT,
+};
 use crate::state::AppState;
 use aht_core::model::S3Account;
 use aht_core::{Error, Result};
@@ -185,6 +188,26 @@ pub async fn s3_remove(
 }
 
 /// Download an object into the Downloads folder; returns the local path.
+/// Read an object as text for the editor, which shows it read-only (S3 has no in-place edits:
+/// saving would replace the whole object). Same size and text checks as SFTP files.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn s3_read_text(
+    state: State<'_, AppState>,
+    account_id: String,
+    path: String,
+) -> Result<TextFile> {
+    let (bucket, key) = object(&path)?;
+    let bytes = client(&state, &account_id)
+        .await?
+        .read_all(&bucket, &key, MAX_TEXT)
+        .await?;
+    let stamp = Stamp::of_bytes(&bytes);
+    Ok(TextFile {
+        text: as_text(&path, bytes)?,
+        stamp,
+    })
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn s3_download(
     app: AppHandle,

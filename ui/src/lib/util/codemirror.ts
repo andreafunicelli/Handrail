@@ -310,6 +310,8 @@ export function createEditor(
     /** Keyboard view toggles: word wrap (Alt+Z) and zoom (Ctrl +, -, 0). */
     onView: (action: "wrap" | "zoomIn" | "zoomOut" | "zoomReset") => void;
     onContextMenu: (ev: MouseEvent) => void;
+    /** View only: the text can be selected, searched and copied, not changed. */
+    readOnly?: boolean;
   },
 ): EditorHandle {
   const lang = new Compartment();
@@ -335,6 +337,7 @@ export function createEditor(
         ]),
         basicSetup,
         theme,
+        o.readOnly ? EditorState.readOnly.of(true) : [],
         syntaxHighlighting(highlight),
         lang.of(byId(o.language).load()),
         view_.of(viewExtensions(o.prefs)),

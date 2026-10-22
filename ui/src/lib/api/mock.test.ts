@@ -182,6 +182,10 @@ describe("mock api", () => {
     expect((await api.s3List(aws.id, "/")).map((e) => e.name)).toContain("backups");
     const top = await api.s3List(r2.id, "/backups");
     expect(top.map((e) => `${e.kind}:${e.name}`)).toEqual(["dir:db", "dir:site", "file:README.txt"]);
+    // Text objects open (read-only) in the editor; binaries do not.
+    expect((await api.s3ReadText(r2.id, "/backups/README.txt")).text).toContain("README.txt");
+    const [dump] = (await api.s3List(r2.id, "/backups/db")).filter((e) => e.name.endsWith(".gz"));
+    await expect(api.s3ReadText(r2.id, dump.path)).rejects.toMatchObject({ kind: "invalid" });
     const up = await api.s3Upload(r2.id, "/tmp/new.txt", "/backups/db", "t1");
     expect(up).toBe("/backups/db/new.txt");
     await api.s3Rename(r2.id, up, "/backups/db/renamed.txt", false);

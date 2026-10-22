@@ -249,7 +249,7 @@ pub async fn sftp_remove(
 }
 
 /// Largest file the editor opens.
-const MAX_TEXT: u64 = 5 * 1024 * 1024;
+pub(crate) const MAX_TEXT: u64 = 5 * 1024 * 1024;
 /// Error text for a file changed on the server since it was read.
 pub(crate) const CHANGED_ON_SERVER: &str = "changed_on_server";
 
@@ -269,6 +269,15 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 impl Stamp {
+    /// An S3 object as read: its size and contents hash (S3 has no Unix mtime to compare).
+    pub(crate) fn of_bytes(contents: &[u8]) -> Self {
+        Stamp {
+            size: contents.len() as u64,
+            modified: None,
+            hash: Some(sha256_hex(contents)),
+        }
+    }
+
     fn of(s: FileStamp, contents: &[u8]) -> Self {
         Stamp {
             size: s.size,
@@ -285,7 +294,7 @@ pub struct TextFile {
 }
 
 /// Bytes as editable text: UTF-8 without NUL bytes (those mean a binary file).
-fn as_text(path: &str, bytes: Vec<u8>) -> Result<String> {
+pub(crate) fn as_text(path: &str, bytes: Vec<u8>) -> Result<String> {
     if bytes.contains(&0) {
         return Err(Error::Invalid(format!("{path} is a binary file")));
     }

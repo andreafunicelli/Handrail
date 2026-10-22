@@ -528,6 +528,34 @@ impl S3Client {
         Ok(done)
     }
 
+    /// The whole object `key` in memory, refused when it is (or turns out to be) larger than
+    /// `limit` bytes, so a mislabelled huge object is not pulled down.
+    pub async fn read_all(&self, bucket: &str, key: &str, limit: u64) -> Result<Vec<u8>> {
+        let target = Target {
+            bucket: Some(bucket),
+            key,
+            query: &[],
+        };
+        let mut resp = self.call(Method::GET, target, &[]).await?;
+        let too_big = || {
+            Error::Invalid(format!(
+                "{key} is larger than {limit} bytes; files that big are not opened"
+            ))
+        };
+        let size = resp.content_length().unwrap_or(0);
+        if size > limit {
+            return Err(too_big());
+        }
+        let mut out = Vec::with_capacity(size as usize);
+        while let Some(chunk) = resp.chunk().await.map_err(net)? {
+            out.extend_from_slice(&chunk);
+            if out.len() as u64 > limit {
+                return Err(too_big());
+            }
+        }
+        Ok(out)
+    }
+
     /// Upload the local file `local` as `key` (created or replaced), up to 5 GiB.
     pub async fn upload(
         &self,

@@ -187,6 +187,7 @@ pub fn run() {
             s3::s3_mkdir,
             s3::s3_rename,
             s3::s3_remove,
+            s3::s3_read_text,
             s3::s3_download,
             s3::s3_upload,
             terminal::open_session,

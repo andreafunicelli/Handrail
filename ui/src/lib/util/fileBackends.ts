@@ -26,7 +26,7 @@ export interface FileBackend {
   root?: boolean;
   /** The SSH session these files are on (SFTP): the agent works there. */
   sessionId?: string;
-  /** Text editing (SFTP only). */
+  /** Text editing: reading (SFTP and S3). Without `writeText` the editor is read-only. */
   readText?(path: string): Promise<TextFile>;
   /** Saves unless the file changed since `expected` (null: a new file); see `api.sftpWriteText`. */
   writeText?(path: string, text: string, expected: FileStamp | null, backup: boolean): Promise<FileStamp>;
@@ -92,6 +92,8 @@ export function s3Backend(accountId: string): FileBackend {
     kind: "s3",
     home: () => api.s3Home(accountId),
     list: (p) => api.s3List(accountId, p),
+    // Read-only: no writeText, since S3 cannot change part of an object in place.
+    readText: (p) => api.s3ReadText(accountId, p),
     mkdir: (p) => api.s3Mkdir(accountId, p),
     rename: (e, to) => api.s3Rename(accountId, e.path, to, e.kind === "dir"),
     remove: (e) => api.s3Remove(accountId, e.path, e.kind === "dir"),
