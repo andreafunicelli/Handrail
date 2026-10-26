@@ -194,7 +194,14 @@ export class Sessions {
   /** Try a failed login again in the same pane. */
   retry(ref: string) {
     const p = this.pending[ref];
-    if (p) void this.connect(ref, p.connectionId);
+    if (!p) return;
+    // Made a remote desktop since (the pane's port 3389 hint): the pane becomes one.
+    if (connections.byId.get(p.connectionId)?.kind === "rdp") {
+      this.swapSession(PENDING + ref, rdpLeaf(p.connectionId));
+      delete this.pending[ref];
+      return;
+    }
+    void this.connect(ref, p.connectionId);
   }
 
   /** Answer the pane's login prompt (`null` cancels the login). */
