@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
+  import { connections } from "../../stores/connections.svelte";
   import { sessions } from "../../stores/sessions.svelte";
   import { settings } from "../../stores/settings.svelte";
 
@@ -9,6 +10,8 @@
   let { ref, focused, onclose }: { ref: string; focused: boolean; onclose: () => void } = $props();
 
   const p = $derived(sessions.pending[ref]);
+  /** SSH to the RDP port: the server drops the connection, which says nothing on its own. */
+  const rdpPort = $derived(connections.byId.get(p?.connectionId ?? "")?.port === 3389);
   let answers = $state<string[]>([]);
   let value = $state("");
   let input = $state<HTMLInputElement>();
@@ -72,6 +75,7 @@
     {/if}
   {:else if p?.error}
     <div class="line err">{p.error}</div>
+    {#if rdpPort}<div class="line dim">{t("connecting.rdpPort")}</div>{/if}
     <div class="actions">
       <button class="btn sm" onclick={() => sessions.retry(ref)}><Icon name="refresh" size={13} />{t("connecting.retry")}</button>
       <button class="btn sm ghost" onclick={onclose}>{t("connecting.close")}</button>

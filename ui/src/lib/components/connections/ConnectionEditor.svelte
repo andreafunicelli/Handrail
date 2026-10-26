@@ -61,6 +61,8 @@
   const others = (id: string) => credentials.usedBy(id, c.id);
   const envs: Environment[] = ["none", "dev", "staging", "prod"];
   const jumpCandidates = $derived(connections.list.filter((x) => x.id !== c.id && x.kind === "ssh"));
+  /** Connections reaching others through this one: it has to stay SSH for them. */
+  const jumpFor = $derived(connections.list.filter((x) => x.id !== c.id && x.jump.includes(c.id)).map((x) => x.name));
   const tunnelsOk = $derived(c.tunnels.every((x) => !tunnelProblem(x)));
   const rdp = $derived(c.kind === "rdp");
   /** RDP logs in with a saved password only (NLA needs it before the session starts). */
@@ -180,13 +182,21 @@
   </header>
 
   <form class="body" onsubmit={(e) => (e.preventDefault(), save())}>
-    {#if isNew}
-      <div class="seg kind" role="group" use:segmented aria-label={t("editor.kind")}>
-        <button type="button" aria-pressed={!rdp} onclick={() => setKind("ssh")}><Icon name="terminal" size={13} />SSH</button>
-        <button type="button" aria-pressed={rdp} onclick={() => setKind("rdp")}><Icon name="monitor" size={13} />{t("editor.kind.rdp")}</button>
-      </div>
-    {:else if rdp}
-      <p class="hint kindnote"><Icon name="monitor" size={13} />{t("editor.kind.rdp")}</p>
+    <div class="seg kind" role="group" use:segmented aria-label={t("editor.kind")}>
+      <button type="button" aria-pressed={!rdp} onclick={() => setKind("ssh")}><Icon name="terminal" size={13} />SSH</button>
+      <button
+        type="button"
+        aria-pressed={rdp}
+        disabled={!rdp && jumpFor.length > 0}
+        title={!rdp && jumpFor.length ? t("editor.kind.rdpJump", { names: jumpFor.join(", ") }) : undefined}
+        onclick={() => setKind("rdp")}><Icon name="monitor" size={13} />{t("editor.kind.rdp")}</button
+      >
+    </div>
+    {#if !rdp && c.port === 3389 && !jumpFor.length}
+      <p class="hint kindnote">
+        <Icon name="monitor" size={13} />{t("editor.kind.rdpPort")}
+        <button type="button" class="btn sm" onclick={() => setKind("rdp")}>{t("editor.kind.toRdp")}</button>
+      </p>
     {/if}
     <div class="field">
       <span class="label" id="conn-name-label">{t("editor.name")}</span>
