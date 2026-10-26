@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { Sessions } from "./sessions.svelte";
+import { Sessions, isRdp, rdpConnectionOf } from "./sessions.svelte";
+import { connections } from "./connections.svelte";
 import { leaf, splitLeaf } from "../util/layout";
-import type { SessionInfo, SessionState } from "../api/types";
+import type { Connection, SessionInfo, SessionState } from "../api/types";
 
 const info = (session_id: string, state: SessionState = "idle"): SessionInfo =>
   ({ session_id, connection_id: "c", title: session_id, env: "none", state, approval_mode: "confirm_all" }) as SessionInfo;
@@ -43,5 +44,19 @@ describe("typing in all panes", () => {
     s.infos.b = info("b", "disconnected");
     expect(s.broadcasting("t")).toBe(false);
     expect(s.inputTargets("a")).toEqual(["a"]);
+  });
+});
+
+describe("retrying a failed login", () => {
+  it("opens a remote desktop once the connection has been made one", () => {
+    const s = new Sessions();
+    const l = leaf("pending:r");
+    s.tabs = [{ id: "t", layout: l, activeLeaf: l.id }];
+    s.pending.r = { ref: "r", connectionId: "w", label: "w", target: "w", prompt: null, error: "reset" };
+    connections.list = [{ id: "w", kind: "rdp" } as Connection];
+    s.retry("r");
+    const id = (s.tabs[0].layout as { sessionId: string }).sessionId;
+    expect(isRdp(id) && rdpConnectionOf(id)).toBe("w");
+    expect(s.pending.r).toBeUndefined();
   });
 });

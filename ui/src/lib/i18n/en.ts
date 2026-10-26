@@ -175,6 +175,7 @@ export const en = {
   "connecting.hint": "Enter to send · Esc to cancel · not saved",
   "connecting.retry": "Try again",
   "connecting.close": "Close",
+  "connecting.rdpPort": "Port 3389 is the Remote Desktop port. Edit the connection and set its type to Remote desktop (RDP).",
   "tabs.workspaceSaved": "Workspace “{name}” saved",
   "tabs.deleteWorkspace": "Delete “{name}”",
   "tabs.workspaceDeleted": "Workspace “{name}” deleted",
@@ -605,6 +606,9 @@ export const en = {
 
   "editor.kind": "Connection type",
   "editor.kind.rdp": "Remote desktop (RDP)",
+  "editor.kind.rdpPort": "Port 3389 is the Remote Desktop port: an SSH login there fails.",
+  "editor.kind.toRdp": "Make it Remote desktop",
+  "editor.kind.rdpJump": "Used as a jump host by {names}, so it stays SSH",
   "editor.rdpUser": "For a domain account: DOMAIN\\user or user@domain.",
   "editor.rdpPassword": "Remote desktop needs a saved password.",
   "editor.rdpAdmin": "Administrative session (/admin)",
