@@ -74,4 +74,19 @@ describe("editor proposals", () => {
     editors.close(id);
     decide.mockRestore();
   });
+
+  it("a doc whose read was refused takes an unreadable proposal's review flow", () => {
+    const decide = vi.spyOn(api, "editProposalDecide").mockResolvedValue();
+    const first = editors.propose({ ...proposal, proposal_id: "x", path: "/root/secret" });
+    editors.close(first);
+    // As if opened from the file browser and refused.
+    const id = editors.propose({ ...proposal, proposal_id: "y", path: "/root/other", unreadable: true, original: null, stamp: null });
+    const d = editors.docs[id];
+    Object.assign(d, { unreadable: false, error: "Permission denied", denied: true });
+    d.proposal = null;
+    expect(editors.propose({ ...proposal, proposal_id: "z", path: "/root/other", unreadable: true, original: null, stamp: null })).toBe(id);
+    expect(editors.docs[id]).toMatchObject({ unreadable: true, error: null, denied: false });
+    editors.close(id);
+    decide.mockRestore();
+  });
 });

@@ -110,6 +110,8 @@
   // The proposal's diff against the current editor text.
   $effect(() => {
     const p = doc?.proposal;
+    // Rebuilt when the file is (re)read, e.g. read as root for an unreadable proposal.
+    void doc?.rev;
     if (!pending || !p || !cmMod || !diffHost) return;
     const view = untrack(() => cmMod!.createDiff(diffHost!, { original: doc.text, proposed: p.text, path: doc.path, fontSize: settings.editorFontSize }));
     return () => view.destroy();

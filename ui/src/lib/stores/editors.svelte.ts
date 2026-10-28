@@ -159,8 +159,9 @@ class Editors {
     const fs = sftpBackend(p.session_id, p.root);
     const found = this.find(fs, p.path);
     const d = found ? this.docs[found] : this.create(fs, p.path);
-    if (!found) {
-      Object.assign(d, { saved: p.original ?? "", text: p.original ?? "", stamp: p.stamp, unreadable: !!p.unreadable });
+    // An open doc keeps its contents, unless it never loaded (e.g. its read was refused).
+    if (!found || (!d.stamp && d.error && d.text === d.saved)) {
+      Object.assign(d, { saved: p.original ?? "", text: p.original ?? "", stamp: p.stamp, unreadable: !!p.unreadable, error: null, denied: false });
       d.rev++;
     }
     if (d.proposal) this.answer(d, "rejected", "replaced by a newer proposal");
