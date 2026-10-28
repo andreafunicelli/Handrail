@@ -5,7 +5,7 @@
   import FileBrowser from "../files/FileBrowser.svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
-  import type { LayoutNode, SplitDir } from "../../util/layout";
+  import { leaves, type LayoutNode, type SplitDir } from "../../util/layout";
   import { editDocOf, filesSession, isEdit, isFiles, isPending, isRdp, isS3, pendingRef, rdpConnectionOf, s3AccountOf, sessions } from "../../stores/sessions.svelte";
   import RdpView from "../rdp/RdpView.svelte";
   import EditorPane from "../editor/EditorPane.svelte";
@@ -13,9 +13,17 @@
   import { s3Backend, sftpBackend } from "../../util/fileBackends";
   import { toasts } from "../../stores/toasts.svelte";
 
-  let { node, tabId, multi = false }: { node: LayoutNode; tabId: string; multi?: boolean } = $props();
+  let { node, tabId, multi = false, zoomed = false }: { node: LayoutNode; tabId: string; multi?: boolean; zoomed?: boolean } = $props();
+
+  /** The tab's other panes, to switch to while only one shows. */
+  const others = $derived.by(() => {
+    if (!zoomed || node.type !== "leaf") return [];
+    const tab = sessions.tabs.find((x) => x.id === tabId);
+    return tab ? leaves(tab.layout).filter((l) => l.id !== node.id) : [];
+  });
 
   const DT_TAB = "application/x-aht-tab";
+  const zoomKey = typeof navigator !== "undefined" && /Mac|iP/.test(navigator.platform) ? "⌘⇧↵" : "Ctrl+Shift+Enter";
   const DT_CONN = "application/x-aht-connection";
 
   let el = $state<HTMLDivElement>();
@@ -111,7 +119,26 @@
         <span class="dot {info?.state ?? ''}"></span>
         <span class="env-tick env-{info?.env ?? 'none'}"></span>
         <span class="ptitle">{sessions.paneTitle(node.sessionId)}</span>
+        {#if others.length}
+          <div class="others" role="group" aria-label={t("tabs.otherPanes")}>
+            {#each others as o (o.id)}
+              <button class="other" title={sessions.paneTitle(o.sessionId)} onclick={() => sessions.focus(tabId, o.id)}>{sessions.paneTitle(o.sessionId)}</button>
+            {/each}
+          </div>
+        {/if}
         {#if bcast}<button class="bpill" title={t("tabs.broadcastStop")} onclick={() => sessions.toggleBroadcast(tabId)}>{t("tabs.broadcastPill")}</button>{/if}
+        <button class="icon-btn" title={t("tabs.detachPane")} aria-label={t("tabs.detachPane")} onclick={() => sessions.detachPane(tabId, node.id)}>
+          <Icon name="detach" size={12} />
+        </button>
+        <button
+          class="icon-btn"
+          title={`${t(zoomed ? "tabs.restorePanes" : "tabs.maximizePane")} (${zoomKey})`}
+          aria-label={t(zoomed ? "tabs.restorePanes" : "tabs.maximizePane")}
+          aria-pressed={zoomed}
+          onclick={() => sessions.toggleZoom(tabId, node.id)}
+        >
+          <Icon name={zoomed ? "minimize" : "maximize"} size={12} />
+        </button>
         <button class="icon-btn" title={t("tabs.closePane")} aria-label={t("tabs.closePane")} onclick={() => sessions.closePane(tabId, node.id)}>
           <Icon name="x" size={12} />
         </button>
@@ -230,6 +257,30 @@
   .pane-head .icon-btn {
     width: 20px;
     height: 20px;
+  }
+  .others {
+    display: flex;
+    gap: 4px;
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+  }
+  .other {
+    max-width: 160px;
+    height: 18px;
+    padding: 0 8px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 0 1 auto;
+  }
+  .other:hover {
+    color: var(--text);
+    border-color: var(--accent-line);
   }
   .ptitle {
     flex: 1;

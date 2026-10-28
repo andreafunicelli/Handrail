@@ -6,6 +6,7 @@
   import type { ApprovalMode } from "../../api/types";
   import { fuzzyFilter } from "../../util/fuzzy";
   import { groupPath } from "../../util/tree";
+  import { findLeaf, leaves } from "../../util/layout";
   import { needsTypedConfirm } from "../../util/approval";
   import { connections, blankConnection } from "../../stores/connections.svelte";
   import { snippets } from "../../stores/snippets.svelte";
@@ -84,6 +85,11 @@
     for (const p of pages)
       out.push({ id: "s:" + p, label: t("palette.settings", { page: t(`settings.${p}` as MessageKey) }), icon: "settings", group: "actions", run: () => ui.openSettings(p) });
     const tab = sessions.activeTab;
+    if (tab && tab.layout.type === "split") {
+      const zoomed = !!sessions.zoomedLeaf(tab);
+      out.push({ id: "zoom", label: t(zoomed ? "tabs.restorePanes" : "tabs.maximizePane"), hint: /Mac|iP/.test(navigator.platform) ? "⌘⇧↵" : "Ctrl+Shift+Enter", icon: zoomed ? "minimize" : "maximize", group: "actions", run: () => sessions.toggleZoom(tab.id) });
+      out.push({ id: "detach", label: t("tabs.detachPane"), hint: sessions.paneTitle((findLeaf(tab.layout, tab.activeLeaf) ?? leaves(tab.layout)[0]).sessionId), icon: "detach", group: "actions", run: () => sessions.detachPane(tab.id, tab.activeLeaf) });
+    }
     if (tab && (sessions.broadcast[tab.id] || sessions.broadcastTargets(tab.id).length > 1))
       out.push({
         id: "broadcast",

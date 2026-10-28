@@ -29,6 +29,8 @@ export interface Tab {
   id: string;
   layout: LayoutNode;
   activeLeaf: string;
+  /** Show only the active pane (the others stay open, one click away). */
+  zoomed?: boolean;
 }
 
 /** Saved workspace: layout whose leaves reference connection ids ("local" for local shells). */
@@ -547,6 +549,17 @@ export class Sessions {
     this.tabs = this.tabs.filter((t) => t.id !== srcTabId).map((t) => (t.id === dstTabId ? { ...t, layout, activeLeaf: src.activeLeaf } : t));
     delete this.broadcast[srcTabId];
     this.activeTabId = dstTabId;
+  }
+
+  /** Show only the active pane of `tabId`, or all of them again. */
+  toggleZoom(tabId: string, leafId?: string) {
+    this.updateTab(tabId, (t) => ({ ...t, zoomed: !t.zoomed, activeLeaf: leafId ?? t.activeLeaf }));
+  }
+
+  /** Whether `tab` shows only its active pane (meaningful with more than one). */
+  zoomedLeaf(tab: Tab) {
+    if (!tab.zoomed || tab.layout.type === "leaf") return null;
+    return findLeaf(tab.layout, tab.activeLeaf) ?? leaves(tab.layout)[0];
   }
 
   /** Pull a pane out of its split into its own tab. */
