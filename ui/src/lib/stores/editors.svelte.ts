@@ -32,6 +32,8 @@ export interface EditorDoc {
   conflict: boolean;
   /** The last save was refused for lack of permission (saving as root may help). */
   denied: boolean;
+  /** Only root may read the file (an agent's proposal for it): read it as root to review. */
+  unreadable: boolean;
   /** The original went to `<path>.bak` during this editing session. */
   backedUp: boolean;
   proposal: Proposal | null;
@@ -69,6 +71,7 @@ class Editors {
       error: null,
       conflict: false,
       denied: false,
+      unreadable: false,
       backedUp: false,
       proposal: null,
       rev: 0,
@@ -100,7 +103,7 @@ class Editors {
     d.error = null;
     try {
       const f = await d.fs.readText(d.path);
-      Object.assign(d, { saved: f.text, text: f.text, stamp: f.stamp, conflict: false });
+      Object.assign(d, { saved: f.text, text: f.text, stamp: f.stamp, conflict: false, unreadable: false });
       d.rev++;
     } catch (e) {
       d.error = errorMessage(e);
@@ -157,7 +160,7 @@ class Editors {
     const found = this.find(fs, p.path);
     const d = found ? this.docs[found] : this.create(fs, p.path);
     if (!found) {
-      Object.assign(d, { saved: p.original ?? "", text: p.original ?? "", stamp: p.stamp });
+      Object.assign(d, { saved: p.original ?? "", text: p.original ?? "", stamp: p.stamp, unreadable: !!p.unreadable });
       d.rev++;
     }
     if (d.proposal) this.answer(d, "rejected", "replaced by a newer proposal");
@@ -168,7 +171,8 @@ class Editors {
   /** Accept the proposal: it replaces the editor text and is saved; the agent hears the result. */
   async accept(id: string) {
     const d = this.docs[id];
-    if (!d?.proposal) return;
+    // Unread, the file would be replaced blind: it has to be read (as root) first.
+    if (!d?.proposal || d.unreadable) return;
     d.text = d.proposal.text;
     d.proposal.accepted = true;
     d.rev++;

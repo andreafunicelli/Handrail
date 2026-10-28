@@ -701,6 +701,8 @@ export const en = {
   "edit.overwrite": "Overwrite",
   "edit.reloadDiscard": "Reload (lose my changes)",
   "edit.saveAsRoot": "Save as root",
+  "edit.unreadable": "The server lets only root read this file, so the change can't be compared with it yet. Read it as root (sudo) to review the diff.",
+  "edit.readAsRoot": "Read as root",
   "edit.giveUp": "Tell the agent it failed",
   "edit.askPlaceholder": "Ask the agent about this file or the selection…",
   "edit.ask": "Ask",

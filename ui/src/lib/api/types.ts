@@ -300,7 +300,9 @@ export interface EditProposal {
   path: string;
   /** Read through the root SFTP server; saving must use it too. */
   root: boolean;
-  /** Current contents; null for a new file. */
+  /** The SSH user may not read the file: reading it as root (sudo) shows the diff. */
+  unreadable?: boolean;
+  /** Current contents; null for a new file (or an unreadable one). */
   original: string | null;
   stamp: FileStamp | null;
   proposed: string;

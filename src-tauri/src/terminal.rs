@@ -1027,7 +1027,9 @@ struct EditProposal {
     path: String,
     /// Proposed through the root (sudo) SFTP server: saving needs it too.
     root: bool,
-    /// Current contents and stamp; `None` for a new file.
+    /// The SSH user may not read the file: the user can read it as root (sudo) to review it.
+    unreadable: bool,
+    /// Current contents and stamp; `None` for a new file (or an unreadable one).
     original: Option<String>,
     stamp: Option<crate::sftp::Stamp>,
     proposed: String,
@@ -1073,11 +1075,25 @@ async fn propose_edit(
         .lock()
         .unwrap()
         .contains(&req.session_id);
-    let sftp = crate::sftp::client(&state, req.session_id, Some(root)).await?;
-    let (original, stamp) = match crate::sftp::read_text(&sftp, &req.path).await {
-        Ok(t) => (Some(t.text), Some(t.stamp)),
-        Err(Error::NotFound(_)) => (None, None),
-        Err(e) => return Err(e),
+    let refused = |e: Error| match e {
+        // Said plainly: the bare "permission denied" read to agents as Handrail refusing them.
+        Error::Denied(m) => Error::Denied(format!(
+            "the server refused {} to the SSH user over SFTP ({m}); this is a file permission on \
+             the server, not a Handrail restriction. Ask the user to open the file browser in \
+             root mode, or to edit the file themselves",
+            req.path
+        )),
+        e => e,
+    };
+    let sftp = crate::sftp::client(&state, req.session_id, Some(root))
+        .await
+        .map_err(refused)?;
+    let (original, stamp, unreadable) = match crate::sftp::read_text(&sftp, &req.path).await {
+        Ok(t) => (Some(t.text), Some(t.stamp), false),
+        Err(Error::NotFound(_)) => (None, None, false),
+        // Only root may read it: the user can switch the review to root (sudo) themselves.
+        Err(Error::Denied(_)) if !root => (None, None, true),
+        Err(e) => return Err(refused(e)),
     };
     let id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
@@ -1097,6 +1113,7 @@ async fn propose_edit(
             session_id: req.session_id,
             path: req.path.clone(),
             root,
+            unreadable,
             original,
             stamp,
             proposed: req.content,

@@ -131,6 +131,18 @@
     }
   }
 
+  /** An agent's proposal for a file only root can read: read it as root, then review the diff. */
+  async function readAsRoot() {
+    try {
+      const r = await sudo.elevate(doc.fs);
+      if (!r) return;
+      editors.switchFs(docId, r);
+      await editors.load(docId);
+    } catch (e) {
+      toasts.error(e);
+    }
+  }
+
   async function reload() {
     if (dirty && !(await ui.ask(t("edit.discardTitle", { name: doc.name }), { body: t("edit.discardBody"), confirmLabel: t("edit.discard"), danger: true }))) return;
     await editors.load(docId);
@@ -252,7 +264,7 @@
         <span class="dir">{doc.path.slice(0, doc.path.length - doc.name.length)}</span><span class="name">{doc.name}</span>
       </span>
       {#if doc.fs.root}<span class="pill warn">root</span>{/if}
-      {#if !doc.stamp && !doc.loading && !doc.error}<span class="pill">{t("edit.newFile")}</span>{/if}
+      {#if !doc.stamp && !doc.loading && !doc.error && !doc.unreadable}<span class="pill">{t("edit.newFile")}</span>{/if}
       {#if readOnly}<span class="pill" title={t("edit.readOnlyHint")}>{t("edit.readOnly")}</span>{/if}
       {#if dirty}<span class="dirty" title={t("edit.unsaved")} aria-label={t("edit.unsaved")}>●</span>{/if}
       <span class="grow"></span>
@@ -275,8 +287,14 @@
         </div>
         <input class="input note" bind:value={note} placeholder={t("edit.notePlaceholder")} />
         <button class="btn sm ghost" onclick={reject}>{t("edit.reject")}</button>
-        <button class="btn sm primary" disabled={doc.saving} onclick={() => editors.accept(docId)}>{t("edit.accept")}</button>
+        <button class="btn sm primary" disabled={doc.saving || doc.unreadable} onclick={() => editors.accept(docId)}>{t("edit.accept")}</button>
       </div>
+      {#if doc.unreadable}
+        <div class="banner warn" role="alert">
+          <span class="grow">{t("edit.unreadable")}</span>
+          {#if doc.fs.asRoot}<button class="btn sm" onclick={readAsRoot}><Icon name="shield" size={13} />{t("edit.readAsRoot")}</button>{/if}
+        </div>
+      {/if}
     {/if}
     {#if doc.conflict}
       <div class="banner warn" role="alert">
