@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Sessions, isRdp, rdpConnectionOf } from "./sessions.svelte";
 import { connections } from "./connections.svelte";
-import { leaf, splitLeaf } from "../util/layout";
+import { findLeafBySession, leaf, leaves, splitLeaf } from "../util/layout";
 import type { Connection, SessionInfo, SessionState } from "../api/types";
 
 const info = (session_id: string, state: SessionState = "idle"): SessionInfo =>
@@ -58,5 +58,27 @@ describe("retrying a failed login", () => {
     const id = (s.tabs[0].layout as { sessionId: string }).sessionId;
     expect(isRdp(id) && rdpConnectionOf(id)).toBe("w");
     expect(s.pending.r).toBeUndefined();
+  });
+});
+
+describe("one pane at a time", () => {
+  it("shows only the active pane, follows focus, and moves a pane to its own tab", () => {
+    const s = setup();
+    const tab = s.tabs[0];
+    expect(s.zoomedLeaf(tab)).toBeNull();
+    const b = findLeafBySession(tab.layout, "b")!;
+    s.toggleZoom("t", b.id);
+    expect(s.zoomedLeaf(s.tabs[0])?.sessionId).toBe("b");
+    // Switching pane keeps showing one: the newly focused one.
+    const a = findLeafBySession(tab.layout, "a")!;
+    s.focus("t", a.id);
+    expect(s.zoomedLeaf(s.tabs[0])?.sessionId).toBe("a");
+    s.toggleZoom("t");
+    expect(s.zoomedLeaf(s.tabs[0])).toBeNull();
+    s.detachPane("t", b.id);
+    expect(s.tabs).toHaveLength(2);
+    expect(leaves(s.tabs[0].layout).map((l) => l.sessionId)).not.toContain("b");
+    expect(s.tabs[1].layout).toMatchObject({ type: "leaf", sessionId: "b" });
+    expect(s.activeTabId).toBe(s.tabs[1].id);
   });
 });

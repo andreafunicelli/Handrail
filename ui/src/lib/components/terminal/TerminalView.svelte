@@ -96,7 +96,7 @@
         return false;
       }
       // Leave app shortcuts to the window handler.
-      if (mod && !e.altKey && (["k", "j", ","].includes(k) || (e.shiftKey && ["t", "w"].includes(k)) || e.key === "Tab")) return false;
+      if (mod && !e.altKey && (["k", "j", ","].includes(k) || (e.shiftKey && ["t", "w", "enter"].includes(k)) || e.key === "Tab")) return false;
       return true;
     });
 

@@ -115,6 +115,9 @@
     } else if (e.key === "Tab") {
       e.preventDefault();
       sessions.cycleTab(e.shiftKey ? -1 : 1);
+    } else if (e.key === "Enter" && e.shiftKey && sessions.activeTab && sessions.activeTab.layout.type === "split") {
+      e.preventDefault();
+      sessions.toggleZoom(sessions.activeTab.id);
     }
   }
 
@@ -146,7 +149,12 @@
     <div class="panes">
       {#if sessions.activeTab}
         {#key sessions.activeTab.id}
-          <PaneTree node={sessions.activeTab.layout} tabId={sessions.activeTab.id} multi={leaves(sessions.activeTab.layout).length > 1} />
+          {@const zoomed = sessions.zoomedLeaf(sessions.activeTab)}
+          {#if zoomed}
+            <PaneTree node={zoomed} tabId={sessions.activeTab.id} multi zoomed />
+          {:else}
+            <PaneTree node={sessions.activeTab.layout} tabId={sessions.activeTab.id} multi={leaves(sessions.activeTab.layout).length > 1} />
+          {/if}
         {/key}
       {:else}
         <StartPage />
