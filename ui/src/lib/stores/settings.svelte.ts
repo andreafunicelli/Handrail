@@ -20,7 +20,11 @@ interface Prefs {
   editorFontSize: number;
   /** The bar under SSH terminals: server load and tunnels. */
   sessionBar: boolean;
+  /** `nano file` / `vim file` typed in an SSH terminal: ask, open in the editor, or just run it. */
+  terminalEditor: TerminalEditorChoice;
 }
+
+export type TerminalEditorChoice = "ask" | "editor" | "terminal";
 
 const DEFAULTS: Prefs = {
   theme: "dark",
@@ -36,6 +40,7 @@ const DEFAULTS: Prefs = {
   editorGuides: true,
   editorFontSize: 13,
   sessionBar: true,
+  terminalEditor: "ask",
 };
 
 /** Local, per-device UI preferences (persisted to localStorage). */
@@ -53,6 +58,7 @@ class Settings {
   editorGuides = $state(DEFAULTS.editorGuides);
   editorFontSize = $state(DEFAULTS.editorFontSize);
   sessionBar = $state(DEFAULTS.sessionBar);
+  terminalEditor = $state<TerminalEditorChoice>(DEFAULTS.terminalEditor);
   systemDark = $state(true);
 
   resolvedTheme = $derived<"dark" | "light">(this.theme === "system" ? (this.systemDark ? "dark" : "light") : this.theme);
@@ -77,6 +83,7 @@ class Settings {
     this.editorGuides = p.editorGuides;
     this.editorFontSize = p.editorFontSize;
     this.sessionBar = p.sessionBar;
+    this.terminalEditor = p.terminalEditor;
     if (typeof window !== "undefined" && window.matchMedia) {
       const mq = window.matchMedia("(prefers-color-scheme: dark)");
       this.systemDark = mq.matches;
@@ -98,6 +105,7 @@ class Settings {
           editorGuides: this.editorGuides,
           editorFontSize: this.editorFontSize,
           sessionBar: this.sessionBar,
+          terminalEditor: this.terminalEditor,
         } satisfies Prefs);
       });
       $effect(() => {

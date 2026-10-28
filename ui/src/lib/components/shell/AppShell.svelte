@@ -20,6 +20,7 @@
   import SnippetDialogs from "../snippets/SnippetDialogs.svelte";
   import S3AccountDialog from "../s3/S3AccountDialog.svelte";
   import SudoDialog from "../files/SudoDialog.svelte";
+  import EditorOfferDialog from "../terminal/EditorOfferDialog.svelte";
   import { snippets } from "../../stores/snippets.svelte";
   import { s3 } from "../../stores/s3.svelte";
   import { t } from "../../i18n";
@@ -189,6 +190,7 @@
 {#if tour.step != null}<Tour />{/if}
 <SnippetDialogs />
 <S3AccountDialog />
+<EditorOfferDialog />
 <SudoDialog />
 {#if sessions.hostKeys[0]}{#key sessions.hostKeys[0].request_id}<HostKeyDialog req={sessions.hostKeys[0]} />{/key}{/if}
 
