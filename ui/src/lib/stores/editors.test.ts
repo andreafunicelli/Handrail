@@ -53,4 +53,40 @@ describe("editor proposals", () => {
     editors.close(id);
     decide.mockRestore();
   });
+
+  it("a file only root can read is not accepted blind; reading it shows the real diff", async () => {
+    const decide = vi.spyOn(api, "editProposalDecide").mockResolvedValue();
+    const write = vi.fn(async () => ({ size: 6, modified: 2, hash: "h2" }));
+    const id = editors.propose({ ...proposal, proposal_id: "u", path: "/root/.bashrc", unreadable: true, original: null, stamp: null });
+    const d = editors.docs[id];
+    expect(d.unreadable).toBe(true);
+    d.fs = { ...d.fs, writeText: write, readText: async () => ({ text: "a = 1\n", stamp: { size: 6, modified: 1, hash: "h1" } }) } as FileBackend;
+    await editors.accept(id);
+    expect(write).not.toHaveBeenCalled();
+    expect(editors.docs[id].proposal?.accepted).toBe(false);
+    // Read (as root, in the pane): the proposal stays, now against the file's real contents.
+    await editors.load(id);
+    expect(editors.docs[id].unreadable).toBe(false);
+    expect(editors.docs[id].text).toBe("a = 1\n");
+    await editors.accept(id);
+    expect(write).toHaveBeenCalledOnce();
+    expect(decide).toHaveBeenCalledWith("u", "saved", null);
+    editors.close(id);
+    decide.mockRestore();
+  });
+
+  it("a doc whose read was refused takes an unreadable proposal's review flow", () => {
+    const decide = vi.spyOn(api, "editProposalDecide").mockResolvedValue();
+    const first = editors.propose({ ...proposal, proposal_id: "x", path: "/root/secret" });
+    editors.close(first);
+    // As if opened from the file browser and refused.
+    const id = editors.propose({ ...proposal, proposal_id: "y", path: "/root/other", unreadable: true, original: null, stamp: null });
+    const d = editors.docs[id];
+    Object.assign(d, { unreadable: false, error: "Permission denied", denied: true });
+    d.proposal = null;
+    expect(editors.propose({ ...proposal, proposal_id: "z", path: "/root/other", unreadable: true, original: null, stamp: null })).toBe(id);
+    expect(editors.docs[id]).toMatchObject({ unreadable: true, error: null, denied: false });
+    editors.close(id);
+    decide.mockRestore();
+  });
 });

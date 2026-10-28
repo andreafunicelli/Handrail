@@ -541,6 +541,7 @@ export function createMockApi(): Api {
       }
       return true;
     };
+    if (/bashrc/i.test(message) && !sh.local) return proposeRootBashrc();
     if (/nginx|gzip|config/i.test(message) && !sh.local) return proposeNginx();
     const wantsUptime = /uptime|load/i.test(message);
     // "clean …" demos a destructive command, which always asks and must be held to approve.
@@ -629,13 +630,25 @@ export function createMockApi(): Api {
     }
 
     /** Demo of propose_file_edit: turn gzip on in nginx.conf and wait for the user. */
-    async function proposeNginx() {
+    function proposeNginx() {
       const path = "/etc/nginx/nginx.conf";
-      if (!(await stream(`I'll enable gzip compression in \`${path}\`. Here is the change for you to review.\n\n`))) return finishCancelled();
       const original = textOf(path);
       const proposed = original.replace("    gzip off;\n", "    gzip on;\n    gzip_comp_level 5;\n    gzip_types text/plain text/css application/json application/javascript;\n");
+      return propose(path, original, proposed, "Enable gzip for text responses", `I'll enable gzip compression in \`${path}\`. Here is the change for you to review.\n\n`);
+    }
+
+    /** A file only root may read: the proposal arrives unreadable until the user reads it as root. */
+    function proposeRootBashrc() {
+      const path = "/root/.bashrc";
+      const original = textOf(path);
+      return propose(path, original, original + "\nalias ll='ls -alF'\n", "Add an ll alias for root", `I'll add an \`ll\` alias to \`${path}\`.\n\n`);
+    }
+
+    async function propose(path: string, original: string, proposed: string, reason: string, intro: string) {
+      if (!(await stream(intro))) return finishCancelled();
+      const unreadable = !rootActive.has(session_id) && path.startsWith("/root");
       const call_id = uuid();
-      const input = { session_id, path, content: proposed, reason: "Enable gzip for text responses" };
+      const input = { session_id, path, content: proposed, reason };
       ev({ type: "tool_call", call_id, name: "propose_file_edit", input });
       const proposal_id = uuid();
       const n = files.get(path)!;
@@ -645,8 +658,9 @@ export function createMockApi(): Api {
         session_id,
         path,
         root: rootActive.has(session_id),
-        original,
-        stamp: { size: n.size, modified: n.modified, hash: hashOf(original) },
+        unreadable,
+        original: unreadable ? null : original,
+        stamp: unreadable ? null : { size: n.size, modified: n.modified, hash: hashOf(original) },
         proposed,
         reason: input.reason,
         actor_label: actor,
@@ -655,7 +669,9 @@ export function createMockApi(): Api {
       ev({ type: "tool_result", call_id, output: { outcome: r.outcome, path, note: r.note }, is_error: false });
       await stream(
         r.outcome === "saved"
-          ? "Saved. Check the syntax and reload nginx with `sudo nginx -t && sudo systemctl reload nginx`."
+          ? path.includes("nginx")
+            ? "Saved. Check the syntax and reload nginx with `sudo nginx -t && sudo systemctl reload nginx`."
+            : `Saved \`${path}\`.`
           : r.outcome === "rejected"
             ? `Understood, I left the file as it was${r.note ? ` (${r.note})` : ""}.`
             : `The save failed: ${r.note ?? "unknown error"}.`,
