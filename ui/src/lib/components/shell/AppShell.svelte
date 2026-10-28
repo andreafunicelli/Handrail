@@ -151,7 +151,10 @@
         {#key sessions.activeTab.id}
           {@const zoomed = sessions.zoomedLeaf(sessions.activeTab)}
           {#if zoomed}
-            <PaneTree node={zoomed} tabId={sessions.activeTab.id} multi zoomed />
+            <!-- A view per pane: TerminalView attaches its terminal once, so switching panes must not reuse it. -->
+            {#key zoomed.id}
+              <PaneTree node={zoomed} tabId={sessions.activeTab.id} multi zoomed />
+            {/key}
           {:else}
             <PaneTree node={sessions.activeTab.layout} tabId={sessions.activeTab.id} multi={leaves(sessions.activeTab.layout).length > 1} />
           {/if}
