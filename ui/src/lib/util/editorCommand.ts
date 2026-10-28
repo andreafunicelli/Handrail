@@ -42,7 +42,10 @@ export function parseEditorCommand(line: string): EditorCommand | null {
   return { editor, file: files[0], sudo };
 }
 
-/** The absolute path of `file` typed in `cwd`; null when it cannot be known. */
+/**
+ * The absolute path of `file` typed in `cwd`; null when it cannot be known. `..` is left to the
+ * terminal: after a symlink it leads elsewhere than the path with the folder removed.
+ */
 export function resolveEditorPath(file: string, cwd: string | null | undefined): string | null {
   if (file.startsWith("/")) return normalize(file);
   if (!cwd?.startsWith("/")) return null;
@@ -53,8 +56,8 @@ function normalize(path: string): string | null {
   const out: string[] = [];
   for (const part of path.split("/")) {
     if (!part || part === ".") continue;
-    if (part === "..") out.pop();
-    else out.push(part);
+    if (part === "..") return null;
+    out.push(part);
   }
   return out.length ? "/" + out.join("/") : null;
 }

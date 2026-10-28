@@ -25,6 +25,10 @@ export class TermHost {
   private early: Uint8Array[] = [];
   /** Where the shell's prompt ended (OSC 133;B): the command line starts there. */
   private promptEnd: { marker: IMarker; col: number } | null = null;
+  /** Typed input not yet answered by output, and output not yet drawn: the screen may lag. */
+  private lastInput = 0;
+  private lastOutput = 0;
+  private drawing = 0;
 
   constructor(
     /** Changes when a reconnect moves this terminal to the new session. */
@@ -61,6 +65,7 @@ export class TermHost {
     this.term.onData((d) => {
       // Enter on a command the terminal hook takes over (e.g. opening a file in the editor).
       if (d === "\r" && terminals.onEnter?.(this.sessionId, () => this.commandLine())) return;
+      this.lastInput = performance.now();
       terminals.input(this.sessionId, strToB64(d));
     });
     this.term.onBinary((d) => {
@@ -99,7 +104,9 @@ export class TermHost {
 
   write(bytes: Uint8Array) {
     if (!this.opened) this.early.push(bytes);
-    this.term.write(bytes);
+    this.lastOutput = performance.now();
+    this.drawing++;
+    this.term.write(bytes, () => this.drawing--);
   }
 
   /**
@@ -110,8 +117,13 @@ export class TermHost {
     const p = this.promptEnd;
     const buf = this.term.buffer.active;
     if (!p || p.marker.isDisposed || p.marker.line < 0 || buf.type !== "normal") return null;
-    const last = buf.baseY + buf.cursorY;
+    // Keys typed since the last echo, or output still being parsed: the screen is not the line
+    // the shell has, so it cannot be trusted.
+    if (this.drawing > 0 || this.lastInput > this.lastOutput) return null;
+    let last = buf.baseY + buf.cursorY;
     if (last < p.marker.line) return null;
+    // The cursor may sit on an earlier row of a wrapped command: read to its end.
+    while (buf.getLine(last + 1)?.isWrapped) last++;
     let text = "";
     for (let y = p.marker.line; y <= last; y++) {
       const line = buf.getLine(y);
