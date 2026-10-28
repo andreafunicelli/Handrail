@@ -23,6 +23,12 @@ export class TermHost {
   private webgl: { dispose(): void } | null = null;
   /** Output received before the view opened (handed over when a reconnect adopts this host). */
   private early: Uint8Array[] = [];
+  /** Where the shell's prompt ended (OSC 133;B): the command line starts there. */
+  private promptEnd: { marker: IMarker; col: number } | null = null;
+  /** Typed input not yet answered by output, and output not yet drawn: the screen may lag. */
+  private lastInput = 0;
+  private lastOutput = 0;
+  private drawing = 0;
 
   constructor(
     /** Changes when a reconnect moves this terminal to the new session. */
@@ -45,7 +51,23 @@ export class TermHost {
       macOptionIsMeta: true,
     });
     this.term.loadAddon(this.fit);
-    this.term.onData((d) => terminals.input(this.sessionId, strToB64(d)));
+    this.term.parser.registerOscHandler(133, (data) => {
+      if (data.startsWith("B")) {
+        this.promptEnd?.marker.dispose();
+        const marker = this.term.registerMarker(0);
+        this.promptEnd = marker ? { marker, col: this.term.buffer.active.cursorX } : null;
+      } else if (data.startsWith("A") || data.startsWith("C")) {
+        this.promptEnd?.marker.dispose();
+        this.promptEnd = null;
+      }
+      return false;
+    });
+    this.term.onData((d) => {
+      // Enter on a command the terminal hook takes over (e.g. opening a file in the editor).
+      if (d === "\r" && terminals.onEnter?.(this.sessionId, () => this.commandLine())) return;
+      this.lastInput = performance.now();
+      terminals.input(this.sessionId, strToB64(d));
+    });
     this.term.onBinary((d) => {
       const bytes = Uint8Array.from(d, (c) => c.charCodeAt(0) & 0xff);
       let s = "";
@@ -82,7 +104,34 @@ export class TermHost {
 
   write(bytes: Uint8Array) {
     if (!this.opened) this.early.push(bytes);
-    this.term.write(bytes);
+    this.lastOutput = performance.now();
+    this.drawing++;
+    this.term.write(bytes, () => this.drawing--);
+  }
+
+  /**
+   * What is typed at the shell prompt (after OSC 133;B, wrapped lines joined), or null without
+   * shell integration or in a full-screen program.
+   */
+  commandLine(): string | null {
+    const p = this.promptEnd;
+    const buf = this.term.buffer.active;
+    if (!p || p.marker.isDisposed || p.marker.line < 0 || buf.type !== "normal") return null;
+    // Keys typed since the last echo, or output still being parsed: the screen is not the line
+    // the shell has, so it cannot be trusted.
+    if (this.drawing > 0 || this.lastInput > this.lastOutput) return null;
+    let last = buf.baseY + buf.cursorY;
+    if (last < p.marker.line) return null;
+    // The cursor may sit on an earlier row of a wrapped command: read to its end.
+    while (buf.getLine(last + 1)?.isWrapped) last++;
+    let text = "";
+    for (let y = p.marker.line; y <= last; y++) {
+      const line = buf.getLine(y);
+      if (!line) return null;
+      if (y > p.marker.line && !line.isWrapped) return null;
+      text += line.translateToString(y === last, y === p.marker.line ? p.col : 0);
+    }
+    return text;
   }
 
   /** Output that arrived before the view opened. */
@@ -155,6 +204,11 @@ class TermRegistry {
   input: InputRouter = writeTo;
   /** Write typed input to one session. */
   readonly write: InputRouter = writeTo;
+  /**
+   * Called on Enter with the typed command line (read on demand); returning true keeps the
+   * Enter from the shell.
+   */
+  onEnter: ((sessionId: string, line: () => string | null) => boolean) | null = null;
 
   get(sessionId: string): TermHost {
     let h = this.hosts.get(sessionId);

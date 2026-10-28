@@ -1,10 +1,11 @@
 <script lang="ts">
   import { segmented } from "../../actions/segmented";
   import { t } from "../../i18n";
-  import { settings, type Theme } from "../../stores/settings.svelte";
+  import { settings, type TerminalEditorChoice, type Theme } from "../../stores/settings.svelte";
   import { SCHEMES } from "../../terminal/schemes";
 
   const themes: Theme[] = ["dark", "light", "system"];
+  const editorChoices: TerminalEditorChoice[] = ["ask", "editor", "terminal"];
 </script>
 
 <div class="field">
@@ -26,6 +27,16 @@
   <input type="checkbox" bind:checked={settings.sessionBar} />
   <span>{t("app.sessionBar")}<span class="hint">{t("app.sessionBarHint")}</span></span>
 </label>
+
+<div class="field">
+  <span class="label">{t("app.terminalEditor")}</span>
+  <div class="seg" role="group" use:segmented aria-label={t("app.terminalEditor")}>
+    {#each editorChoices as c (c)}
+      <button aria-pressed={settings.terminalEditor === c} onclick={() => (settings.terminalEditor = c)}>{t(`app.terminalEditor.${c}`)}</button>
+    {/each}
+  </div>
+  <span class="hint">{t("app.terminalEditorHint")}</span>
+</div>
 
 <h3>{t("app.scheme")}</h3>
 <div class="schemes" role="radiogroup" aria-label={t("app.scheme")}>

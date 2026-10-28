@@ -253,7 +253,8 @@ function prompt(sh: Shell): string {
   if (sh.native) return "";
   if (sh.local) return `${C.path}PS C:\\Users\\dev>${C.reset} `;
   const host = /^[\d.]+$/.test(sh.info.host ?? "") ? sh.info.title : sh.info.host?.split(".")[0];
-  return `${C.user}${sh.info.user}@${host}${C.reset}:${C.path}${sh.cwd}${C.reset}$ `;
+  // OSC 133 prompt marks, as the backend's shell integration leaves them in the stream.
+  return `\x1b]133;A\x07${C.user}${sh.info.user}@${host}${C.reset}:${C.path}${sh.cwd}${C.reset}$ \x1b]133;B\x07`;
 }
 
 // ---------- mock API ----------
@@ -930,6 +931,10 @@ export function createMockApi(): Api {
         } else if (ch === "\x03") {
           sh.line = "";
           write(session_id, "^C\r\n" + prompt(sh));
+        } else if (ch === "\x15") {
+          // Ctrl+U: erase the typed line.
+          sh.line = "";
+          write(session_id, "\r\x1b[K" + prompt(sh));
         } else if (ch === "\x0c") {
           write(session_id, "\x1b[2J\x1b[H" + prompt(sh) + sh.line);
         } else if (ch >= " " && ch !== "\x1b") {

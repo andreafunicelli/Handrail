@@ -93,6 +93,9 @@ const isTerminal = (leafSession: string) =>
 
 export class Sessions {
   infos = $state<Record<string, SessionInfo>>({});
+  /** The user and host of each session's own login shell (its first integrated prompt): a
+   *  different host later means the user is in a shell on another machine (`ssh` inside it). */
+  homes: Record<string, { user: string | null; host: string }> = {};
   tabs = $state<Tab[]>([]);
   activeTabId = $state<string | null>(null);
   hostKeys = $state<HostKeyEvent[]>([]);
@@ -138,6 +141,7 @@ export class Sessions {
     await api.on("session://state", (info) => {
       if (!this.infos[info.session_id] && !this.tabs.some((t) => findLeafBySession(t.layout, info.session_id))) return;
       this.infos[info.session_id] = info;
+      if (info.integration === "full" && info.host && !this.homes[info.session_id]) this.homes[info.session_id] = { user: info.user, host: info.host };
       const auth = info.connection_id ? connections.byId.get(info.connection_id)?.auth.type : undefined;
       if (shouldAutoReconnect(info, auth) && !this.reconnects[info.session_id]) void this.autoReconnect(info.session_id, false);
     });
