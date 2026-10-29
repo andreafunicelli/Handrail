@@ -181,6 +181,15 @@ pub(crate) struct OpenAiDecoder {
 impl OpenAiDecoder {
     fn flush(&mut self, out: &mut Vec<ProviderEvent>) -> Result<()> {
         for (idx, t) in std::mem::take(&mut self.tools) {
+            let input = match parse_tool_args(&t.args) {
+                Ok(v) => v,
+                // The reply hit its length limit mid-arguments: report the cut, not bad JSON.
+                Err(_) if self.finish.as_deref() == Some("length") => {
+                    out.push(ProviderEvent::ToolUseCut { name: t.name });
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             out.push(ProviderEvent::ToolUse {
                 id: if t.id.is_empty() {
                     format!("call_{idx}")
@@ -188,7 +197,7 @@ impl OpenAiDecoder {
                     t.id
                 },
                 name: t.name,
-                input: parse_tool_args(&t.args)?,
+                input,
             });
         }
         Ok(())

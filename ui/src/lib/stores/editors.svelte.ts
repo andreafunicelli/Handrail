@@ -106,7 +106,12 @@ class Editors {
       Object.assign(d, { saved: f.text, text: f.text, stamp: f.stamp, conflict: false, unreadable: false });
       d.rev++;
     } catch (e) {
-      d.error = errorMessage(e);
+      if (d.unreadable && d.proposal && isIpcError(e) && e.kind === "not_found") {
+        // An agent's file in a folder only root can see, and it does not exist yet: the
+        // proposal creates it (saving with no original makes a new file).
+        Object.assign(d, { saved: "", text: "", stamp: null, conflict: false, unreadable: false });
+        d.rev++;
+      } else d.error = errorMessage(e);
     } finally {
       d.loading = false;
     }

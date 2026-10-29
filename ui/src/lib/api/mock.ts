@@ -543,6 +543,7 @@ export function createMockApi(): Api {
       return true;
     };
     if (/bashrc/i.test(message) && !sh.local) return proposeRootBashrc();
+    if (/new root file/i.test(message) && !sh.local) return propose("/root/notes.txt", "", "created by the agent\n", "Create a note for root", "I'll create `/root/notes.txt`.\n\n");
     if (/nginx|gzip|config/i.test(message) && !sh.local) return proposeNginx();
     const wantsUptime = /uptime|load/i.test(message);
     // "clean …" demos a destructive command, which always asks and must be held to approve.

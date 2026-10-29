@@ -156,6 +156,9 @@ pub(crate) struct AnthropicDecoder {
     output_tokens: u64,
     stop: Option<StopReason>,
     done: bool,
+    /// A tool block whose JSON did not parse: (tool name, parse error). The stop reason comes
+    /// after the block closes, so whether it was cut by the length limit is known only then.
+    unparsed: Option<(String, Error)>,
 }
 
 fn map_stop(r: &str) -> StopReason {
@@ -238,11 +241,10 @@ impl Decoder for AnthropicDecoder {
             "content_block_stop" => {
                 let idx = v["index"].as_u64().unwrap_or(0);
                 if let Some(Block::Tool { id, name, json }) = self.blocks.remove(&idx) {
-                    out.push(ProviderEvent::ToolUse {
-                        id,
-                        name,
-                        input: parse_tool_args(&json)?,
-                    });
+                    match parse_tool_args(&json) {
+                        Ok(input) => out.push(ProviderEvent::ToolUse { id, name, input }),
+                        Err(e) => self.unparsed = Some((name, e)),
+                    }
                 }
             }
             "message_delta" => {
@@ -258,6 +260,13 @@ impl Decoder for AnthropicDecoder {
                 }
             }
             "message_stop" => {
+                if let Some((name, e)) = self.unparsed.take() {
+                    // Cut by the length limit: report the cut. Otherwise the JSON really is bad.
+                    if self.stop != Some(StopReason::MaxTokens) {
+                        return Err(e);
+                    }
+                    out.push(ProviderEvent::ToolUseCut { name });
+                }
                 self.done = true;
                 out.push(ProviderEvent::Usage {
                     input: self.input_tokens,
