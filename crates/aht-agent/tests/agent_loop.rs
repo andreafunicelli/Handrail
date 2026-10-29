@@ -754,6 +754,57 @@ async fn thinking_past_the_models_limit_is_a_clear_error() {
     );
 }
 
+fn cut(name: &str) -> ProviderEvent {
+    ProviderEvent::ToolUseCut { name: name.into() }
+}
+
+#[tokio::test]
+async fn a_tool_call_cut_by_the_length_limit_is_retried_with_more_room() {
+    let provider = ScriptedProvider::new(vec![
+        Turn::Events(vec![
+            text("Here is the edit."),
+            cut("propose_file_edit"),
+            stop(StopReason::MaxTokens),
+        ]),
+        Turn::Events(vec![text("done"), stop(StopReason::EndTurn)]),
+    ]);
+    let mut c = cfg();
+    c.model = "deepseek-reasoner".into();
+    c.max_tokens = 32_768;
+    let mut a = agent(provider.clone(), Arc::new(MockTools::default()), c);
+    let (r, _) = run(&mut a, "x").await;
+    assert!(r.is_ok());
+    let reqs = provider.requests();
+    assert_eq!(
+        reqs.iter().map(|r| r.max_tokens).collect::<Vec<_>>(),
+        [32_768, 65_536]
+    );
+    // The cut reply is not kept: the retry sees only the user's message.
+    assert_eq!(reqs[1].messages.len(), 1);
+}
+
+#[tokio::test]
+async fn a_tool_call_too_large_for_the_model_is_a_clear_error() {
+    let provider =
+        ScriptedProvider::repeating(vec![cut("propose_file_edit"), stop(StopReason::MaxTokens)]);
+    let mut c = cfg();
+    c.model = "deepseek-chat".into();
+    c.max_tokens = 8_192;
+    let mut a = agent(provider.clone(), Arc::new(MockTools::default()), c);
+    let (r, evs) = run(&mut a, "x").await;
+    assert!(r.is_err());
+    assert_eq!(
+        provider.requests().len(),
+        1,
+        "no retry beyond the model's limit"
+    );
+    assert!(
+        matches!(evs.iter().find(|e| matches!(e, AgentEvent::Error { .. })),
+        Some(AgentEvent::Error { message, retryable: false })
+            if message.contains("length limit") && message.contains("propose_file_edit"))
+    );
+}
+
 #[test]
 fn reply_budgets_fit_the_model() {
     use aht_agent::default_max_tokens as m;

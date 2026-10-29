@@ -545,6 +545,101 @@ async fn cancel_ends_stream_without_error() {
     assert!(items.iter().all(|i| i.is_ok()));
 }
 
+// ----------------------------------------------------------- length-limit cuts
+
+#[tokio::test]
+async fn openai_tool_call_cut_by_the_length_limit_is_reported_not_a_json_error() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"propose_file_edit","arguments":"{\"path\":\"/etc/x\",\"content\":\"aaaa"}}]},"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}"#,
+        "\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(sse(body))
+        .mount(&server)
+        .await;
+    let p = openai(&server);
+    let s = p.stream(req("m"), CancellationToken::new()).await.unwrap();
+    let items: Vec<_> = s.collect().await;
+    assert!(items.iter().all(|i| i.is_ok()), "{items:?}");
+    let evs: Vec<_> = items.into_iter().map(|i| i.unwrap()).collect();
+    assert!(evs.contains(&ProviderEvent::ToolUseCut {
+        name: "propose_file_edit".into()
+    }));
+    assert!(evs.contains(&ProviderEvent::Stop {
+        reason: StopReason::MaxTokens
+    }));
+}
+
+#[tokio::test]
+async fn openai_bad_tool_json_without_a_length_stop_is_still_an_error() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"run_command","arguments":"{\"command\": oops"}}]},"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#,
+        "\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(sse(body))
+        .mount(&server)
+        .await;
+    let p = openai(&server);
+    let s = p.stream(req("m"), CancellationToken::new()).await.unwrap();
+    let items: Vec<_> = s.collect().await;
+    assert!(items.iter().any(|i| i.is_err()));
+}
+
+#[tokio::test]
+async fn anthropic_tool_call_cut_by_max_tokens_is_reported() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        "event: message_start\n",
+        r#"data: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":1}}}"#,
+        "\n\n",
+        "event: content_block_start\n",
+        r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"propose_file_edit","input":{}}}"#,
+        "\n\n",
+        "event: content_block_delta\n",
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"/etc/x\",\"content\":\"aaa"}}"#,
+        "\n\n",
+        "event: content_block_stop\n",
+        r#"data: {"type":"content_block_stop","index":0}"#,
+        "\n\n",
+        "event: message_delta\n",
+        r#"data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":100}}"#,
+        "\n\n",
+        "event: message_stop\n",
+        r#"data: {"type":"message_stop"}"#,
+        "\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(sse(body))
+        .mount(&server)
+        .await;
+    let p = AnthropicProvider::new(server.uri(), Some("k".into()));
+    let s = p
+        .stream(req("claude-x"), CancellationToken::new())
+        .await
+        .unwrap();
+    let items: Vec<_> = s.collect().await;
+    assert!(items.iter().all(|i| i.is_ok()), "{items:?}");
+    let evs: Vec<_> = items.into_iter().map(|i| i.unwrap()).collect();
+    assert!(evs.contains(&ProviderEvent::ToolUseCut {
+        name: "propose_file_edit".into()
+    }));
+    assert!(evs.contains(&ProviderEvent::Stop {
+        reason: StopReason::MaxTokens
+    }));
+}
+
 // ------------------------------------------------------------- from_config
 
 fn provider(preset: ProviderPreset, kind: ProviderKind, base: &str) -> Provider {

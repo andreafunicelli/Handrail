@@ -89,6 +89,11 @@ pub enum ProviderEvent {
         name: String,
         input: Value,
     },
+    /// A tool call the length limit cut off before its arguments were complete: it cannot run.
+    /// Comes before `Stop { reason: MaxTokens }`.
+    ToolUseCut {
+        name: String,
+    },
     Usage {
         input: u64,
         output: u64,

@@ -218,6 +218,29 @@ impl Agent {
                 }
             };
             let aborted = turn.cancelled || turn.receiver_gone;
+            // A tool call the length limit cut off cannot run. Ask again with more room (kept for
+            // later turns) when the model allows it; the cut reply is not kept, the step starts
+            // over. Else say what happened instead of a JSON error the user cannot act on.
+            if let Some(name) = turn.cut_tool.as_deref().filter(|_| !aborted) {
+                let cap = max_tokens_cap(&self.cfg.model);
+                if self.cfg.max_tokens < cap {
+                    self.cfg.max_tokens = self.cfg.max_tokens.saturating_mul(2).min(cap);
+                    continue;
+                }
+                if step == 0 {
+                    self.history.truncate(start_len);
+                }
+                return Err(Failure {
+                    error: aht_core::Error::Provider(format!(
+                        "the model's reply reached its length limit ({} tokens) while writing the \
+                         `{name}` call, so the call was cut off and not run. It is too large for \
+                         one reply of this model: ask for a smaller step (one file or one part at \
+                         a time), or use a model with a larger output limit",
+                        self.cfg.max_tokens
+                    )),
+                    retryable: false,
+                });
+            }
             let answered = !turn.text.is_empty();
             // A cancelled stream may hold tool calls we cannot trust; drop them.
             let calls = if aborted { Vec::new() } else { turn.tool_uses };
@@ -334,6 +357,10 @@ impl Agent {
                     turn.tool_uses.push((id, name, input));
                     None
                 }
+                ProviderEvent::ToolUseCut { name } => {
+                    turn.cut_tool = Some(name);
+                    None
+                }
                 ProviderEvent::Usage { input, output } => Some(AgentEvent::Usage {
                     input_tokens: input,
                     output_tokens: output,
@@ -436,6 +463,8 @@ struct Turn {
     text: String,
     reasoning: String,
     tool_uses: Vec<ToolCallTriple>,
+    /// A tool call the length limit cut off (its name): it cannot run.
+    cut_tool: Option<String>,
     stop: StopReason,
     receiver_gone: bool,
     cancelled: bool,
@@ -447,6 +476,7 @@ impl Default for Turn {
             text: String::new(),
             reasoning: String::new(),
             tool_uses: Vec::new(),
+            cut_tool: None,
             stop: StopReason::EndTurn,
             receiver_gone: false,
             cancelled: false,
