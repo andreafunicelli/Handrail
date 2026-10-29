@@ -89,4 +89,21 @@ describe("editor proposals", () => {
     editors.close(id);
     decide.mockRestore();
   });
+
+  it("a proposed file that root finds missing is created, not an error", async () => {
+    const decide = vi.spyOn(api, "editProposalDecide").mockResolvedValue();
+    const write = vi.fn(async () => ({ size: 3, modified: 2, hash: "h3" }));
+    const id = editors.propose({ ...proposal, proposal_id: "n", path: "/root/new.conf", unreadable: true, original: null, stamp: null });
+    const d = editors.docs[id];
+    d.fs = { ...d.fs, writeText: write, readText: async () => Promise.reject({ kind: "not_found", message: "No such file: /root/new.conf" }) } as FileBackend;
+    // "Read as root": the file is not there.
+    await editors.load(id);
+    expect(editors.docs[id]).toMatchObject({ unreadable: false, error: null, stamp: null, text: "" });
+    await editors.accept(id);
+    // Saved with no original: the backend creates the file.
+    expect(write).toHaveBeenCalledWith("/root/new.conf", "a = 2\n", null, true);
+    expect(decide).toHaveBeenCalledWith("n", "saved", null);
+    editors.close(id);
+    decide.mockRestore();
+  });
 });
