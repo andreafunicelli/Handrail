@@ -95,6 +95,19 @@ impl ChatProvider for RoutedProvider {
     }
 }
 
+/// A fresh random session id for gateways that route by conversation. Not a secret, only an
+/// identifier, so std's randomly seeded hasher over the clock is enough (no extra crate).
+fn new_session_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
+    format!("ses_{:016x}", h.finish())
+}
+
 /// Build a provider adapter from stored configuration. An empty `base_url` falls back to the
 /// preset default. Never fails: a missing key simply produces `Auth` errors from the server.
 pub fn from_config(provider: &Provider, api_key: Option<String>) -> Arc<dyn ChatProvider> {
@@ -106,10 +119,17 @@ pub fn from_config(provider: &Provider, api_key: Option<String>) -> Arc<dyn Chat
         provider.base_url.trim().to_string()
     };
     match provider.preset {
-        ProviderPreset::OpenCodeZen | ProviderPreset::OpenCodeGo => Arc::new(RoutedProvider {
-            anthropic: AnthropicProvider::new(&base, api_key.clone()).with_bearer(true),
-            chat: OpenAiChatProvider::new(&base, api_key),
-        }),
+        ProviderPreset::OpenCodeZen | ProviderPreset::OpenCodeGo => {
+            // One id per provider instance: the app builds one per agent conversation, so every
+            // request of a conversation carries the same id and a new conversation gets a new one.
+            let session = new_session_id();
+            Arc::new(RoutedProvider {
+                anthropic: AnthropicProvider::new(&base, api_key.clone())
+                    .with_bearer(true)
+                    .with_opencode_session(session.clone()),
+                chat: OpenAiChatProvider::new(&base, api_key).with_opencode_session(session),
+            })
+        }
         ProviderPreset::Anthropic => Arc::new(AnthropicProvider::new(base, api_key)),
         ProviderPreset::OpenAi => {
             Arc::new(OpenAiChatProvider::new(base, api_key).with_max_completion_tokens(true))

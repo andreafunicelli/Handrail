@@ -21,6 +21,8 @@ pub struct OpenAiChatProvider {
     max_completion_tokens: bool,
     /// Echo assistant `reasoning_content` back (DeepSeek thinking mode + tool calls).
     echo_reasoning: bool,
+    /// Sent as `x-opencode-session` (OpenCode Zen/Go gateways).
+    opencode_session: Option<String>,
 }
 
 impl OpenAiChatProvider {
@@ -32,7 +34,14 @@ impl OpenAiChatProvider {
             api_key,
             max_completion_tokens: false,
             echo_reasoning: false,
+            opencode_session: None,
         }
+    }
+
+    /// Send `session` as the `x-opencode-session` header on every request.
+    pub fn with_opencode_session(mut self, session: impl Into<String>) -> Self {
+        self.opencode_session = Some(session.into());
+        self
     }
 
     pub fn with_max_completion_tokens(mut self, yes: bool) -> Self {
@@ -51,6 +60,10 @@ impl OpenAiChatProvider {
     }
 
     fn auth(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let rb = match &self.opencode_session {
+            Some(s) => rb.header(crate::http::OPENCODE_SESSION_HEADER, s),
+            None => rb,
+        };
         match &self.api_key {
             Some(k) if !k.is_empty() => rb.bearer_auth(k),
             _ => rb,
