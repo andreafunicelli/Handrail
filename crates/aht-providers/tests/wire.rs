@@ -593,6 +593,74 @@ async fn opencode_routes_claude_to_messages_and_others_to_chat_completions() {
 }
 
 #[tokio::test]
+async fn opencode_sends_one_session_id_per_conversation() {
+    // The gateway refuses requests without `x-opencode-session` ("cannot be routed efficiently").
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/zen/v1/messages"))
+        .respond_with(sse(ANTHROPIC_TOOL_STREAM))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/zen/v1/chat/completions"))
+        .respond_with(sse(OPENAI_TEXT_STREAM))
+        .mount(&server)
+        .await;
+    let make = |preset| {
+        from_config(
+            &provider(
+                preset,
+                ProviderKind::OpenAiCompat,
+                &format!("{}/zen/v1", server.uri()),
+            ),
+            Some("k".into()),
+        )
+    };
+    let one = make(ProviderPreset::OpenCodeZen);
+    let other = make(ProviderPreset::OpenCodeGo);
+    collect(one.as_ref(), req("claude-sonnet-5-5")).await; // /messages
+    collect(one.as_ref(), req("kimi-k3")).await; // /chat/completions
+    collect(other.as_ref(), req("kimi-k3")).await;
+    let sessions: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| {
+            r.headers
+                .get("x-opencode-session")
+                .expect("every request carries the session header")
+                .to_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(sessions.len(), 3);
+    assert!(sessions[0].starts_with("ses_"), "{}", sessions[0]);
+    // The same conversation keeps its id on both dialects; another conversation has its own.
+    assert_eq!(sessions[0], sessions[1]);
+    assert_ne!(sessions[0], sessions[2]);
+}
+
+#[tokio::test]
+async fn other_providers_send_no_opencode_session() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(sse(OPENAI_TEXT_STREAM))
+        .mount(&server)
+        .await;
+    let p = from_config(
+        &provider(ProviderPreset::OpenAi, ProviderKind::OpenAi, &server.uri()),
+        None,
+    );
+    collect(p.as_ref(), req("gpt-x")).await;
+    let seen = server.received_requests().await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].headers.get("x-opencode-session").is_none());
+}
+
+#[tokio::test]
 async fn from_config_deepseek_defaults_and_echo_reasoning() {
     // Base URL override points at the mock; DeepSeek echoes reasoning_content on tool turns.
     let server = MockServer::start().await;

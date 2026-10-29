@@ -18,6 +18,8 @@ pub struct AnthropicProvider {
     api_key: Option<String>,
     /// Also send `Authorization: Bearer` (gateways such as OpenCode Zen accept it).
     bearer_too: bool,
+    /// Sent as `x-opencode-session` (OpenCode Zen/Go gateways).
+    opencode_session: Option<String>,
 }
 
 impl AnthropicProvider {
@@ -29,7 +31,14 @@ impl AnthropicProvider {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key,
             bearer_too: false,
+            opencode_session: None,
         }
+    }
+
+    /// Send `session` as the `x-opencode-session` header on every request.
+    pub fn with_opencode_session(mut self, session: impl Into<String>) -> Self {
+        self.opencode_session = Some(session.into());
+        self
     }
 
     pub fn with_bearer(mut self, yes: bool) -> Self {
@@ -52,6 +61,9 @@ impl AnthropicProvider {
 
     fn headers(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         let mut rb = rb.header("anthropic-version", "2023-06-01");
+        if let Some(s) = &self.opencode_session {
+            rb = rb.header(crate::http::OPENCODE_SESSION_HEADER, s);
+        }
         if let Some(k) = &self.api_key {
             rb = rb.header("x-api-key", k);
             if self.bearer_too {

@@ -9,6 +9,10 @@ use serde_json::Value;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
+/// OpenCode Zen/Go refuse requests without a session id ("cannot be routed efficiently"): the
+/// same id on every request of one conversation lets the gateway keep it on one route.
+pub(crate) const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
+
 /// Longest we are willing to wait before the single automatic retry.
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
 
