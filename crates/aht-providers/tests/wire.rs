@@ -558,7 +558,7 @@ async fn openai_tool_call_cut_by_the_length_limit_is_reported_not_a_json_error()
         "data: [DONE]\n\n",
     );
     Mock::given(method("POST"))
-        .and(path("/chat/completions"))
+        .and(path("/v1/chat/completions"))
         .respond_with(sse(body))
         .mount(&server)
         .await;
@@ -586,7 +586,7 @@ async fn openai_bad_tool_json_without_a_length_stop_is_still_an_error() {
         "data: [DONE]\n\n",
     );
     Mock::given(method("POST"))
-        .and(path("/chat/completions"))
+        .and(path("/v1/chat/completions"))
         .respond_with(sse(body))
         .mount(&server)
         .await;

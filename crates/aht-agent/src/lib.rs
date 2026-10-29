@@ -195,7 +195,7 @@ impl Agent {
             .collect();
         let system = prompt::build(self.session_hint.as_ref(), self.cfg.system_extra.as_deref());
 
-        for step in 0..self.cfg.max_steps {
+        for _ in 0..self.cfg.max_steps {
             if cancel.is_cancelled() {
                 return Ok(());
             }
@@ -210,8 +210,9 @@ impl Agent {
             let turn = match self.model_turn(req, events, cancel).await {
                 Ok(t) => t,
                 Err(f) => {
-                    if step == 0 {
-                        // Nothing happened yet: let the caller resend the same message cleanly.
+                    if self.history.len() == start_len + 1 {
+                        // Nothing kept yet (only the user's message, even after a retry): let
+                        // the caller resend the same message cleanly.
                         self.history.truncate(start_len);
                     }
                     return Err(f);
@@ -225,9 +226,18 @@ impl Agent {
                 let cap = max_tokens_cap(&self.cfg.model);
                 if self.cfg.max_tokens < cap {
                     self.cfg.max_tokens = self.cfg.max_tokens.saturating_mul(2).min(cap);
+                    // What streamed of the cut reply is already on screen: mark it as dropped
+                    // so the retried reply that follows is not read as its continuation.
+                    if !turn.text.is_empty() {
+                        let note =
+                            "\n\n_(Cut off by the length limit: retrying with more room.)_\n\n";
+                        let _ = events
+                            .send(AgentEvent::TextDelta { text: note.into() })
+                            .await;
+                    }
                     continue;
                 }
-                if step == 0 {
+                if self.history.len() == start_len + 1 {
                     self.history.truncate(start_len);
                 }
                 return Err(Failure {

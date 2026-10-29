@@ -772,7 +772,7 @@ async fn a_tool_call_cut_by_the_length_limit_is_retried_with_more_room() {
     c.model = "deepseek-reasoner".into();
     c.max_tokens = 32_768;
     let mut a = agent(provider.clone(), Arc::new(MockTools::default()), c);
-    let (r, _) = run(&mut a, "x").await;
+    let (r, evs) = run(&mut a, "x").await;
     assert!(r.is_ok());
     let reqs = provider.requests();
     assert_eq!(
@@ -781,6 +781,27 @@ async fn a_tool_call_cut_by_the_length_limit_is_retried_with_more_room() {
     );
     // The cut reply is not kept: the retry sees only the user's message.
     assert_eq!(reqs[1].messages.len(), 1);
+    // What already streamed of it is marked as dropped before the retried reply.
+    assert!(evs
+        .iter()
+        .any(|e| matches!(e, AgentEvent::TextDelta { text } if text.contains("retrying"))));
+}
+
+#[tokio::test]
+async fn a_failed_retry_of_the_first_step_leaves_no_trace_in_history() {
+    let cut_turn = || Turn::Events(vec![cut("propose_file_edit"), stop(StopReason::MaxTokens)]);
+    let provider = ScriptedProvider::new(vec![cut_turn(), cut_turn(), answer("ok")]);
+    let mut c = cfg();
+    c.model = "deepseek-reasoner".into();
+    c.max_tokens = 32_768;
+    let mut a = agent(provider.clone(), Arc::new(MockTools::default()), c);
+    // Cut, retried with more room, cut again: an error, and the message is not kept.
+    let (r, _) = run(&mut a, "x").await;
+    assert!(r.is_err());
+    // Resending starts clean: the request holds the new message only, not "x" as well.
+    let (r, _) = run(&mut a, "x").await;
+    assert!(r.is_ok());
+    assert_eq!(provider.requests().last().unwrap().messages.len(), 1);
 }
 
 #[tokio::test]
