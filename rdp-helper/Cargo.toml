@@ -17,7 +17,7 @@ exclude = ["vendor"]
 
 [dependencies]
 anyhow = "1"
-ironrdp-client = { version = "0.1.0", features = ["rustls"] }
+ironrdp-client = { version = "0.1.0", features = ["rustls", "clipboard"] }
 ironrdp-connector = "0.10"
 ironrdp-input = "0.7"
 ironrdp-pdu = "0.9"
@@ -27,8 +27,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 
-# Console-session support (`mstsc /admin`), see vendor/ironrdp-connector/PATCHES.md.
+# Console-session support (`mstsc /admin`), see vendor/ironrdp-connector/PATCHES.md; the
+# Windows clipboard, see vendor/ironrdp-client/PATCHES.md.
 [patch.crates-io]
+ironrdp-client = { path = "vendor/ironrdp-client" }
 ironrdp-connector = { path = "vendor/ironrdp-connector" }
 
 [profile.release]
