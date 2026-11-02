@@ -6,7 +6,7 @@ mod input;
 mod proto;
 mod tiles;
 
-use ironrdp_client::config::{Config, ConfigBuilder, Destination};
+use ironrdp_client::config::{ClipboardType, Config, ConfigBuilder, Destination};
 use ironrdp_client::rdp::{RdpClient, RdpInputEvent, RdpOutputEvent};
 use ironrdp_pdu::rdp::capability_sets::MajorPlatformType;
 use serde_json::json;
@@ -182,7 +182,8 @@ fn config(s: proto::Start) -> anyhow::Result<Config> {
         .with_client_build(client_build())
         .with_client_dir("C:\\Windows\\System32\\mstscax.dll")
         .with_platform(platform())
-        .with_client_name(client_name());
+        .with_client_name(client_name())
+        .with_clipboard(clipboard());
     if let Some(d) = s.domain.filter(|d| !d.trim().is_empty()) {
         b = b.with_domain(d);
     }
@@ -211,6 +212,17 @@ fn client_name() -> String {
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .take(15)
         .collect::<String>()
+}
+
+/// Text and images copied on either side paste on the other. IronRDP shares the system clipboard
+/// on Windows only; elsewhere the channel stays off rather than offering a clipboard that is not
+/// connected to anything.
+fn clipboard() -> ClipboardType {
+    if cfg!(windows) {
+        ClipboardType::Enable
+    } else {
+        ClipboardType::Disable
+    }
 }
 
 fn platform() -> MajorPlatformType {
