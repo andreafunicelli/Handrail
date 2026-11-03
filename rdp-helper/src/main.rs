@@ -2,6 +2,7 @@
 //!
 //! Logs go to stderr (`HANDRAIL_RDP_LOG=debug` for more); stdout carries only protocol messages.
 
+mod clip;
 mod input;
 mod proto;
 mod tiles;
@@ -52,8 +53,13 @@ async fn run() -> anyhow::Result<()> {
     };
 
     let (tx, mut events) = mpsc::channel(4);
-    let client = RdpClient::new(config, tx);
+    let mut client = RdpClient::new(config, tx);
     let input = client.input_sender();
+    // IronRDP shares the system clipboard on Windows; elsewhere the helper does (text only).
+    let clipboard = (!cfg!(windows)).then(|| clip::Clipboard::new(input.clone()));
+    if let Some(c) = &clipboard {
+        client = client.with_cliprdr_backend_factory(c.factory());
+    }
     // On a thread of its own, as IronRDP's viewer does: the session future is not `Send`.
     // Returning from `main` ends the process, and with it this thread.
     std::thread::spawn(move || {
@@ -65,7 +71,7 @@ async fn run() -> anyhow::Result<()> {
             Err(e) => tracing::error!("no runtime for the session: {e}"),
         }
     });
-    tokio::spawn(forward_input(stdin, input));
+    tokio::spawn(forward_input(stdin, input, clipboard));
 
     let mut differ = tiles::Differ::default();
     let mut result = Ok(());
@@ -132,7 +138,11 @@ async fn fail<W: AsyncWrite + Unpin>(out: &mut W, message: &str) -> std::io::Res
 
 /// Handrail's input, resize and close messages → the session. Stdin closing (Handrail gone)
 /// ends the session too.
-async fn forward_input(mut stdin: Stdin, tx: mpsc::UnboundedSender<RdpInputEvent>) {
+async fn forward_input(
+    mut stdin: Stdin,
+    tx: mpsc::UnboundedSender<RdpInputEvent>,
+    clipboard: Option<clip::Clipboard>,
+) {
     let mut db = ironrdp_input::Database::new();
     while let Ok(Some((kind, body))) = proto::read(&mut stdin).await {
         match kind {
@@ -141,7 +151,14 @@ async fn forward_input(mut stdin: Stdin, tx: mpsc::UnboundedSender<RdpInputEvent
                     tracing::warn!("ignoring malformed input");
                     continue;
                 };
-                for op in &ops {
+                for op in ops {
+                    if let proto::Input::Clipboard { text } = op {
+                        if let Some(c) = &clipboard {
+                            c.offer(text).await;
+                        }
+                        continue;
+                    }
+                    let op = &op;
                     let events = match input::operations(op) {
                         Some(ops) => db.apply(ops),
                         None => db.release_all(),
@@ -183,7 +200,7 @@ fn config(s: proto::Start) -> anyhow::Result<Config> {
         .with_client_dir("C:\\Windows\\System32\\mstscax.dll")
         .with_platform(platform())
         .with_client_name(client_name())
-        .with_clipboard(clipboard());
+        .with_clipboard(ClipboardType::Enable);
     if let Some(d) = s.domain.filter(|d| !d.trim().is_empty()) {
         b = b.with_domain(d);
     }
@@ -212,17 +229,6 @@ fn client_name() -> String {
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .take(15)
         .collect::<String>()
-}
-
-/// Text and images copied on either side paste on the other. IronRDP shares the system clipboard
-/// on Windows only; elsewhere the channel stays off rather than offering a clipboard that is not
-/// connected to anything.
-fn clipboard() -> ClipboardType {
-    if cfg!(windows) {
-        ClipboardType::Enable
-    } else {
-        ClipboardType::Disable
-    }
 }
 
 fn platform() -> MajorPlatformType {

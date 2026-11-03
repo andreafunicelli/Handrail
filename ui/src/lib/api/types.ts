@@ -509,4 +509,6 @@ export type RdpInput =
   | { t: "down" | "up"; button: number }
   | { t: "wheel"; vertical: boolean; units: number }
   | { t: "key"; code: number; down: boolean }
-  | { t: "release_all" };
+  | { t: "release_all" }
+  /** Text pasted into the session, offered to the server before the input that follows. */
+  | { t: "clipboard"; text: string };

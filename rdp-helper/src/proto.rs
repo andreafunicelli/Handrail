@@ -77,6 +77,11 @@ pub enum Input {
     },
     /// Release every key and button held (the view lost focus).
     ReleaseAll,
+    /// Text the user pasted into the session: offered to the server before the input that
+    /// follows (the paste keystroke). Not used on Windows, where the clipboard is shared natively.
+    Clipboard {
+        text: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,7 +161,7 @@ mod tests {
     fn parses_every_input_kind() {
         let ops: Vec<Input> = serde_json::from_str(
             r#"[{"t":"down","button":2},{"t":"up","button":0},{"t":"wheel","vertical":true,"units":-120},
-                {"t":"key","code":57373,"down":true},{"t":"release_all"}]"#,
+                {"t":"key","code":57373,"down":true},{"t":"release_all"},{"t":"clipboard","text":"hi"}]"#,
         )
         .unwrap();
         assert_eq!(
@@ -173,6 +178,7 @@ mod tests {
                     down: true
                 },
                 Input::ReleaseAll,
+                Input::Clipboard { text: "hi".into() },
             ]
         );
     }

@@ -6,7 +6,7 @@
   import { errorMessage } from "../../api/errors";
   import { t } from "../../i18n";
   import { connections } from "../../stores/connections.svelte";
-  import { parseMessage, scancode, WheelAccumulator, type Pointer } from "../../util/rdp";
+  import { keyboardPlatform, parseMessage, RdpKeyboard, WheelAccumulator, type Pointer } from "../../util/rdp";
 
   /** A remote desktop in a pane: the connection is opened at the pane's size and follows it. */
   let { connectionId, focused }: { connectionId: string; focused: boolean } = $props();
@@ -14,6 +14,9 @@
   const conn = $derived(connections.byId.get(connectionId));
   let host = $state<HTMLDivElement>();
   let canvas = $state<HTMLCanvasElement>();
+  /** Keyboard focus: a hidden text field, so that the webview's paste (⌘V, Edit > Paste) reaches
+   *  the view with the local clipboard's text. */
+  let sink = $state<HTMLTextAreaElement>();
   let phase = $state<"connecting" | "live" | "ended">("connecting");
   let problem = $state<string | null>(null);
   let cursor = $state("default");
@@ -29,6 +32,7 @@
   let flushing = false;
   let lastMove: { x: number; y: number } | null = null;
   const wheel = new WheelAccumulator();
+  const keyboard = new RdpKeyboard(keyboardPlatform(typeof navigator === "undefined" ? "" : navigator.platform), (e) => send(e));
 
   /** Size in device pixels for the pane; Windows scales its UI by `scale`. */
   function paneSize() {
@@ -179,7 +183,7 @@
     if (phase !== "live") return;
     e.preventDefault();
     if (down) {
-      canvas!.focus();
+      sink!.focus({ preventScroll: true });
       canvas!.setPointerCapture(e.pointerId);
     }
     lastMove = at(e);
@@ -197,16 +201,18 @@
   }
   function key(e: KeyboardEvent, down: boolean) {
     if (phase !== "live") return;
-    const code = scancode(e.code);
-    if (code == null) return;
+    if (!keyboard.key(e, down)) return;
     e.preventDefault();
     e.stopPropagation();
-    send({ t: "key", code, down });
+  }
+  function onpaste(e: ClipboardEvent) {
+    e.preventDefault();
+    if (phase === "live") keyboard.paste(e.clipboardData?.getData("text/plain") || null);
   }
 
   // Keyboard focus follows the pane.
   $effect(() => {
-    if (focused && phase === "live") canvas?.focus();
+    if (focused && phase === "live") sink?.focus({ preventScroll: true });
   });
 
   onMount(() => {
@@ -238,18 +244,29 @@
   <canvas
     bind:this={canvas}
     class:hidden={phase !== "live"}
-    tabindex="0"
-    aria-label={t("rdp.desktop", { name: conn?.name ?? "" })}
     style:cursor
     onpointermove={move}
     onpointerdown={(e) => button(e, true)}
     onpointerup={(e) => button(e, false)}
     onwheel={onwheel}
-    onkeydown={(e) => key(e, true)}
-    onkeyup={(e) => key(e, false)}
-    onblur={() => send({ t: "release_all" })}
     oncontextmenu={(e) => e.preventDefault()}
   ></canvas>
+  <textarea
+    bind:this={sink}
+    class="sink"
+    aria-label={t("rdp.desktop", { name: conn?.name ?? "" })}
+    autocomplete="off"
+    autocapitalize="off"
+    spellcheck="false"
+    onkeydown={(e) => key(e, true)}
+    onkeyup={(e) => key(e, false)}
+    {onpaste}
+    oninput={(e) => (e.currentTarget.value = "")}
+    onblur={() => {
+      keyboard.reset();
+      send({ t: "release_all" });
+    }}
+  ></textarea>
   {#if phase === "live" && stale}
     <button class="btn sm fit" onclick={matchSize} title={t("rdp.matchSizeHint")}><Icon name="refresh" size={12} />{t("rdp.matchSize")}</button>
   {/if}
@@ -289,6 +306,18 @@
   }
   canvas.hidden {
     visibility: hidden;
+  }
+  .sink {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    resize: none;
+    pointer-events: none;
   }
   .fit {
     position: absolute;

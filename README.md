@@ -99,7 +99,7 @@ Import connections from `~/.ssh/config`, PuTTY, MobaXterm, mRemoteNG, WinSCP, Se
 
 ### Remote desktops
 
-Open Windows desktops over RDP in tabs beside your terminals. Use NLA authentication with vault credentials, keyboard and mouse input, a shared clipboard for copying text both ways (Windows clients), a desktop that resizes with the pane, and an administrative session when needed. Reach hosts behind a bastion through an SSH tunnel using the connection’s jump hosts.
+Open Windows desktops over RDP in tabs beside your terminals. Use NLA authentication with vault credentials, keyboard and mouse input, a shared clipboard for copying text both ways (on macOS, ⌘ works as Ctrl), a desktop that resizes with the pane, and an administrative session when needed. Reach hosts behind a bastion through an SSH tunnel using the connection’s jump hosts.
 
 RDP runs in a separate `handrail-rdp` helper process built on [IronRDP](https://github.com/Devolutions/IronRDP).
 
