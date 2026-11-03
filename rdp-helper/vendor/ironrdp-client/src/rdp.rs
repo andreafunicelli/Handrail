@@ -92,6 +92,9 @@ pub struct RdpClient {
     output_event_sender: mpsc::Sender<RdpOutputEvent>,
     input_event_sender: mpsc::UnboundedSender<RdpInputEvent>,
     input_event_receiver: mpsc::UnboundedReceiver<RdpInputEvent>,
+    /// Handrail patch: a clipboard backend supplied by the application (see PATCHES.md).
+    #[cfg(feature = "clipboard")]
+    cliprdr_backend_factory: Option<Box<dyn CliprdrBackendFactory + Send>>,
 }
 
 impl RdpClient {
@@ -102,7 +105,18 @@ impl RdpClient {
             output_event_sender,
             input_event_sender,
             input_event_receiver,
+            #[cfg(feature = "clipboard")]
+            cliprdr_backend_factory: None,
         }
+    }
+
+    /// Handrail patch: use this clipboard backend instead of the one `config.channels.clipboard`
+    /// selects (as `with_cliprdr_backend_factory` does in later IronRDP versions).
+    #[cfg(feature = "clipboard")]
+    #[must_use]
+    pub fn with_cliprdr_backend_factory(mut self, factory: Box<dyn CliprdrBackendFactory + Send>) -> Self {
+        self.cliprdr_backend_factory = Some(factory);
+        self
     }
 
     /// Return a clone of the input-event sender for injecting keyboard, mouse, and clipboard
@@ -128,7 +142,13 @@ impl RdpClient {
         let cliprdr_factory: Option<Box<dyn CliprdrBackendFactory + Send>>;
 
         #[cfg(feature = "clipboard")]
-        {
+        if let Some(factory) = self.cliprdr_backend_factory.take() {
+            cliprdr_factory = Some(factory);
+            #[cfg(windows)]
+            {
+                _win_clipboard = None;
+            }
+        } else {
             match self.config.channels.clipboard {
                 ClipboardType::Disable => {
                     cliprdr_factory = None;

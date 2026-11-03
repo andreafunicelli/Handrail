@@ -30,6 +30,8 @@ pub fn operations(input: &Input) -> Option<Vec<Operation>> {
             }]
         }
         Input::ReleaseAll => return None,
+        // Handled by the caller (clip.rs).
+        Input::Clipboard { .. } => Vec::new(),
     })
 }
 

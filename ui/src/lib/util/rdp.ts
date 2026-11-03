@@ -3,6 +3,8 @@
  * rdp-helper/src/proto.rs), and browser keys → PC/AT set-1 scancodes.
  */
 
+import type { RdpInput } from "../api/types";
+
 export const MSG_TILES = 0x11;
 export const MSG_POINTER = 0x12;
 export const MSG_ERROR = 0x13;
@@ -137,5 +139,106 @@ export class WheelAccumulator {
     if (!notches) return 0;
     this.acc -= notches * 50;
     return -notches * 120;
+  }
+}
+
+export type KeyboardPlatform = "mac" | "windows" | "other";
+
+export function keyboardPlatform(platform: string): KeyboardPlatform {
+  return /Mac|iP/.test(platform) ? "mac" : /Win/.test(platform) ? "windows" : "other";
+}
+
+/** Longest wait for the webview's paste event after the paste keystroke. */
+export const PASTE_WAIT_MS = 300;
+/** Longer pastes are cut: the helper refuses input messages over 1 MiB. */
+export const MAX_PASTE = 100_000;
+
+type KeyLike = Pick<KeyboardEvent, "code" | "metaKey" | "ctrlKey" | "altKey">;
+
+/**
+ * Keyboard → RDP input. On macOS, ⌘ acts as Ctrl (⌘C copies on the server, as in Microsoft's
+ * client). Outside Windows, where the helper shares no system clipboard, the paste keystroke
+ * (⌘V, Ctrl+V) is held back until the webview's paste event brings the local clipboard's
+ * text: that text goes to the server first, then the keystroke, so the server pastes it.
+ */
+export class RdpKeyboard {
+  private pending: ReturnType<typeof setTimeout> | null = null;
+  /** The V of a paste was sent whole: its own key-up is dropped. */
+  private swallowUp = false;
+  /** macOS sends no key-up for keys released while ⌘ is down: released with ⌘ instead. */
+  private withMeta = new Set<number>();
+  /** A paste keystroke went out without its text until then: a paste event arriving late is
+   *  dropped rather than pasting twice. */
+  private lateUntil = 0;
+
+  constructor(
+    private platform: KeyboardPlatform,
+    private send: (e: RdpInput) => void,
+  ) {}
+
+  /** True when the key went to the server (the caller prevents its default action). */
+  key(e: KeyLike, down: boolean): boolean {
+    const mac = this.platform === "mac";
+    if (this.platform !== "windows" && e.code === "KeyV" && (mac ? e.metaKey : e.ctrlKey) && !e.altKey) {
+      if (down) {
+        // The default action is the webview's paste, which calls `paste`.
+        this.pending ??= setTimeout(() => this.finish(null), PASTE_WAIT_MS);
+        return false;
+      }
+      if (this.swallowUp) {
+        this.swallowUp = false;
+        return true;
+      }
+    }
+    if (this.pending) this.finish(null);
+    const meta = e.code === "MetaLeft" || e.code === "MetaRight";
+    const sc = scancode(mac && meta ? e.code.replace("Meta", "Control") : e.code);
+    if (sc == null) return false;
+    if (mac) {
+      if (meta && !down) {
+        for (const k of this.withMeta) this.send({ t: "key", code: k, down: false });
+        this.withMeta.clear();
+        this.swallowUp = false;
+      } else if (!meta) {
+        if (down && e.metaKey) this.withMeta.add(sc);
+        else if (!down) this.withMeta.delete(sc);
+      }
+    }
+    this.send({ t: "key", code: sc, down });
+    return true;
+  }
+
+  /** The webview's paste event, with the local clipboard's text (null when it holds none). */
+  paste(text: string | null) {
+    if (this.pending) return this.finish(text);
+    if (Date.now() < this.lateUntil) return;
+    // Paste from the Edit menu, without the keystroke: send the server's paste shortcut too.
+    if (this.platform === "windows" || !text) return;
+    this.offer(text);
+    const [ctrl, v] = [scancode("ControlLeft")!, scancode("KeyV")!];
+    for (const [code, down] of [[ctrl, true], [v, true], [v, false], [ctrl, false]] as const) this.send({ t: "key", code, down });
+  }
+
+  /** Focus lost: nothing is pending any more. */
+  reset() {
+    if (this.pending) clearTimeout(this.pending);
+    this.pending = null;
+    this.swallowUp = false;
+    this.withMeta.clear();
+  }
+
+  private finish(text: string | null) {
+    if (this.pending) clearTimeout(this.pending);
+    this.pending = null;
+    if (text) this.offer(text);
+    else this.lateUntil = Date.now() + PASTE_WAIT_MS;
+    const v = scancode("KeyV")!;
+    this.send({ t: "key", code: v, down: true });
+    this.send({ t: "key", code: v, down: false });
+    this.swallowUp = true;
+  }
+
+  private offer(text: string) {
+    this.send({ t: "clipboard", text: text.slice(0, MAX_PASTE) });
   }
 }

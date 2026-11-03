@@ -11,6 +11,9 @@ the path dependencies replaced by their crates.io versions.
   waiting for data only it could receive. The thread needs the `windows` crate (0.62, already
   used by ironrdp-cliprdr-native). If the clipboard cannot be set up, the session connects
   without one (upstream fails the connection).
+- `RdpClient::with_cliprdr_backend_factory` (rdp.rs), as in later IronRDP versions: the helper
+  supplies its own text clipboard backend on macOS and Linux (rdp-helper/src/clip.rs), where
+  IronRDP has no native one.
 
 Drop this directory and its `[patch.crates-io]` entry once an IronRDP release on crates.io
 lets the application supply the clipboard backend factory (upstream `main` has

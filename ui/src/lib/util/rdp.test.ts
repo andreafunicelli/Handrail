@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { MSG_ERROR, MSG_POINTER, MSG_TERMINATED, encodeTiles, parseMessage, scancode, WheelAccumulator } from "./rdp";
+import { describe, expect, it, vi } from "vitest";
+import type { RdpInput } from "../api/types";
+import { MAX_PASTE, MSG_ERROR, MSG_POINTER, MSG_TERMINATED, PASTE_WAIT_MS, RdpKeyboard, encodeTiles, keyboardPlatform, parseMessage, scancode, WheelAccumulator } from "./rdp";
 
 const bytesOf = (kind: number, payload: number[] | string) => {
   const body = typeof payload === "string" ? [...new TextEncoder().encode(payload)] : payload;
@@ -52,5 +53,67 @@ describe("keyboard and wheel", () => {
     expect(w.push(30, 0)).toBe(-120); // 60 px down → one notch towards the user
     expect(w.push(-110, 0)).toBe(240); // back up: 10 - 110 = -100 → two notches up
     expect(w.push(3, 1)).toBe(-120); // line mode: a notch per event
+  });
+});
+
+describe("RdpKeyboard", () => {
+  const k = (code: string, mods: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean }> = {}) => ({ code, metaKey: false, ctrlKey: false, altKey: false, ...mods });
+  const keys = (sent: RdpInput[]) => sent.map((e) => (e.t === "key" ? `${e.down ? "+" : "-"}${e.code.toString(16)}` : e.t === "clipboard" ? `clip:${e.text}` : e.t));
+  const [CTRL, V, C] = ["1d", "2f", "2e"];
+
+  it("maps ⌘ to Ctrl on macOS and releases keys whose key-up macOS swallows", () => {
+    const sent: RdpInput[] = [];
+    const kb = new RdpKeyboard("mac", (e) => sent.push(e));
+    expect(kb.key(k("MetaLeft", { metaKey: true }), true)).toBe(true);
+    kb.key(k("KeyC", { metaKey: true }), true);
+    kb.key(k("MetaLeft"), false);
+    expect(keys(sent)).toEqual([`+${CTRL}`, `+${C}`, `-${C}`, `-${CTRL}`]);
+  });
+
+  it("sends the pasted text before the paste keystroke", () => {
+    const sent: RdpInput[] = [];
+    const kb = new RdpKeyboard("mac", (e) => sent.push(e));
+    kb.key(k("MetaLeft", { metaKey: true }), true);
+    // Not taken: the webview's paste runs.
+    expect(kb.key(k("KeyV", { metaKey: true }), true)).toBe(false);
+    kb.paste("hello");
+    expect(kb.key(k("KeyV", { metaKey: true }), false)).toBe(true);
+    kb.key(k("MetaLeft"), false);
+    expect(keys(sent)).toEqual([`+${CTRL}`, "clip:hello", `+${V}`, `-${V}`, `-${CTRL}`]);
+  });
+
+  it("sends the keystroke alone when no paste event comes, and drops a late one", () => {
+    vi.useFakeTimers();
+    try {
+      const sent: RdpInput[] = [];
+      const kb = new RdpKeyboard("other", (e) => sent.push(e));
+      kb.key(k("ControlLeft", { ctrlKey: true }), true);
+      kb.key(k("KeyV", { ctrlKey: true }), true);
+      vi.advanceTimersByTime(PASTE_WAIT_MS);
+      kb.paste("late");
+      expect(keys(sent)).toEqual([`+${CTRL}`, `+${V}`, `-${V}`]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pastes from the Edit menu with the server's shortcut", () => {
+    const sent: RdpInput[] = [];
+    new RdpKeyboard("mac", (e) => sent.push(e)).paste("x".repeat(MAX_PASTE + 5));
+    expect(keys(sent)).toEqual([`clip:${"x".repeat(MAX_PASTE)}`, `+${CTRL}`, `+${V}`, `-${V}`, `-${CTRL}`]);
+  });
+
+  it("leaves the clipboard to the system on Windows", () => {
+    const sent: RdpInput[] = [];
+    const kb = new RdpKeyboard("windows", (e) => sent.push(e));
+    kb.key(k("ControlLeft", { ctrlKey: true }), true);
+    expect(kb.key(k("KeyV", { ctrlKey: true }), true)).toBe(true);
+    kb.paste("ignored");
+    kb.key(k("MetaLeft", { metaKey: true }), true);
+    expect(keys(sent)).toEqual([`+${CTRL}`, `+${V}`, "+e05b"]);
+  });
+
+  it("knows the platforms", () => {
+    expect([keyboardPlatform("MacIntel"), keyboardPlatform("Win32"), keyboardPlatform("Linux x86_64")]).toEqual(["mac", "windows", "other"]);
   });
 });

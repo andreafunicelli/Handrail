@@ -27,6 +27,18 @@
       e.preventDefault();
     };
     document.addEventListener("contextmenu", nativeMenu);
+    // A file dropped where nothing takes it would open in the webview, replacing the app (Tauri's
+    // own drag and drop is off so the panes can use the HTML one). Spots that take a drop cancel
+    // `dragover` themselves; everywhere else a file is refused.
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
+    const refuseFiles = (e: DragEvent) => {
+      if (!hasFiles(e) || e.defaultPrevented) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = "none";
+    };
+    const dropFiles = (e: DragEvent) => hasFiles(e) && e.preventDefault();
+    window.addEventListener("dragover", refuseFiles);
+    window.addEventListener("drop", dropFiles);
     vault.refresh().catch((e) => {
       toasts.error(e);
       vault.phase = "unlock";
