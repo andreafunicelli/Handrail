@@ -150,8 +150,25 @@ export function keyboardPlatform(platform: string): KeyboardPlatform {
 
 /** Longest wait for the webview's paste event after the paste keystroke. */
 export const PASTE_WAIT_MS = 300;
-/** Longer pastes are cut: the helper refuses input messages over 1 MiB. */
-export const MAX_PASTE = 100_000;
+/** Bytes a pasted text may take in an input batch, JSON-encoded: Handrail refuses batches over
+ *  256 KiB (MAX_INPUT in src-tauri/src/rdp.rs), and the rest of the batch needs room too. */
+export const MAX_PASTE_BYTES = 192 * 1024;
+
+const utf8 = new TextEncoder();
+const encodedSize = (text: string) => utf8.encode(JSON.stringify(text)).length;
+
+/** `text`, cut so that it fits in MAX_PASTE_BYTES once JSON-encoded (never mid-character). */
+export function fitPaste(text: string): string {
+  if (encodedSize(text) <= MAX_PASTE_BYTES) return text;
+  let [lo, hi] = [0, text.length];
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (encodedSize(text.slice(0, mid)) <= MAX_PASTE_BYTES) lo = mid;
+    else hi = mid - 1;
+  }
+  const code = text.charCodeAt(lo - 1);
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? lo - 1 : lo);
+}
 
 type KeyLike = Pick<KeyboardEvent, "code" | "metaKey" | "ctrlKey" | "altKey">;
 
@@ -159,7 +176,8 @@ type KeyLike = Pick<KeyboardEvent, "code" | "metaKey" | "ctrlKey" | "altKey">;
  * Keyboard → RDP input. On macOS, ⌘ acts as Ctrl (⌘C copies on the server, as in Microsoft's
  * client). Outside Windows, where the helper shares no system clipboard, the paste keystroke
  * (⌘V, Ctrl+V) is held back until the webview's paste event brings the local clipboard's
- * text: that text goes to the server first, then the keystroke, so the server pastes it.
+ * text: that text goes to the server first, then the keystroke, so the server pastes it. A long
+ * text is cut to what one input batch can carry.
  */
 export class RdpKeyboard {
   private pending: ReturnType<typeof setTimeout> | null = null;
@@ -239,6 +257,6 @@ export class RdpKeyboard {
   }
 
   private offer(text: string) {
-    this.send({ t: "clipboard", text: text.slice(0, MAX_PASTE) });
+    this.send({ t: "clipboard", text: fitPaste(text) });
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RdpInput } from "../api/types";
-import { MAX_PASTE, MSG_ERROR, MSG_POINTER, MSG_TERMINATED, PASTE_WAIT_MS, RdpKeyboard, encodeTiles, keyboardPlatform, parseMessage, scancode, WheelAccumulator } from "./rdp";
+import { MAX_PASTE_BYTES, MSG_ERROR, MSG_POINTER, MSG_TERMINATED, PASTE_WAIT_MS, RdpKeyboard, encodeTiles, fitPaste, keyboardPlatform, parseMessage, scancode, WheelAccumulator } from "./rdp";
 
 const bytesOf = (kind: number, payload: number[] | string) => {
   const body = typeof payload === "string" ? [...new TextEncoder().encode(payload)] : payload;
@@ -99,8 +99,22 @@ describe("RdpKeyboard", () => {
 
   it("pastes from the Edit menu with the server's shortcut", () => {
     const sent: RdpInput[] = [];
-    new RdpKeyboard("mac", (e) => sent.push(e)).paste("x".repeat(MAX_PASTE + 5));
-    expect(keys(sent)).toEqual([`clip:${"x".repeat(MAX_PASTE)}`, `+${CTRL}`, `+${V}`, `-${V}`, `-${CTRL}`]);
+    new RdpKeyboard("mac", (e) => sent.push(e)).paste("hello");
+    expect(keys(sent)).toEqual(["clip:hello", `+${CTRL}`, `+${V}`, `-${V}`, `-${CTRL}`]);
+  });
+
+  it("cuts a long paste to what an input batch carries, by encoded size", () => {
+    const size = (t: string) => new TextEncoder().encode(JSON.stringify(t)).length;
+    expect(fitPaste("short")).toBe("short");
+    // 90k CJK characters are ~270 KB of UTF-8: under any character cap, over the byte limit.
+    const cjk = fitPaste("漢".repeat(90_000));
+    expect(size(cjk)).toBeLessThanOrEqual(MAX_PASTE_BYTES);
+    expect(size(cjk + "漢")).toBeGreaterThan(MAX_PASTE_BYTES);
+    // Control characters grow sixfold in JSON; a surrogate pair is never split.
+    expect(size(fitPaste("\u0001".repeat(60_000)))).toBeLessThanOrEqual(MAX_PASTE_BYTES);
+    const emoji = fitPaste("😀".repeat(60_000));
+    expect(emoji.length % 2).toBe(0);
+    expect(size(emoji)).toBeLessThanOrEqual(MAX_PASTE_BYTES);
   });
 
   it("leaves the clipboard to the system on Windows", () => {
