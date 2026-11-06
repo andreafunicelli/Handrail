@@ -17,6 +17,7 @@ ignore = [
     # Unmaintained (archived), no known vulnerability; both reach us through IronRDP in the
     # rdp-helper workspace only (rdp-helper/deny.toml links here). Re-check on IronRDP upgrades.
     { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill: archived; via IronRDP's sspi -> winscard -> iso7816 -> heapless 0.7 (smart-card path). No upgrade until IronRDP moves off heapless 0.7." },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils: archived, no known vulnerability; via IronRDP's sspi -> async-dnssd in the rdp-helper workspace. Re-check on IronRDP upgrades." },
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: archived thin wrapper over rustls-pki-types; only via ironrdp-server, a test-only dependency of rdp-helper." },
     # zip 4.x: extraction keeps SUID/SGID bits and follows/creates symlinks outside the target
     # (Unix behaviour). zip reaches us only through tauri-plugin-updater, which builds it for

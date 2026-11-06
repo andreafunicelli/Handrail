@@ -6,6 +6,8 @@ export const en = {
   "vault.create.body": "Connections, keys and API tokens are encrypted on this device with a master password only you know.",
   "vault.password": "Master password",
   "vault.passwordConfirm": "Confirm password",
+  "vault.showPassword": "Show password",
+  "vault.hidePassword": "Hide password",
   "vault.strength.0": "Too short",
   "vault.strength.1": "Weak",
   "vault.strength.2": "Fair",
