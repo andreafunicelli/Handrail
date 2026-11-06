@@ -1,12 +1,15 @@
 <script lang="ts">
   import BusyButton from "../common/BusyButton.svelte";
   import VaultFrame from "./VaultFrame.svelte";
+  import PasswordInput from "./PasswordInput.svelte";
   import DeleteVaultDialog from "./DeleteVaultDialog.svelte";
   import { t } from "../../i18n";
   import { vault } from "../../stores/vault.svelte";
   import { errorMessage, isSecretKeyRequired } from "../../api/errors";
 
   let password = $state("");
+  /** The master password is shown as typed (the eye toggle); hidden again on submit. */
+  let shown = $state(false);
   let secretKey = $state("");
   let newDevice = $state(vault.joined || (vault.status.needs_secret_key ?? false));
   let busy = $state(false);
@@ -15,6 +18,7 @@
   let deleting = $state(false);
 
   async function submit(e: SubmitEvent) {
+    shown = false;
     e.preventDefault();
     if (!password || busy) return;
     busy = true;
@@ -39,7 +43,7 @@
   <form class="form" onsubmit={submit}>
     <label class="field">
       <span class="label">{t("vault.password")}</span>
-      <input class="input lg" type="password" autocomplete="current-password" bind:value={password} aria-invalid={!!error} data-autofocus />
+      <PasswordInput autocomplete="current-password" bind:value={password} bind:shown invalid={!!error} autofocus />
     </label>
     {#if newDevice}
       <label class="field">

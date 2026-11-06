@@ -2,6 +2,7 @@
   import BusyButton from "../common/BusyButton.svelte";
   import CopyButton from "../common/CopyButton.svelte";
   import VaultFrame from "./VaultFrame.svelte";
+  import PasswordInput from "./PasswordInput.svelte";
   import Icon from "../icons/Icon.svelte";
   import { t, type MessageKey } from "../../i18n";
   import { passwordStrength, vault } from "../../stores/vault.svelte";
@@ -9,6 +10,8 @@
   import { api } from "../../api";
 
   let password = $state("");
+  /** The master password is shown as typed (the eye toggle); hidden again on submit. */
+  let shown = $state(false);
   let confirm = $state("");
   let busy = $state(false);
   let saved = $state(false);
@@ -20,6 +23,7 @@
   const canSubmit = $derived(password.length >= 10 && password === confirm && strength >= 2 && !busy);
 
   async function submit(e: SubmitEvent) {
+    shown = false;
     e.preventDefault();
     if (!canSubmit) return;
     busy = true;
@@ -73,7 +77,7 @@
     <form onsubmit={submit} class="form">
       <label class="field">
         <span class="label">{t("vault.password")}</span>
-        <input class="input lg" type="password" autocomplete="new-password" bind:value={password} data-autofocus />
+        <PasswordInput autocomplete="new-password" bind:value={password} bind:shown autofocus />
       </label>
       <div class="meter" aria-live="polite">
         <div class="bars" data-s={password ? strength : -1}>
@@ -85,7 +89,7 @@
       </div>
       <label class="field">
         <span class="label">{t("vault.passwordConfirm")}</span>
-        <input class="input lg" type="password" autocomplete="new-password" bind:value={confirm} aria-invalid={mismatch} />
+        <PasswordInput autocomplete="new-password" bind:value={confirm} bind:shown invalid={mismatch} />
         {#if mismatch}<span class="err">{t("vault.mismatch")}</span>{/if}
       </label>
       <BusyButton class="primary lg wide" type="submit" {busy} busyLabel={t("vault.creating")} disabled={!canSubmit}>
@@ -113,10 +117,6 @@
   .form {
     display: grid;
     gap: 14px;
-  }
-  .input.lg {
-    height: 36px;
-    font-size: 14px;
   }
   .wide {
     width: 100%;
