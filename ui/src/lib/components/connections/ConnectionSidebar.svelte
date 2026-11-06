@@ -146,6 +146,8 @@
   }
 
   function startFolder(parent: string | null) {
+    // The name field lives in the folder tree, which a search or the empty state replaces.
+    query = "";
     creatingFolder = { parent };
     folderName = "";
     if (parent && connections.collapsed[parent]) connections.toggleCollapsed(parent);
@@ -402,7 +404,7 @@
     {#if results}
       {#each results as c (c.id)}{@render row(c, 0, true)}{/each}
       {#if !results.length}<p class="empty-line">{t("sidebar.noResults", { q: query })}</p>{/if}
-    {:else if connections.loaded && !connections.list.length && !connections.groups.length}
+    {:else if connections.loaded && !connections.list.length && !connections.groups.length && !creatingFolder}
       <div class="empty">
         <Icon name="server" size={20} />
         <strong>{t("sidebar.empty.title")}</strong>
