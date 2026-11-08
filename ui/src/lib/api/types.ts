@@ -12,7 +12,10 @@ export type OutputId = Uuid;
 export type ApprovalId = Uuid;
 
 // ---- model.rs ----
-export type ConnectionKind = "ssh" | "mysql" | "sftp" | "local" | "rdp";
+export type ConnectionKind = "ssh" | "mysql" | "postgres" | "sftp" | "local" | "rdp";
+/** Kinds that open a database tab. */
+export const DB_KINDS: ConnectionKind[] = ["mysql", "postgres"];
+export type DbTls = "disable" | "prefer" | "require" | "verify";
 export type Environment = "prod" | "staging" | "dev" | "none";
 
 export type SshAuth =
@@ -43,6 +46,10 @@ export interface Connection {
   rdp_admin?: boolean;
   /** Shown before the name: a built-in icon name or a single emoji. */
   icon?: string | null;
+  /** Databases: the database to open (the server's default when empty). */
+  database?: string | null;
+  /** Databases: transport encryption (`prefer` when unset). */
+  db_tls?: DbTls | null;
   /** Log in as this identity: its user and authentication replace `user` and `auth` when
    *  connecting, so changing the identity changes every connection using it. */
   identity?: IdentityId | null;
@@ -512,3 +519,54 @@ export type RdpInput =
   | { t: "release_all" }
   /** Text pasted into the session, offered to the server before the input that follows. */
   | { t: "clipboard"; text: string };
+
+// ---- databases ----
+
+export type DbKind = "mysql" | "postgres";
+
+/** An open database tab. */
+export interface DbOpened {
+  id: string;
+  kind: DbKind;
+  version: string;
+  /** The database the connection is in. */
+  database: string | null;
+}
+
+/** A cell: null, text, or bytes that are not UTF-8 (hex). */
+export type DbValue = null | string | { hex: string };
+
+export interface DbResultColumn {
+  name: string;
+  type_name: string;
+}
+
+/** The outcome of one statement. */
+export interface DbResultSet {
+  /** Empty for a statement without rows (and a query that returned none). */
+  columns: DbResultColumn[];
+  rows: DbValue[][];
+  rows_affected: number;
+  /** More rows existed than were kept. */
+  truncated: boolean;
+}
+
+/** One result per statement that completed, then the error that stopped the run. */
+export interface DbQueryOutput {
+  results: DbResultSet[];
+  error: string | null;
+  elapsed_ms: number;
+}
+
+export interface DbTableInfo {
+  name: string;
+  view: boolean;
+}
+
+export interface DbColumnInfo {
+  name: string;
+  data_type: string;
+  nullable: boolean;
+  default: string | null;
+  primary_key: boolean;
+}

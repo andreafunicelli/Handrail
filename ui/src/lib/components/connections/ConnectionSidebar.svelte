@@ -244,6 +244,7 @@
     <ConnIcon icon={c.icon} />
     <span class="name">{c.name}</span>
     {#if c.kind === "rdp"}<span class="kindic" title={t("editor.kind.rdp")}><Icon name="monitor" size={12} /></span>{/if}
+    {#if c.kind === "mysql" || c.kind === "postgres"}<span class="kindic" title={c.kind === "mysql" ? "MySQL" : "PostgreSQL"}><Icon name="database" size={12} /></span>{/if}
     {#if showPath}
       <span class="meta">{groupPath(connections.groups, c.group_id) || c.host}</span>
     {:else}
@@ -352,7 +353,6 @@
   <div class="kinds" role="tablist" data-tour="kinds" use:segmented>
     <button role="tab" aria-selected={kind === "ssh"} class="kind" class:on={kind === "ssh"} onclick={() => (kind = "ssh")}>{t("sidebar.servers")}</button>
     <button role="tab" aria-selected={kind === "s3"} class="kind" class:on={kind === "s3"} onclick={() => (kind = "s3")}>S3</button>
-    <button role="tab" aria-selected="false" class="kind" disabled>MySQL <span class="pill">{t("sidebar.soon")}</span></button>
   </div>
 
   {#if kind === "s3"}
@@ -518,14 +518,6 @@
   }
   .kind.on {
     color: var(--text);
-  }
-  .kind:disabled {
-    color: var(--faint);
-  }
-  .kind .pill {
-    height: 15px;
-    font-size: 9.5px;
-    padding: 0 5px;
   }
   .tree {
     flex: 1;

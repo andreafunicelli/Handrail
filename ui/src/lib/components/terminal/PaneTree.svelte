@@ -6,8 +6,10 @@
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import { leaves, type LayoutNode, type SplitDir } from "../../util/layout";
-  import { editDocOf, filesSession, isEdit, isFiles, isPending, isRdp, isS3, pendingRef, rdpConnectionOf, s3AccountOf, sessions } from "../../stores/sessions.svelte";
+  import { editDocOf, filesSession, isEdit, isFiles, isPending, isS3, isView, pendingRef, viewConnectionOf, s3AccountOf, sessions } from "../../stores/sessions.svelte";
   import RdpView from "../rdp/RdpView.svelte";
+  import DbView from "../db/DbView.svelte";
+  import { connections } from "../../stores/connections.svelte";
   import EditorPane from "../editor/EditorPane.svelte";
   import { s3 } from "../../stores/s3.svelte";
   import { s3Backend, sftpBackend } from "../../util/fileBackends";
@@ -153,8 +155,13 @@
       {:else if isS3(node.sessionId)}
         {@const id = s3AccountOf(node.sessionId)}
         <FileBrowser fs={s3Backend(id)} label={s3.byId(id)?.name ?? "S3"} />
-      {:else if isRdp(node.sessionId)}
-        <RdpView connectionId={rdpConnectionOf(node.sessionId)} {focused} />
+      {:else if isView(node.sessionId)}
+        {@const cid = viewConnectionOf(node.sessionId)}
+        {#if connections.byId.get(cid)?.kind === "rdp"}
+          <RdpView connectionId={cid} {focused} />
+        {:else}
+          <DbView connectionId={cid} {focused} />
+        {/if}
       {:else if isPending(node.sessionId)}
         <ConnectingPane ref={pendingRef(node.sessionId)} {focused} onclose={() => sessions.closePane(tabId, node.id)} />
       {:else}

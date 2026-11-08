@@ -52,6 +52,8 @@ fn connection(name: &str) -> Connection {
         tunnels: vec![],
         rdp_admin: false,
         icon: None,
+        database: None,
+        db_tls: None,
         identity: None,
     }
 }

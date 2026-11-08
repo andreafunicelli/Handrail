@@ -2,6 +2,7 @@ mod autosync;
 mod cmd_misc;
 mod cmd_vault;
 mod copy;
+mod db;
 mod rdp;
 mod s3;
 mod sftp;
@@ -177,6 +178,15 @@ pub fn run() {
             rdp::rdp_input,
             rdp::rdp_resize,
             rdp::rdp_close,
+            db::db_open,
+            db::db_close,
+            db::db_databases,
+            db::db_namespaces,
+            db::db_tables,
+            db::db_columns,
+            db::db_query,
+            db::db_table_rows,
+            db::db_cancel,
             sftp::sftp_sudo,
             sftp::sftp_root_off,
             sftp::sftp_read_text,

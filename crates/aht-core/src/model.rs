@@ -10,8 +10,11 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionKind {
     Ssh,
-    /// Reserved for v1.2.
+    /// MySQL or MariaDB: host, port (3306), user, a saved or prompted password, `database`,
+    /// `db_tls`, and optionally jump hosts to tunnel through.
     Mysql,
+    /// PostgreSQL, with the same fields as `Mysql` (port 5432).
+    Postgres,
     /// Reserved for v1.1.
     Sftp,
     /// Local shell (PowerShell, bash, WSL...).
@@ -19,6 +22,22 @@ pub enum ConnectionKind {
     /// Remote desktop: host, port (3389), user (`DOMAIN\user` or `user@domain`), a saved
     /// password, and optionally jump hosts to tunnel through.
     Rdp,
+}
+
+/// Transport encryption of a database connection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DbTls {
+    /// Plain TCP.
+    Disable,
+    /// TLS when the server offers it, without checking its certificate.
+    #[default]
+    Prefer,
+    /// TLS required, certificate not checked.
+    Require,
+    /// TLS required and the certificate checked against the system's roots (and the host name,
+    /// unless the connection goes through jump hosts).
+    Verify,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +98,12 @@ pub struct Connection {
     /// emoji. Unknown values are shown as text, so newer icon names degrade gracefully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// For databases: the database to open (the server's default when empty).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
+    /// For databases: transport encryption (`Prefer` when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_tls: Option<DbTls>,
     /// Log in as this saved identity: its user and authentication replace `user` and `auth`
     /// at connect time, so changing the identity changes every connection that uses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

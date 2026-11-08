@@ -33,21 +33,8 @@ impl DbKind {
     }
 }
 
-/// Transport encryption.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DbTls {
-    /// Plain TCP.
-    Disable,
-    /// TLS when the server offers it, without checking its certificate.
-    #[default]
-    Prefer,
-    /// TLS required, certificate not checked.
-    Require,
-    /// TLS required and the certificate checked against the system's roots (and the host
-    /// name, unless the connection goes through an SSH tunnel to 127.0.0.1).
-    Verify,
-}
+/// Transport encryption (the connection model's setting).
+pub use aht_core::model::DbTls;
 
 /// Where and as whom to connect.
 #[derive(Clone)]

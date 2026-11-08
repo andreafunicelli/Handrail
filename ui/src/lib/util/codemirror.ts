@@ -16,7 +16,7 @@ import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { php } from "@codemirror/lang-php";
 import { python } from "@codemirror/lang-python";
-import { sql } from "@codemirror/lang-sql";
+import { MySQL, PostgreSQL, sql } from "@codemirror/lang-sql";
 import { xml } from "@codemirror/lang-xml";
 import { yaml } from "@codemirror/lang-yaml";
 import { c, cpp, csharp, java, kotlin, scala } from "@codemirror/legacy-modes/mode/clike";
@@ -448,4 +448,55 @@ export function createDiff(parent: HTMLElement, o: { original: string; proposed:
     }),
   });
   return { destroy: () => view.destroy() };
+}
+
+/** The SQL editor of a database tab. */
+export interface SqlEditorHandle {
+  /** The selected text if any, else the whole text: what Run sends. */
+  runText(): string;
+  text(): string;
+  /** Tables and their columns, for completion (`{ "shop.orders": ["id", "total"] }`). */
+  setSchema(schema: Record<string, string[]>, defaultNamespace?: string): void;
+  focus(): void;
+  destroy(): void;
+}
+
+export function createSqlEditor(
+  parent: HTMLElement,
+  o: { doc: string; dialect: "mysql" | "postgres"; onRun: () => void; onChange: (text: string) => void },
+): SqlEditorHandle {
+  const lang = new Compartment();
+  const dialect = o.dialect === "mysql" ? MySQL : PostgreSQL;
+  const view = new EditorView({
+    parent,
+    state: EditorState.create({
+      doc: o.doc,
+      extensions: [
+        keymap.of([
+          { key: "Mod-Enter", preventDefault: true, run: () => (o.onRun(), true) },
+          { key: "Shift-Enter", preventDefault: true, run: () => (o.onRun(), true) },
+          indentWithTab,
+        ]),
+        basicSetup,
+        theme,
+        syntaxHighlighting(highlight),
+        lang.of(sql({ dialect, upperCaseKeywords: true })),
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged) o.onChange(u.state.doc.toString());
+        }),
+      ],
+    }),
+  });
+  return {
+    runText() {
+      const sel = view.state.selection.ranges.filter((r) => !r.empty).map((r) => view.state.sliceDoc(r.from, r.to));
+      return sel.length ? sel.join("\n") : view.state.doc.toString();
+    },
+    text: () => view.state.doc.toString(),
+    setSchema(schema, defaultNamespace) {
+      view.dispatch({ effects: lang.reconfigure(sql({ dialect, upperCaseKeywords: true, schema, defaultSchema: defaultNamespace })) });
+    },
+    focus: () => view.focus(),
+    destroy: () => view.destroy(),
+  };
 }

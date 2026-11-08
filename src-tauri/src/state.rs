@@ -40,6 +40,7 @@ pub struct AppState {
     /// its secret changes, cleared when the vault locks.
     pub s3: Mutex<HashMap<String, Arc<aht_s3::S3Client>>>,
     pub rdp: crate::rdp::RdpHub,
+    pub db: crate::db::DbHub,
 }
 
 impl AppState {
@@ -57,6 +58,7 @@ impl AppState {
             terminal: crate::terminal::TerminalHub::default(),
             s3: Mutex::new(HashMap::new()),
             rdp: crate::rdp::RdpHub::default(),
+            db: crate::db::DbHub::default(),
             paths,
         })
     }
