@@ -59,6 +59,11 @@ impl HostKeyVerifier for PromptingVerifier {
     async fn verify(&self, host: &str, port: u16, key: &PublicKey) -> HostKeyDecision {
         match self.store.check(host, port, key) {
             HostKeyStatus::Known => HostKeyDecision::Accept,
+            // Refused outright, with no prompt to override it (as OpenSSH does).
+            HostKeyStatus::Revoked { fingerprint } => {
+                tracing::warn!("host key {fingerprint} for {host}:{port} is revoked");
+                HostKeyDecision::Reject
+            }
             HostKeyStatus::New { fingerprint } => {
                 if !self.prompt.confirm_new(host, port, &fingerprint).await {
                     return HostKeyDecision::Reject;
@@ -106,6 +111,10 @@ impl HostKeyVerifier for StrictVerifier {
             },
             HostKeyStatus::New { .. } => HostKeyDecision::Reject,
             HostKeyStatus::Changed { old, new } => HostKeyDecision::Mismatch { old, new },
+            HostKeyStatus::Revoked { fingerprint } => {
+                tracing::warn!("host key {fingerprint} for {host}:{port} is revoked");
+                HostKeyDecision::Reject
+            }
         }
     }
 }

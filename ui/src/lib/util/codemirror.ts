@@ -106,7 +106,6 @@ export const LANGUAGES: Lang[] = [
 ];
 
 const byId = (id: string) => LANGUAGES.find((l) => l.id === id) ?? LANGUAGES[0];
-export const languageName = (id: string) => byId(id).name;
 
 /** The language of a file, from its name, its folder, or a `#!` line. */
 export function detectLanguage(path: string, text = ""): string {

@@ -142,6 +142,30 @@ fn manifest_is_plaintext_and_kdf_params_persist() {
     assert_eq!((d.m_kib, d.t, d.p), (65536, 3, 1));
 }
 
+#[test]
+fn manifest_with_extreme_kdf_cost_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let _ = new_vault(dir.path());
+    let p = dir.path().join("manifest.json");
+    let original: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+    for (field, value) in [("m_kib", 64 * 1024 * 1024), ("t", 1000), ("p", 0)] {
+        let mut m = original.clone();
+        m["kdf"][field] = json!(value);
+        let bytes = serde_json::to_vec(&m).unwrap();
+        // From disk and from a sync target alike.
+        std::fs::write(&p, &bytes).unwrap();
+        assert!(
+            Vault::open(dir.path()).is_err(),
+            "{field}={value} accepted on open"
+        );
+        let other = tempfile::tempdir().unwrap();
+        assert!(
+            Vault::join(other.path(), &bytes).is_err(),
+            "{field}={value} accepted on join"
+        );
+    }
+}
+
 fn hex_len(v: &serde_json::Value) -> usize {
     v.as_str().unwrap().len()
 }

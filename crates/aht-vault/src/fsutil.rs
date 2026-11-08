@@ -5,6 +5,16 @@ use std::path::Path;
 
 /// Write `bytes` to `path` atomically: write a temp file in the same directory, fsync, rename.
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomically(path, bytes, false)
+}
+
+/// Like [`atomic_write`], for a file only its owner may read (Unix mode 0600 from creation on,
+/// so it is never readable by others, even briefly).
+pub(crate) fn atomic_write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomically(path, bytes, true)
+}
+
+fn write_atomically(path: &Path, bytes: &[u8], private: bool) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir)?;
     let name = path
@@ -15,7 +25,18 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     getrandom::fill(&mut suffix).map_err(|e| std::io::Error::other(e.to_string()))?;
     let tmp = dir.join(format!(".{name}.{}.tmp", hex::encode(suffix)));
     let result = (|| {
-        let mut f = std::fs::File::create(&tmp)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            if private {
+                opts.mode(0o600);
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = private;
+        let mut f = opts.open(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
         drop(f);
@@ -40,5 +61,17 @@ mod tests {
         assert_eq!(std::fs::read(&p).unwrap(), b"two");
         let n = std::fs::read_dir(p.parent().unwrap()).unwrap().count();
         assert_eq!(n, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("k");
+        atomic_write_private(&p, b"secret").unwrap();
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(std::fs::read(&p).unwrap(), b"secret");
     }
 }

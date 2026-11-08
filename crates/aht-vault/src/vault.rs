@@ -34,6 +34,10 @@ const KEY_CHECK_PLAINTEXT: &[u8] = b"aihubterm vault key check v1";
 const SNAPSHOT_MAGIC: &[u8] = b"AHTSNAP1";
 /// Number of snapshots kept on disk.
 pub const MAX_SNAPSHOTS: usize = 10;
+/// Upper bounds for the Argon2 parameters a manifest may ask for.
+const MAX_KDF_MEMORY_KIB: u32 = 1024 * 1024;
+const MAX_KDF_PASSES: u32 = 16;
+const MAX_KDF_LANES: u32 = 16;
 
 /// Plaintext vault manifest, readable before unlock.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +71,20 @@ impl Manifest {
             return Err(VaultError::Corrupt(format!(
                 "unknown kdf {}",
                 m.kdf_algorithm
+            )));
+        }
+        // The manifest may come from a sync target: refuse costs that would exhaust memory or
+        // hang the unlock (vaults are created with 64 MiB, 3 passes, 1 lane).
+        let k = m.kdf;
+        if k.m_kib > MAX_KDF_MEMORY_KIB
+            || k.t == 0
+            || k.t > MAX_KDF_PASSES
+            || k.p == 0
+            || k.p > MAX_KDF_LANES
+        {
+            return Err(VaultError::Corrupt(format!(
+                "kdf parameters out of range: {} KiB, {} passes, {} lanes",
+                k.m_kib, k.t, k.p
             )));
         }
         Ok(m)

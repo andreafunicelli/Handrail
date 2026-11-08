@@ -477,15 +477,11 @@ const READ_ONLY: &[&str] = &[
     "loginctl",
     "uptime",
     "env",
-    "export",
-    "alias",
-    "set",
     "column",
     "fold",
     "fmt",
     "expand",
     "base64",
-    "openssl",
     "nc",
     "telnet",
     "dpkg-query",
@@ -816,27 +812,54 @@ fn classify_words(words: &[String]) -> RiskClass {
                     .cloned()
                     .collect();
                 max_risk(RiskClass::Write, classify_words(&inner))
-            } else if args.iter().any(|a| a.starts_with("-fprint")) {
+            } else if args.iter().any(|a| a.starts_with("-fprint") || a == "-fls") {
                 RiskClass::Write
             } else {
                 RiskClass::Read
             };
         }
         "sed" => {
-            return if has_flag(args, 'i', "in-place") {
+            return if has_flag(args, 'i', "in-place") || sed_runs_or_writes(args) {
                 RiskClass::Write
             } else {
                 RiskClass::Read
             };
         }
         "awk" | "gawk" | "mawk" => {
+            // A program file or loaded extension is unknown; in the program, `system()`, pipes
+            // to or from commands and `print > file` run or write.
+            let external = has_flag(args, 'f', "file")
+                || has_flag(args, 'i', "include")
+                || has_flag(args, 'l', "load");
+            // The program is the first operand; `-F '|'` and `-v x=…` values are not.
+            let j = skip_opts(args, &["-F", "-v", "--field-separator", "--assign"]);
+            let program = args.get(j).map_or("", String::as_str);
+            return if external || awk_runs_or_writes(program) {
+                RiskClass::Write
+            } else {
+                RiskClass::Read
+            };
+        }
+        "openssl" => {
             return if args
                 .iter()
-                .any(|a| a.contains("system(") || a.contains("print >"))
+                .any(|a| matches!(a.as_str(), "-out" | "-keyout"))
             {
                 RiskClass::Write
             } else {
                 RiskClass::Read
+            };
+        }
+        "alias" | "export" | "set" | "declare" | "typeset" | "readonly" | "unset" | "unalias"
+        | "shopt" => {
+            // Listing is read-only. Anything else changes how later commands run: an alias can
+            // make `ls` run something else, and `export PROMPT_COMMAND=…` runs at every prompt.
+            let listing = args.iter().all(|a| a == "-p")
+                || (cmd == "alias" && args.iter().all(|a| !a.contains('=')));
+            return if listing {
+                RiskClass::Read
+            } else {
+                RiskClass::Write
             };
         }
         "sort" => {
@@ -847,24 +870,30 @@ fn classify_words(words: &[String]) -> RiskClass {
             };
         }
         "curl" => {
-            let writes = args.iter().any(|a| {
-                matches!(
-                    a.as_str(),
-                    "-d" | "--data"
-                        | "--data-raw"
-                        | "--data-binary"
-                        | "-F"
-                        | "--form"
-                        | "-T"
-                        | "--upload-file"
-                        | "-o"
-                        | "--output"
-                        | "-O"
-                        | "--remote-name"
-                ) || a.starts_with("--data")
-            }) || args.windows(2).any(|w| {
-                (w[0] == "-X" || w[0] == "--request") && !w[1].eq_ignore_ascii_case("GET")
-            });
+            // Short options are often clustered (`-fsSLO`, `-sLo file`).
+            let writes = ['d', 'F', 'T', 'o', 'O', 'K']
+                .iter()
+                .any(|&f| has_flag(args, f, ""))
+                || args.iter().any(|a| {
+                    a.strip_prefix("--").is_some_and(|l| {
+                        l.starts_with("data")
+                            || [
+                                "form",
+                                "upload-file",
+                                "output",
+                                "output-dir",
+                                "remote-name",
+                                "remote-name-all",
+                                "config",
+                                "json",
+                            ]
+                            .iter()
+                            .any(|n| l == *n || l.starts_with(&format!("{n}=")))
+                    })
+                })
+                || args.windows(2).any(|w| {
+                    (w[0] == "-X" || w[0] == "--request") && !w[1].eq_ignore_ascii_case("GET")
+                });
             return if writes {
                 RiskClass::Write
             } else {
@@ -968,6 +997,149 @@ fn classify_words(words: &[String]) -> RiskClass {
     }
 }
 
+/// Whether a sed invocation's script runs commands (`e`, `s///e`) or writes files (`w`, `W`,
+/// `s///w`). A script read from a file (`-f`) is unknown, so it counts too.
+fn sed_runs_or_writes(args: &[String]) -> bool {
+    let mut scripts: Vec<&str> = Vec::new();
+    let mut i = 0;
+    let mut explicit = false;
+    let mut first_operand = None;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "--" {
+            first_operand = first_operand.or(args.get(i + 1).map(String::as_str));
+            break;
+        }
+        if let Some(l) = a.strip_prefix("--") {
+            if let Some(v) = l.strip_prefix("expression=") {
+                scripts.push(v);
+                explicit = true;
+            } else if l == "expression" {
+                scripts.extend(args.get(i + 1).map(String::as_str));
+                explicit = true;
+                i += 1;
+            } else if l == "file" || l.starts_with("file=") {
+                return true;
+            } else if l == "line-length" {
+                i += 1;
+            }
+        } else if let Some(flags) = a.strip_prefix('-').filter(|f| !f.is_empty()) {
+            // A cluster such as `-ne 'p'`: `e` and `f` take the rest, or the next word.
+            for (k, f) in flags.char_indices() {
+                match f {
+                    'f' => return true,
+                    'e' | 'l' => {
+                        let inline = &flags[k + 1..];
+                        let value = if inline.is_empty() {
+                            i += 1;
+                            args.get(i).map(String::as_str)
+                        } else {
+                            Some(inline)
+                        };
+                        if f == 'e' {
+                            scripts.extend(value);
+                            explicit = true;
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        } else if first_operand.is_none() {
+            first_operand = Some(a);
+        }
+        i += 1;
+    }
+    if !explicit {
+        scripts.extend(first_operand);
+    }
+    scripts.iter().any(|s| sed_script_runs_or_writes(s))
+}
+
+/// Walk a sed script command by command (addresses, `s`/`y` with any delimiter, text and label
+/// arguments) looking for `e`, `w`, `W`, or an `e`/`w` flag on `s`.
+fn sed_script_runs_or_writes(script: &str) -> bool {
+    let c: Vec<char> = script.chars().collect();
+    let n = c.len();
+    // Index just past the next unescaped `delim` at or after `i`.
+    let skip_delimited = |mut i: usize, delim: char| -> usize {
+        while i < n && c[i] != delim {
+            i += if c[i] == '\\' { 2 } else { 1 };
+        }
+        (i + 1).min(n)
+    };
+    let to_line_end = |mut i: usize| -> usize {
+        while i < n && c[i] != '\n' {
+            i += 1;
+        }
+        i
+    };
+    let mut i = 0;
+    while i < n {
+        // Separators, then an address (numbers, `$`, `/re/`, `\%re%`, ranges, steps).
+        loop {
+            if i >= n {
+                return false;
+            }
+            match c[i] {
+                ' ' | '\t' | '\n' | ';' | '{' | '}' | '!' | ',' | '~' | '+' | '$' => i += 1,
+                d if d.is_ascii_digit() => i += 1,
+                '/' => {
+                    i = skip_delimited(i + 1, '/');
+                    while i < n && matches!(c[i], 'I' | 'M') {
+                        i += 1;
+                    }
+                }
+                '\\' if i + 1 < n => {
+                    let d = c[i + 1];
+                    i = skip_delimited(i + 2, d);
+                    while i < n && matches!(c[i], 'I' | 'M') {
+                        i += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let cmd = c[i];
+        i += 1;
+        match cmd {
+            'e' | 'w' | 'W' => return true,
+            's' | 'y' if i < n => {
+                let d = c[i];
+                i = skip_delimited(i + 1, d);
+                i = skip_delimited(i, d);
+                if cmd == 's' {
+                    while i < n && !matches!(c[i], ';' | '\n' | '}' | ' ' | '\t') {
+                        if matches!(c[i], 'e' | 'w') {
+                            return true;
+                        }
+                        i += 1;
+                    }
+                }
+            }
+            // Text (`a`, `i`, `c`), a file to read (`r`, `R`) or a label: the rest of the line.
+            'a' | 'i' | 'c' | 'r' | 'R' | ':' => i = to_line_end(i),
+            'b' | 't' | 'T' => {
+                while i < n && !matches!(c[i], ';' | '\n' | '}') {
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether an awk program runs commands or writes files: `system()`, a pipe to or from a
+/// command (`print | "sh"`, `"cmd" | getline`; not `||`), or `print … > file`.
+fn awk_runs_or_writes(program: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"system\s*\(|(?:^|[^|])\|(?:[^|]|$)|\bprintf?\b[^;{}\n]*>").unwrap()
+    })
+    .is_match(program)
+}
+
 fn is_assignment(w: &str) -> bool {
     match w.find('=') {
         Some(p) if p > 0 => w[..p]
@@ -978,10 +1150,18 @@ fn is_assignment(w: &str) -> bool {
 }
 
 fn classify_git(args: &[String]) -> RiskClass {
-    // Skip global options like `-C dir`, `-c k=v`, `--no-pager`.
+    // Skip global options like `-C dir`, `-c k=v`, `--no-pager`. A configuration given on the
+    // command line can run anything (`-c core.pager=…`, `-c alias.x='!…'`), and so can another
+    // exec path.
     let mut j = 0;
+    let mut config = false;
     while j < args.len() && args[j].starts_with('-') {
-        if args[j] == "-C" || args[j] == "-c" {
+        let a = args[j].as_str();
+        config |= a == "-c"
+            || a.starts_with("--config-env")
+            || a.starts_with("--exec-path=")
+            || (a.starts_with("-c") && a.len() > 2);
+        if a == "-C" || a == "-c" || a == "--config-env" {
             j += 1;
         }
         j += 1;
@@ -990,7 +1170,21 @@ fn classify_git(args: &[String]) -> RiskClass {
         return RiskClass::Read;
     };
     let rest = &args[j + 1..];
-    match sub.as_str() {
+    let risk = classify_git_command(sub, rest);
+    // `--output` writes a file; `git grep -O` opens the matches in a program.
+    let output = rest.iter().any(|a| {
+        a.starts_with("--output")
+            || (sub == "grep" && (a.starts_with("-O") || a.starts_with("--open-files-in-pager")))
+    });
+    if config || output {
+        max_risk(RiskClass::Write, risk)
+    } else {
+        risk
+    }
+}
+
+fn classify_git_command(sub: &str, rest: &[String]) -> RiskClass {
+    match sub {
         "status" | "log" | "diff" | "show" | "rev-parse" | "describe" | "blame" | "ls-files"
         | "ls-tree" | "ls-remote" | "shortlog" | "reflog" | "grep" | "cat-file" | "whatchanged"
         | "help" | "version" | "rev-list" | "for-each-ref" => RiskClass::Read,
@@ -1213,6 +1407,40 @@ mod tests {
             ("busybox rm -rf /data", Destructive),
             ("sudo -D /tmp rm -rf x", Destructive),
             ("ls | xargs --max-args 1 rm -rf", Destructive),
+            // Read-only commands that run others or write files through an option or script.
+            ("git -c core.pager='sh -c id' log", Write),
+            ("git -c alias.x='!touch y' x", Write),
+            ("git --config-env=core.pager=P log", Write),
+            ("git log --output=/tmp/x", Write),
+            ("git grep -O vim foo", Write),
+            ("sed -n '1e id' /etc/hostname", Write),
+            ("sed 's/a/b/e' f", Write),
+            ("sed -n 's/x/y/w out.txt' f", Write),
+            ("sed -e 's/error/E/g' -e '1,3p' log", Read),
+            ("sed -ne '/start/,/end/p' f", Read),
+            ("sed -f script.sed f", Write),
+            ("sed 'y/abc/xyz/;$!N;/re/I d' f", Read),
+            ("awk 'BEGIN{system(\"id\")}'", Write),
+            ("awk '{print | \"sh\"}' f", Write),
+            ("awk '{\"date\" | getline d; print d}'", Write),
+            ("awk '{print $1 > \"out\"}' f", Write),
+            ("awk -F'|' '$3 > 100 || $2 == 0 {print $1}' f", Read),
+            ("awk -F '|' '{print $2}' f", Read),
+            ("awk -f prog.awk f", Write),
+            ("alias ls='touch x'", Write),
+            ("alias", Read),
+            ("alias ll", Read),
+            ("export PROMPT_COMMAND='id'", Write),
+            ("export -p", Read),
+            ("set -o vi", Write),
+            ("set", Read),
+            ("curl -fsSLO https://x.example/f.tgz", Write),
+            ("curl -sLo out https://x.example/f", Write),
+            ("curl --json '{}' https://api", Write),
+            ("curl -sSL https://x.example", Read),
+            ("openssl x509 -in c.pem -noout -text", Read),
+            ("openssl genrsa -out key.pem 2048", Write),
+            ("find . -name '*.log' -fls list.txt", Write),
         ];
         let mut failures = Vec::new();
         for (cmd, want) in cases {
