@@ -25,6 +25,7 @@
   import { s3 } from "../../stores/s3.svelte";
   import { t } from "../../i18n";
   import { leaves } from "../../util/layout";
+  import { dbApprovals } from "../../stores/dbApprovals.svelte";
   import { agent } from "../../stores/agent.svelte";
   import { connections } from "../../stores/connections.svelte";
   import { sessions } from "../../stores/sessions.svelte";
@@ -47,7 +48,7 @@
   const settled = () => performance.now() - openedAt > 350;
 
   onMount(() => {
-    void Promise.all([connections.load(), snippets.load(), s3.load(), sessions.init(), agent.init()]).catch(toasts.error);
+    void Promise.all([connections.load(), snippets.load(), s3.load(), sessions.init(), agent.init(), dbApprovals.init()]).catch(toasts.error);
     updates.start();
     // First run after creating the vault: show the tour once the layout is on screen.
     let tourTimer: ReturnType<typeof setTimeout> | undefined;
@@ -147,19 +148,22 @@
     <UpdateBanner />
     <TabStrip />
     <div class="panes">
-      {#if sessions.activeTab}
-        {#key sessions.activeTab.id}
-          {@const zoomed = sessions.zoomedLeaf(sessions.activeTab)}
+      <!-- Every tab stays mounted (inactive ones hidden): a database or remote desktop view
+           holds its connection while mounted, so switching tabs must not close it. -->
+      {#each sessions.tabs as tab (tab.id)}
+        {@const zoomed = sessions.zoomedLeaf(tab)}
+        <div class="tab-panes" class:hidden={tab.id !== sessions.activeTabId}>
           {#if zoomed}
             <!-- A view per pane: TerminalView attaches its terminal once, so switching panes must not reuse it. -->
             {#key zoomed.id}
-              <PaneTree node={zoomed} tabId={sessions.activeTab.id} multi zoomed />
+              <PaneTree node={zoomed} tabId={tab.id} multi zoomed />
             {/key}
           {:else}
-            <PaneTree node={sessions.activeTab.layout} tabId={sessions.activeTab.id} multi={leaves(sessions.activeTab.layout).length > 1} />
+            <PaneTree node={tab.layout} tabId={tab.id} multi={leaves(tab.layout).length > 1} />
           {/if}
-        {/key}
-      {:else}
+        </div>
+      {/each}
+      {#if !sessions.activeTab}
         <StartPage />
       {/if}
     </div>
@@ -258,6 +262,13 @@
     flex: 1;
     min-height: 0;
     position: relative;
+  }
+  .tab-panes {
+    position: absolute;
+    inset: 0;
+  }
+  .tab-panes.hidden {
+    display: none;
   }
   .ai-dock {
     flex: none;

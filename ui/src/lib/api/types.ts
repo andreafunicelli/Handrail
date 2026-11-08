@@ -579,3 +579,19 @@ export type DbRowEdit =
   | { op: "update"; key: [string, DbCellValue][]; set: [string, DbCellValue][] }
   | { op: "insert"; values: [string, DbCellValue][] }
   | { op: "delete"; key: [string, DbCellValue][] };
+
+/** How risky SQL an agent wants to run is. */
+export type DbSqlRisk = "read" | "write" | "destructive";
+
+/** SQL an agent wants to run on a shared database tab, waiting for the user. */
+export interface DbApprovalRequest {
+  approval_id: string;
+  /** The tab (as returned by `dbOpen`). */
+  database_id: string;
+  actor_label: string;
+  sql: string;
+  reason: string | null;
+  risk: DbSqlRisk;
+  statements: number;
+  policy_note: string;
+}

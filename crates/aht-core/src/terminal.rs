@@ -214,6 +214,65 @@ pub trait TerminalTools: Send + Sync {
             "file edits are not available here".into(),
         ))
     }
+    /// Database tabs the user shared with agents.
+    async fn list_databases(&self, actor: &Actor) -> Result<Vec<DatabaseSummary>> {
+        let _ = actor;
+        Ok(Vec::new())
+    }
+    /// Namespaces, a namespace's tables, or a table's columns of a shared database tab.
+    async fn db_schema(&self, actor: &Actor, req: DbSchemaRequest) -> Result<Value> {
+        let _ = (actor, req);
+        Err(crate::Error::Invalid(
+            "databases are not available here".into(),
+        ))
+    }
+    /// Run SQL on a shared database tab, after the user's approval where it is needed.
+    async fn db_query(&self, actor: &Actor, req: DbQueryRequest) -> Result<Value> {
+        let _ = (actor, req);
+        Err(crate::Error::Invalid(
+            "databases are not available here".into(),
+        ))
+    }
+}
+
+/// A database tab the user shared with agents.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatabaseSummary {
+    pub database_id: String,
+    /// The saved connection's name.
+    pub name: String,
+    pub kind: ConnectionKind,
+    pub host: String,
+    /// The database the tab is in (MySQL: may change with `USE`).
+    pub database: Option<String>,
+    pub env: Environment,
+    pub version: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbSchemaRequest {
+    pub database_id: String,
+    /// Without it: the namespaces (databases on MySQL, schemas on PostgreSQL).
+    #[serde(default)]
+    pub namespace: Option<String>,
+    /// With `namespace`: the table's columns instead of the namespace's tables.
+    #[serde(default)]
+    pub table: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbQueryRequest {
+    pub database_id: String,
+    pub sql: String,
+    /// Shown to the user on the approval card.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// Rows kept per result (default 100, at most 1000).
+    #[serde(default)]
+    pub max_rows: Option<usize>,
+    /// Treat the SQL as a write even if it reads (it calls a function that changes data).
+    #[serde(default)]
+    pub write: bool,
 }
 
 /// New contents for a whole text file, proposed by an agent.
@@ -348,6 +407,47 @@ rejected (with the user's note) or failed.",
                 "required": ["session_id", "path", "content"]
             }),
         },
+        ToolSpec {
+            name: "list_databases",
+            description: "List the database tabs (MySQL/MariaDB, PostgreSQL) the user opened in Handrail \
+and shared with agents. Only these can be queried.",
+            input_schema: json!({"type": "object", "properties": {}}),
+        },
+        ToolSpec {
+            name: "db_schema",
+            description: "Read the schema of a shared database: without namespace, its namespaces \
+(databases on MySQL, schemas on PostgreSQL); with namespace, its tables and views; with namespace and \
+table, the table's columns (type, nullability, default, primary key).",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "database_id": {"type": "string", "description": "Id from list_databases"},
+                    "namespace": {"type": "string"},
+                    "table": {"type": "string"}
+                },
+                "required": ["database_id"]
+            }),
+        },
+        ToolSpec {
+            name: "db_query",
+            description: "Run SQL (one or more statements) on a shared database. Reads (SELECT, SHOW, \
+EXPLAIN, ...) run in a read-only transaction and may run without asking; writes and schema changes wait \
+for the user's approval depending on their settings, and destructive statements (DROP, TRUNCATE, DELETE or \
+UPDATE without WHERE, ...) always do. Each call is its own unit of work: a transaction left open is rolled \
+back at the end. Results are cut to max_rows rows and about 64 KB; select only the columns you need and use \
+LIMIT. If the user denies, do not retry the same SQL; ask them.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "database_id": {"type": "string", "description": "Id from list_databases"},
+                    "sql": {"type": "string"},
+                    "reason": {"type": "string", "description": "Short explanation shown to the user on the approval card"},
+                    "max_rows": {"type": "integer", "minimum": 1, "maximum": 1000, "description": "Default 100"},
+                    "write": {"type": "boolean", "description": "Set when a read-looking statement changes data (e.g. calls a function that writes), so it runs outside the read-only transaction after approval"}
+                },
+                "required": ["database_id", "sql"]
+            }),
+        },
     ]
 }
 
@@ -410,6 +510,9 @@ pub async fn dispatch_tool(
             Ok(json!({"ok": true}))
         }
         "propose_file_edit" => ser(tools.propose_file_edit(actor, parse(args)?).await?),
+        "list_databases" => ser(tools.list_databases(actor).await?),
+        "db_schema" => tools.db_schema(actor, parse(args)?).await,
+        "db_query" => tools.db_query(actor, parse(args)?).await,
         other => Err(Error::NotFound(format!("tool {other}"))),
     }
 }

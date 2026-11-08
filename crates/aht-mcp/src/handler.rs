@@ -31,7 +31,9 @@ Never try to answer password prompts or type secrets.
 - Long output is truncated (head+tail); page through it with read_output and the output_id.
 - A timed_out command is still running: poll with read_output or interrupt with send_keys [\"ctrl_c\"].
 - To change a file on an SSH server, cat it first, then call propose_file_edit with the complete new contents; \
-the user reviews the diff and saves it. Do not edit files with sed, echo or tee.";
+the user reviews the diff and saves it. Do not edit files with sed, echo or tee.
+- Databases the user shared are listed by list_databases: read their schema with db_schema and query them \
+with db_query (not with a database client in a terminal). Writes may need the user's approval.";
 
 /// Built once; every session handler shares it.
 pub(crate) struct Shared {

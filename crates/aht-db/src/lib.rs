@@ -9,6 +9,7 @@
 
 mod mysql;
 mod postgres;
+pub mod risk;
 pub mod sql;
 
 pub use aht_core::{Error, Result};
@@ -313,6 +314,35 @@ impl DbClient {
             Inner::Mysql(c) => c.query(sql, limits).await,
             Inner::Postgres(c) => c.query(sql, limits).await,
         }
+    }
+
+    /// Run SQL written by an agent on the main connection. With `read_only` it runs in a
+    /// read-only transaction, so a statement that writes fails on the server whatever it looks
+    /// like. Either way a transaction left open is rolled back afterwards: one call is one unit
+    /// of work, and nothing stays locked between calls.
+    pub async fn run_agent(
+        &self,
+        sql: &str,
+        limits: QueryLimits,
+        read_only: bool,
+    ) -> Result<QueryOutput> {
+        // A call cut short (cancelled by the agent) may have left a transaction open; inside
+        // it, PostgreSQL's BEGIN READ ONLY would be ignored.
+        let _ = self.query("ROLLBACK", limits).await;
+        if read_only {
+            let begin = match self.kind() {
+                DbKind::Mysql => "START TRANSACTION READ ONLY",
+                DbKind::Postgres => "BEGIN READ ONLY",
+            };
+            if let Some(e) = self.query(begin, limits).await?.error {
+                return Err(Error::Other(format!(
+                    "could not start a read-only transaction: {e}"
+                )));
+            }
+        }
+        let out = self.query(sql, limits).await;
+        let _ = self.query("ROLLBACK", limits).await;
+        out
     }
 
     /// Apply edits made in the grid to `namespace.table`, all in one transaction; returns the

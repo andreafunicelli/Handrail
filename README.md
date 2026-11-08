@@ -103,6 +103,12 @@ Open Windows desktops over RDP in tabs beside your terminals. Use NLA authentica
 
 RDP runs in a separate `handrail-rdp` helper process built on [IronRDP](https://github.com/Devolutions/IronRDP).
 
+### Databases
+
+Open MySQL/MariaDB and PostgreSQL databases in tabs: browse schemas and tables, write SQL with completion, and page through results in a fast grid with CSV export. Tables with a primary key can be edited in the grid; changes are saved together in one transaction. Reach servers behind a bastion through the connection’s jump hosts, with optional TLS.
+
+Share a database tab with agents to let them read its schema and query it. Reads run in a read-only transaction; writes wait for your approval according to your settings (always on production connections), and destructive statements such as `DROP` or a `DELETE` without `WHERE` always do. The request appears in the database tab with the full SQL.
+
 ## Encrypted vault and sync
 
 Connections, saved credentials, and provider keys live in a vault protected by your **master password and Secret Key**, using Argon2id and XChaCha20-Poly1305.

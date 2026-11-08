@@ -51,6 +51,25 @@ Tests run against real MySQL 8 and PostgreSQL 16 containers in CI (ubuntu), skip
 
 ## Agent (phase 4)
 
-MCP tools `db_schema` and `db_query` on the database tabs the user has open. Reads run directly;
-writes need approval under confirm-writes, destructive statements always; on `prod` connections
-every write is confirmed. Results are sent to the agent with a row and size cap.
+Tools `list_databases`, `db_schema` and `db_query` (MCP and the built-in agent) reach only the
+database tabs the user **shared with agents** (a toggle in the tab, off for every new connection):
+agents are scoped to their terminal, so a database is never reachable without that explicit step.
+
+- Each shared tab gives agents a client of their own, opened on first use, so agent SQL never runs
+  inside a transaction the user left open in the editor. One agent call at a time per tab; each
+  call is its own unit of work: an open transaction is rolled back at the end (and before the
+  next call).
+- `aht_db::risk::classify` reads the SQL with a lexer that skips strings, quoted names and
+  comments as the server does (MySQL `--` needs a following space, `#` comments, `/*! */` runs as
+  SQL and counts as destructive; PostgreSQL nested comments, dollar quotes, `E''` strings). Where
+  the reading depends on server settings (backslash escapes), both readings are taken and the
+  riskier wins.
+- Reads run in a read-only transaction (`START TRANSACTION READ ONLY` / `BEGIN READ ONLY`), so a
+  read that writes (a function with side effects) fails on the server. `write: true` lets the
+  agent run such a statement as a write, with its approval.
+- Approval (the connection's mode, else the default): reads wait only under confirm-all; writes
+  wait unless the mode is auto, and always on `prod` connections; destructive statements always
+  wait. The request shows as a card in the database tab (SQL, reason, risk, agent) with Approve /
+  Deny and a note for the agent; a toast points to it. Unanswered requests are denied after 15
+  minutes, or when the tab is closed or unshared.
+- Results: 100 rows by default (at most 1000), about 64 KB per result.

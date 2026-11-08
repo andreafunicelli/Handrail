@@ -12,9 +12,9 @@ use aht_core::model::{
     SshAuth,
 };
 use aht_core::terminal::{
-    Actor, CommandResult, ConnectionSummary, ControlKey, FileEditOutcome, FileEditRequest,
-    FileEditResult, OutputChunk, RunCommandRequest, SessionInfo, TerminalTools, Transport,
-    TransportEvent,
+    Actor, CommandResult, ConnectionSummary, ControlKey, DatabaseSummary, DbQueryRequest,
+    DbSchemaRequest, FileEditOutcome, FileEditRequest, FileEditResult, OutputChunk,
+    RunCommandRequest, SessionInfo, TerminalTools, Transport, TransportEvent,
 };
 use aht_core::{ApprovalId, ConnectionId, Error, OutputId, Result, SessionId};
 use aht_harness::{HeadlessRun, LaunchContext, LaunchMode, LaunchSpec};
@@ -517,7 +517,7 @@ async fn agent_max_steps(state: &AppState) -> usize {
         .unwrap_or(aht_agent::DEFAULT_MAX_STEPS)
 }
 
-async fn approval_settings(state: &AppState) -> (ApprovalMode, Vec<regex::Regex>) {
+pub(crate) async fn approval_settings(state: &AppState) -> (ApprovalMode, Vec<regex::Regex>) {
     let value = {
         let vault = state.vault.lock().await;
         vault
@@ -1010,6 +1010,19 @@ impl TerminalTools for Tools {
             return Err(Error::Denied("session outside the actor's scope".into()));
         }
         propose_edit(&self.app, &actor, req).await
+    }
+
+    // Databases are not in an actor's session scope: the user shares each tab with agents.
+    async fn list_databases(&self, _actor: &Actor) -> Result<Vec<DatabaseSummary>> {
+        Ok(crate::db::agent_list(&self.app.state::<AppState>()).await)
+    }
+
+    async fn db_schema(&self, _actor: &Actor, req: DbSchemaRequest) -> Result<serde_json::Value> {
+        crate::db::agent_schema(&self.app.state::<AppState>(), req).await
+    }
+
+    async fn db_query(&self, actor: &Actor, req: DbQueryRequest) -> Result<serde_json::Value> {
+        crate::db::agent_query(&self.app, actor, req).await
     }
 }
 

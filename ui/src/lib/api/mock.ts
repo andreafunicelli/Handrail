@@ -1146,6 +1146,35 @@ export function createMockApi(): Api {
     async dbCancel(id) {
       mockDb(id).running?.();
     },
+    async dbShare(id, shared) {
+      const d = mockDb(id);
+      d.shared = shared;
+      // A demo agent asks for a write soon after the first share.
+      if (shared && !d.asked) {
+        d.asked = true;
+        setTimeout(() => {
+          if (!mockDbs.has(id) || !d.shared) return;
+          const approval_id = uuid();
+          d.pending = approval_id;
+          emit("db://approval", {
+            approval_id,
+            database_id: id,
+            actor_label: "Claude Code (DevOps)",
+            sql: "DELETE FROM orders WHERE status = 'cancelled' AND created_at < now() - INTERVAL 90 DAY",
+            reason: "Clean up cancelled orders older than 90 days, as you asked",
+            risk: "write",
+            statements: 1,
+            policy_note: "changes data",
+          });
+        }, 900);
+      }
+    },
+    async dbApprovalDecide(approval_id) {
+      const d = [...mockDbs.values()].find((x) => x.pending === approval_id);
+      if (!d) throw fail("not_found", "approval already resolved");
+      d.pending = undefined;
+      emit("db://approval-resolved", approval_id);
+    },
     async dbApplyEdits(id, _namespace, table, edits) {
       mockDb(id);
       const t = MOCK_TABLES[table];
@@ -1596,7 +1625,7 @@ export function createMockApi(): Api {
 
 // ---- databases (mock) ----
 
-type MockDb = { kind: "mysql" | "postgres"; running: (() => void) | null };
+type MockDb = { kind: "mysql" | "postgres"; running: (() => void) | null; shared?: boolean; asked?: boolean; pending?: string };
 const mockDbs = new Map<string, MockDb>();
 
 function mockDb(id: string): MockDb {
