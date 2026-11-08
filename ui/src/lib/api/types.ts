@@ -570,3 +570,12 @@ export interface DbColumnInfo {
   default: string | null;
   primary_key: boolean;
 }
+
+/** A cell value sent to the server: null is SQL NULL. */
+export type DbCellValue = string | null;
+
+/** One change to one row of a table, made in the grid; rows are found by their primary key. */
+export type DbRowEdit =
+  | { op: "update"; key: [string, DbCellValue][]; set: [string, DbCellValue][] }
+  | { op: "insert"; values: [string, DbCellValue][] }
+  | { op: "delete"; key: [string, DbCellValue][] };

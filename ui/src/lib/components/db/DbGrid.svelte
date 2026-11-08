@@ -1,66 +1,133 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import type { DbResultSet, DbValue } from "../../api/types";
   import { t } from "../../i18n";
   import { copyText } from "../../util/clipboard";
-  import { cellText, columnWidths } from "../../util/db";
+  import { cellText, columnWidths, editedValue, type GridEdits } from "../../util/db";
 
   /** A result set as a grid: only the rows in view are in the page, so large results scroll
-   *  smoothly. Click a cell to select it, Ctrl/⌘+C copies it. */
-  let { result }: { result: DbResultSet } = $props();
+   *  smoothly. Click a cell to select it, Ctrl/⌘+C copies it. With `edits` (one table's rows),
+   *  a double click or Enter edits a cell; changes stay marked until they are saved. */
+  let {
+    result,
+    edits = $bindable(null),
+    selected = $bindable(null),
+    locked = false,
+  }: {
+    result: DbResultSet;
+    edits?: GridEdits | null;
+    selected?: { r: number; c: number } | null;
+    /** Edits are being saved: nothing more can be changed until they are. */
+    locked?: boolean;
+  } = $props();
 
   const ROW = 26;
   const OVERSCAN = 8;
   let scroller = $state<HTMLDivElement>();
   let scrollTop = $state(0);
   let height = $state(400);
-  let selected = $state<{ r: number; c: number } | null>(null);
+  let editing = $state<{ r: number; c: number; text: string } | null>(null);
+  let editInput = $state<HTMLInputElement>();
 
   const widths = $derived(columnWidths(result));
   const total = $derived(widths.reduce((a, b) => a + b, 0) + 48);
   const first = $derived(Math.max(0, Math.floor(scrollTop / ROW) - OVERSCAN));
-  const last = $derived(Math.min(result.rows.length, Math.ceil((scrollTop + height) / ROW) + OVERSCAN));
-  const visible = $derived(result.rows.slice(first, last));
+  const count = $derived(result.rows.length + (edits?.added.length ?? 0));
+  const last = $derived(Math.min(count, Math.ceil((scrollTop + height) / ROW) + OVERSCAN));
+  const visible = $derived(Array.from({ length: Math.max(0, last - first) }, (_, k) => first + k));
 
   $effect(() => {
     void result;
     selected = null;
+    editing = null;
     if (scroller) scroller.scrollTop = 0;
   });
 
+  /** The value shown in a cell: the edited one, or `undefined` for a new row's default. */
+  const value = (r: number, c: number): DbValue | undefined =>
+    edits ? editedValue(result, edits, r, c) : result.rows[r]?.[c];
+  const changed = (r: number, c: number) =>
+    !!edits && (r >= result.rows.length ? c in (edits.added[r - result.rows.length] ?? {}) : c in (edits.cells[r] ?? {}));
+
+  async function startEdit(r: number, c: number) {
+    if (!edits || locked || edits.deleted[r]) return;
+    const v = value(r, c);
+    // Binary values are shown as hex and cannot be typed back.
+    if (v !== null && v !== undefined && typeof v !== "string") return;
+    selected = { r, c };
+    editing = { r, c, text: v ?? "" };
+    await tick();
+    editInput?.focus();
+    editInput?.select();
+  }
+
+  function commit() {
+    if (!editing || !edits) return;
+    const { r, c, text } = editing;
+    editing = null;
+    setCell(r, c, text);
+    scroller?.focus();
+  }
+
+  /** Set a cell of the edited rows; going back to the original value drops the change. */
+  export function setCell(r: number, c: number, v: string | null) {
+    if (!edits || locked || edits.deleted[r]) return;
+    if (r >= result.rows.length) {
+      edits.added[r - result.rows.length][c] = v;
+      return;
+    }
+    const row = (edits.cells[r] ??= {});
+    if (result.rows[r][c] === v) delete row[c];
+    else row[c] = v;
+    if (!Object.keys(row).length) delete edits.cells[r];
+  }
+
+  /** Bring a row into view (a row just added at the end). */
+  export function reveal(r: number) {
+    const top = (r + 1) * ROW;
+    if (scroller && (top < scroller.scrollTop + ROW || top + ROW > scroller.scrollTop + height)) scroller.scrollTop = Math.max(0, top - height / 2);
+  }
+
   function onkeydown(e: KeyboardEvent) {
-    if (!selected) return;
+    if (!selected || editing) return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "c") {
       e.preventDefault();
-      void copyText(cellText(result.rows[selected.r]?.[selected.c] ?? null));
+      void copyText(cellText(value(selected.r, selected.c) ?? null));
+      return;
+    }
+    if (edits && (e.key === "Enter" || e.key === "F2")) {
+      e.preventDefault();
+      void startEdit(selected.r, selected.c);
       return;
     }
     const moves: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
     const m = moves[e.key];
     if (!m) return;
     e.preventDefault();
-    const r = Math.min(result.rows.length - 1, Math.max(0, selected.r + m[0]));
+    const r = Math.min(count - 1, Math.max(0, selected.r + m[0]));
     const c = Math.min(result.columns.length - 1, Math.max(0, selected.c + m[1]));
     selected = { r, c };
     const top = r * ROW;
     if (scroller && (top < scroller.scrollTop || top + ROW > scroller.scrollTop + height - ROW)) scroller.scrollTop = Math.max(0, top - height / 2);
   }
 
-  const kind = (v: DbValue) => (v === null ? "null" : typeof v === "string" ? "text" : "bytes");
+  const kind = (v: DbValue | undefined) => (v === undefined ? "default" : v === null ? "null" : typeof v === "string" ? "text" : "bytes");
+  const shown = (v: DbValue | undefined, n: number) => (v === undefined ? t("db.default") : v === null ? "NULL" : cellText(v).slice(0, n));
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
   class="grid"
   role="grid"
-  aria-rowcount={result.rows.length}
+  aria-rowcount={count}
   tabindex="0"
   bind:this={scroller}
   bind:clientHeight={height}
   onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}
   {onkeydown}
 >
-  <div class="inner" style:width="{total}px" style:height="{(result.rows.length + 1) * ROW}px">
+  <div class="inner" style:width="{total}px" style:height="{(count + 1) * ROW}px">
     <div class="row head" role="row" style:top="0px">
       <span class="num"></span>
       {#each result.columns as c, i (i)}
@@ -69,26 +136,45 @@
         </span>
       {/each}
     </div>
-    {#each visible as row, k (first + k)}
-      {@const r = first + k}
-      <div class="row" role="row" style:top="{(r + 1) * ROW}px">
-        <span class="num">{r + 1}</span>
-        {#each row as v, c (c)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <span
-            class="cell {kind(v)}"
-            role="gridcell"
-            tabindex="-1"
-            class:sel={selected?.r === r && selected?.c === c}
-            style:width="{widths[c]}px"
-            title={v === null ? "NULL" : cellText(v).slice(0, 2000)}
-            onclick={() => (selected = { r, c })}>{v === null ? "NULL" : cellText(v).slice(0, 500)}</span
-          >
+    {#each visible as r (r)}
+      {@const added = r >= result.rows.length}
+      <div class="row" role="row" style:top="{(r + 1) * ROW}px" class:deleted={!!edits?.deleted[r]} class:added>
+        <span class="num">{added ? "+" : r + 1}</span>
+        {#each result.columns as _, c (c)}
+          {@const v = value(r, c)}
+          {#if editing?.r === r && editing?.c === c}
+            <input
+              class="cell edit"
+              style:width="{widths[c]}px"
+              bind:this={editInput}
+              bind:value={editing.text}
+              aria-label={result.columns[c].name}
+              onkeydown={(e) => {
+                if (e.key === "Enter") (e.preventDefault(), commit());
+                else if (e.key === "Escape") (e.preventDefault(), (editing = null), scroller?.focus());
+                e.stopPropagation();
+              }}
+              onblur={commit}
+            />
+          {:else}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <span
+              class="cell {kind(v)}"
+              role="gridcell"
+              tabindex="-1"
+              class:sel={selected?.r === r && selected?.c === c}
+              class:changed={changed(r, c)}
+              style:width="{widths[c]}px"
+              title={shown(v, 2000)}
+              onclick={() => (selected = { r, c })}
+              ondblclick={() => startEdit(r, c)}>{shown(v, 500)}</span
+            >
+          {/if}
         {/each}
       </div>
     {/each}
   </div>
-  {#if !result.rows.length}
+  {#if !count}
     <p class="empty">{t("db.noRows")}</p>
   {/if}
 </div>
@@ -159,12 +245,32 @@
     font-weight: 400;
     font-size: 11px;
   }
-  .cell.null {
+  .cell.bytes {
+    color: var(--syn-number, var(--muted));
+  }
+  .cell.null,
+  .cell.default {
     color: var(--faint);
     font-style: italic;
   }
-  .cell.bytes {
-    color: var(--syn-number, var(--muted));
+  .cell.changed {
+    background: var(--warn-soft, rgba(234, 179, 8, 0.16));
+  }
+  .row.added .num {
+    color: var(--accent);
+  }
+  .row.deleted .cell {
+    text-decoration: line-through;
+    color: var(--faint);
+    background: var(--danger-soft);
+  }
+  input.cell.edit {
+    border: 0;
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
   }
   .cell.sel {
     outline: 2px solid var(--accent);

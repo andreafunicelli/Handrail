@@ -225,3 +225,83 @@ async fn wrong_password_is_an_auth_error() {
         }
     }
 }
+
+#[tokio::test]
+async fn grid_edits_apply_in_one_transaction() {
+    use aht_db::sql::RowEdit;
+    each_server(async |db, kind| {
+        let limits = QueryLimits::default();
+        let ns = match kind {
+            DbKind::Mysql => db.current_database().await.unwrap().unwrap(),
+            DbKind::Postgres => "public".to_string(),
+        };
+        let setup = db
+            .query(
+                "DROP TABLE IF EXISTS hr_edit; \
+                 CREATE TABLE hr_edit (id INT PRIMARY KEY, name VARCHAR(20), qty INT); \
+                 INSERT INTO hr_edit VALUES (1, 'one', 10), (2, 'two', 20), (3, 'three', 30)",
+                limits,
+            )
+            .await
+            .unwrap();
+        assert_eq!(setup.error, None);
+        let key = |id: &str| vec![("id".to_string(), Some(id.to_string()))];
+        let n = db
+            .apply_edits(
+                &ns,
+                "hr_edit",
+                &[
+                    RowEdit::Update {
+                        key: key("1"),
+                        set: vec![
+                            ("name".into(), Some("O'One".into())),
+                            ("qty".into(), Some("11".into())),
+                        ],
+                    },
+                    RowEdit::Delete { key: key("2") },
+                    RowEdit::Insert {
+                        values: vec![("id".into(), Some("4".into())), ("name".into(), None)],
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(n, 3);
+        let rows = |out: aht_db::QueryOutput| -> Vec<Vec<Value>> { out.results[0].rows.clone() };
+        let after = rows(
+            db.query("SELECT id, name, qty FROM hr_edit ORDER BY id", limits)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(after.len(), 3);
+        assert_eq!(text(&after[0][1]), "O'One");
+        assert_eq!(text(&after[0][2]), "11");
+        assert_eq!(text(&after[2][0]), "4");
+        assert_eq!(after[2][1], Value::Null);
+
+        // A failing statement rolls back the ones before it.
+        let err = db
+            .apply_edits(
+                &ns,
+                "hr_edit",
+                &[
+                    RowEdit::Update {
+                        key: key("3"),
+                        set: vec![("qty".into(), Some("99".into()))],
+                    },
+                    RowEdit::Insert {
+                        values: vec![("id".into(), Some("1".into()))],
+                    },
+                ],
+            )
+            .await;
+        assert!(err.is_err());
+        let three = rows(
+            db.query("SELECT qty FROM hr_edit WHERE id = 3", limits)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(text(&three[0][0]), "30");
+    })
+    .await;
+}

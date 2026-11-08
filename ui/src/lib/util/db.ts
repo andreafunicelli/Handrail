@@ -1,4 +1,4 @@
-import type { DbQueryOutput, DbResultSet, DbValue } from "../api/types";
+import type { DbCellValue, DbQueryOutput, DbResultSet, DbRowEdit, DbValue } from "../api/types";
 
 /** A cell as text: NULL as an empty string, bytes as `0x…`. */
 export function cellText(v: DbValue): string {
@@ -38,4 +38,55 @@ export function primaryResult(out: DbQueryOutput): number {
 /** A one-line summary of a result: rows (and whether they were cut), or rows affected. */
 export function resultSummary(r: DbResultSet): { rows: number; affected: number; truncated: boolean; isQuery: boolean } {
   return { rows: r.rows.length, affected: r.rows_affected, truncated: r.truncated, isQuery: r.columns.length > 0 };
+}
+
+/**
+ * Edits made in the grid of one table's rows, not saved yet: changed cells of existing rows,
+ * rows marked for deletion, and new rows (a missing cell takes the column's default).
+ */
+export interface GridEdits {
+  cells: Record<number, Record<number, DbCellValue>>;
+  deleted: Record<number, true>;
+  added: Record<number, DbCellValue>[];
+}
+
+export const noEdits = (): GridEdits => ({ cells: {}, deleted: {}, added: [] });
+
+/** How many rows the edits touch. */
+export function editCount(e: GridEdits): number {
+  const changed = Object.keys(e.cells).filter((r) => !e.deleted[Number(r)] && Object.keys(e.cells[Number(r)]).length).length;
+  return changed + Object.keys(e.deleted).length + e.added.length;
+}
+
+/** A cell's value with the edits applied (`undefined`: a new row's cell left to its default). */
+export function editedValue(result: DbResultSet, e: GridEdits, r: number, c: number): DbValue | undefined {
+  if (r >= result.rows.length) return e.added[r - result.rows.length]?.[c];
+  const row = e.cells[r];
+  return row && c in row ? row[c] : result.rows[r][c];
+}
+
+/**
+ * The row edits to send, identifying rows by `primaryKey` (column names). Fails when a key cell
+ * is binary (it cannot be sent back as text).
+ */
+export function buildEdits(result: DbResultSet, primaryKey: string[], e: GridEdits): DbRowEdit[] {
+  const names = result.columns.map((c) => c.name);
+  const keyOf = (r: number): [string, DbCellValue][] =>
+    primaryKey.map((k) => {
+      const v = result.rows[r][names.indexOf(k)];
+      if (v !== null && typeof v !== "string") throw new Error(`the key column ${k} holds binary data`);
+      return [k, v];
+    });
+  const out: DbRowEdit[] = [];
+  for (const r of Object.keys(e.deleted).map(Number)) out.push({ op: "delete", key: keyOf(r) });
+  for (const [r, cells] of Object.entries(e.cells)) {
+    const row = Number(r);
+    if (e.deleted[row]) continue;
+    const set = Object.entries(cells).map(([c, v]) => [names[Number(c)], v] as [string, DbCellValue]);
+    if (set.length) out.push({ op: "update", key: keyOf(row), set });
+  }
+  for (const row of e.added) {
+    out.push({ op: "insert", values: Object.entries(row).map(([c, v]) => [names[Number(c)], v] as [string, DbCellValue]) });
+  }
+  return out;
 }
