@@ -8,7 +8,7 @@ use aht_core::Error;
 use futures::future::BoxFuture;
 use futures::TryStreamExt;
 use sqlx::postgres::{PgConnectOptions, PgConnection, PgRow, PgSslMode};
-use sqlx::{Column, Connection, Either, Row, TypeInfo, ValueRef};
+use sqlx::{Column, Connection, Either, Executor, Row, TypeInfo, ValueRef};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -121,8 +121,8 @@ impl Client {
         Box::pin(async move {
             if slot.is_none() {
                 let mut conn = self.open().await?;
-                let id = sqlx::raw_sql("SELECT pg_backend_pid()::text")
-                    .fetch_all(&mut conn)
+                let id = (&mut conn)
+                    .fetch_all(sqlx::raw_sql("SELECT pg_backend_pid()::text"))
                     .await
                     .map_err(map_err)?
                     .first()
@@ -152,7 +152,7 @@ impl Client {
             for b in binds {
                 q = q.bind(*b);
             }
-            match q.fetch_all(&mut *conn).await {
+            match (&mut *conn).fetch_all(q).await {
                 Ok(rows) => Ok(rows.iter().map(texts).collect()),
                 Err(e) => {
                     if broken(&e) {
@@ -173,8 +173,8 @@ impl Client {
         Box::pin(async move {
             let mut slot = self.main.lock().await;
             let conn = self.ensure_main(&mut slot).await?;
-            let rows = sqlx::raw_sql("SELECT current_database()")
-                .fetch_all(&mut *conn)
+            let rows = (&mut *conn)
+                .fetch_all(sqlx::raw_sql("SELECT current_database()"))
                 .await
                 .map_err(map_err)?;
             Ok(rows
@@ -266,7 +266,7 @@ impl Client {
             let mut stopped = false;
             let mut lost = false;
             {
-                let mut stream = sqlx::raw_sql(sql).fetch_many(&mut *conn);
+                let mut stream = (&mut *conn).fetch_many(sqlx::raw_sql(sql));
                 loop {
                     match stream.try_next().await {
                         Ok(Some(Either::Left(done))) => out.done(done.rows_affected()),
@@ -311,10 +311,8 @@ impl Client {
                 *slot = Some(self.open().await?);
             }
             let conn = slot.as_mut().expect("connected above");
-            match sqlx::raw_sql(&format!("SELECT pg_cancel_backend({id})"))
-                .execute(&mut *conn)
-                .await
-            {
+            let sql = format!("SELECT pg_cancel_backend({id})");
+            match (&mut *conn).execute(sqlx::raw_sql(&sql)).await {
                 Ok(_) => Ok(()),
                 Err(e) => {
                     if broken(&e) {
