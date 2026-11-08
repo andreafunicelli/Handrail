@@ -5,6 +5,7 @@ use crate::{
     ResultColumn, TableInfo, Value,
 };
 use aht_core::Error;
+use futures::future::BoxFuture;
 use futures::TryStreamExt;
 use sqlx::postgres::{PgConnectOptions, PgConnection, PgRow, PgSslMode};
 use sqlx::{Column, Connection, Either, Row, TypeInfo, ValueRef};
@@ -113,46 +114,54 @@ impl Client {
     }
 
     /// The main connection, reconnecting if the last one broke.
-    async fn ensure_main<'a>(
-        &self,
+    fn ensure_main<'a>(
+        &'a self,
         slot: &'a mut Option<PgConnection>,
-    ) -> Result<&'a mut PgConnection> {
-        if slot.is_none() {
-            let mut conn = self.open().await?;
-            let id = sqlx::raw_sql("SELECT pg_backend_pid()::text")
-                .fetch_all(&mut conn)
-                .await
-                .map_err(map_err)?
-                .first()
-                .and_then(|r| texts(r).into_iter().next().flatten())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-            self.main_id.store(id, Ordering::Relaxed);
-            *slot = Some(conn);
-        }
-        Ok(slot.as_mut().expect("connected above"))
+    ) -> BoxFuture<'a, Result<&'a mut PgConnection>> {
+        Box::pin(async move {
+            if slot.is_none() {
+                let mut conn = self.open().await?;
+                let id = sqlx::raw_sql("SELECT pg_backend_pid()::text")
+                    .fetch_all(&mut conn)
+                    .await
+                    .map_err(map_err)?
+                    .first()
+                    .and_then(|r| texts(r).into_iter().next().flatten())
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                self.main_id.store(id, Ordering::Relaxed);
+                *slot = Some(conn);
+            }
+            Ok(slot.as_mut().expect("connected above"))
+        })
     }
 
     /// Rows of a schema query on the side connection, every value as text.
-    async fn side_rows(&self, sql: &str, binds: &[&str]) -> Result<Vec<Vec<Option<String>>>> {
-        let mut slot = self.side.lock().await;
-        if slot.is_none() {
-            *slot = Some(self.open().await?);
-        }
-        let conn = slot.as_mut().expect("connected above");
-        let mut q = sqlx::query::<sqlx::Postgres>(sql);
-        for b in binds {
-            q = q.bind(*b);
-        }
-        match q.fetch_all(&mut *conn).await {
-            Ok(rows) => Ok(rows.iter().map(texts).collect()),
-            Err(e) => {
-                if broken(&e) {
-                    *slot = None;
-                }
-                Err(map_err(e))
+    fn side_rows<'a>(
+        &'a self,
+        sql: &'a str,
+        binds: &'a [&'a str],
+    ) -> BoxFuture<'a, Result<Vec<Vec<Option<String>>>>> {
+        Box::pin(async move {
+            let mut slot = self.side.lock().await;
+            if slot.is_none() {
+                *slot = Some(self.open().await?);
             }
-        }
+            let conn = slot.as_mut().expect("connected above");
+            let mut q = sqlx::query::<sqlx::Postgres>(sql);
+            for b in binds {
+                q = q.bind(*b);
+            }
+            match q.fetch_all(&mut *conn).await {
+                Ok(rows) => Ok(rows.iter().map(texts).collect()),
+                Err(e) => {
+                    if broken(&e) {
+                        *slot = None;
+                    }
+                    Err(map_err(e))
+                }
+            }
+        })
     }
 
     pub(crate) async fn version(&self) -> Result<String> {
@@ -160,16 +169,18 @@ impl Client {
         Ok(rows.first().map(|r| text_at(r, 0)).unwrap_or_default())
     }
 
-    pub(crate) async fn current_database(&self) -> Result<Option<String>> {
-        let mut slot = self.main.lock().await;
-        let conn = self.ensure_main(&mut slot).await?;
-        let rows = sqlx::raw_sql("SELECT current_database()")
-            .fetch_all(&mut *conn)
-            .await
-            .map_err(map_err)?;
-        Ok(rows
-            .first()
-            .and_then(|r| texts(r).into_iter().next().flatten()))
+    pub(crate) fn current_database(&self) -> BoxFuture<'_, Result<Option<String>>> {
+        Box::pin(async move {
+            let mut slot = self.main.lock().await;
+            let conn = self.ensure_main(&mut slot).await?;
+            let rows = sqlx::raw_sql("SELECT current_database()")
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(map_err)?;
+            Ok(rows
+                .first()
+                .and_then(|r| texts(r).into_iter().next().flatten()))
+        })
     }
 
     pub(crate) async fn databases(&self) -> Result<Vec<String>> {
@@ -242,69 +253,77 @@ impl Client {
             .collect())
     }
 
-    pub(crate) async fn query(&self, sql: &str, limits: QueryLimits) -> Result<QueryOutput> {
-        let mut slot = self.main.lock().await;
-        let conn = self.ensure_main(&mut slot).await?;
-        let started = Instant::now();
-        let mut out = Collector::new(limits);
-        let mut stopped = false;
-        let mut lost = false;
-        {
-            let mut stream = sqlx::raw_sql(sql).fetch_many(&mut *conn);
-            loop {
-                match stream.try_next().await {
-                    Ok(Some(Either::Left(done))) => out.done(done.rows_affected()),
-                    Ok(Some(Either::Right(row))) => {
-                        let kept = out.row(|| columns(&row), || values(&row));
-                        if !kept && !stopped {
-                            // Enough rows: stop the statement rather than read the rest.
-                            stopped = true;
-                            if let Err(e) = self.cancel().await {
-                                tracing::debug!("stopping a cut statement: {e}");
+    pub(crate) fn query<'a>(
+        &'a self,
+        sql: &'a str,
+        limits: QueryLimits,
+    ) -> BoxFuture<'a, Result<QueryOutput>> {
+        Box::pin(async move {
+            let mut slot = self.main.lock().await;
+            let conn = self.ensure_main(&mut slot).await?;
+            let started = Instant::now();
+            let mut out = Collector::new(limits);
+            let mut stopped = false;
+            let mut lost = false;
+            {
+                let mut stream = sqlx::raw_sql(sql).fetch_many(&mut *conn);
+                loop {
+                    match stream.try_next().await {
+                        Ok(Some(Either::Left(done))) => out.done(done.rows_affected()),
+                        Ok(Some(Either::Right(row))) => {
+                            let kept = out.row(|| columns(&row), || values(&row));
+                            if !kept && !stopped {
+                                // Enough rows: stop the statement rather than read the rest.
+                                stopped = true;
+                                if let Err(e) = self.cancel().await {
+                                    tracing::debug!("stopping a cut statement: {e}");
+                                }
                             }
                         }
-                    }
-                    Ok(None) => break,
-                    Err(e) => {
-                        lost = broken(&e);
-                        // After a cut the statement ends with "canceling statement": not an error.
-                        if !(stopped && out.truncated()) || lost {
-                            out.fail(map_err(e).to_string());
+                        Ok(None) => break,
+                        Err(e) => {
+                            lost = broken(&e);
+                            // After a cut the statement ends with "canceling statement": not an error.
+                            if !(stopped && out.truncated()) || lost {
+                                out.fail(map_err(e).to_string());
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
             }
-        }
-        if lost {
-            *slot = None;
-            self.main_id.store(0, Ordering::Relaxed);
-        }
-        Ok(out.finish(started.elapsed()))
+            if lost {
+                *slot = None;
+                self.main_id.store(0, Ordering::Relaxed);
+            }
+            Ok(out.finish(started.elapsed()))
+        })
     }
 
-    pub(crate) async fn cancel(&self) -> Result<()> {
-        let id = self.main_id.load(Ordering::Relaxed);
-        if id == 0 {
-            return Ok(());
-        }
-        let mut slot = self.side.lock().await;
-        if slot.is_none() {
-            *slot = Some(self.open().await?);
-        }
-        let conn = slot.as_mut().expect("connected above");
-        match sqlx::raw_sql(&format!("SELECT pg_cancel_backend({id})"))
-            .execute(&mut *conn)
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                if broken(&e) {
-                    *slot = None;
-                }
-                Err(map_err(e))
+    pub(crate) fn cancel(&self) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let id = self.main_id.load(Ordering::Relaxed);
+            if id == 0 {
+                return Ok(());
             }
-        }
+            let mut slot = self.side.lock().await;
+            if slot.is_none() {
+                *slot = Some(self.open().await?);
+            }
+            let conn = slot.as_mut().expect("connected above");
+            match sqlx::raw_sql(&format!("SELECT pg_cancel_backend({id})"))
+                .execute(&mut *conn)
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    if broken(&e) {
+                        *slot = None;
+                    }
+                    Err(map_err(e))
+                }
+            }
+        })
     }
 
     pub(crate) async fn close(self) {
