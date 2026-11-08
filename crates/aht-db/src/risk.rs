@@ -216,22 +216,6 @@ fn statement_risk(st: &[Tok]) -> SqlRisk {
         })
         .collect();
     let has = |w: &str| words.contains(&w);
-    // Words outside any parentheses: `WHERE` of the statement itself, not of a subquery.
-    let top_level = |w: &str| {
-        let mut depth = 0i32;
-        st.iter().any(|t| match t {
-            Tok::Open => {
-                depth += 1;
-                false
-            }
-            Tok::Close => {
-                depth -= 1;
-                false
-            }
-            Tok::Word(x) => depth == 0 && x == w,
-            _ => false,
-        })
-    };
     let first = match st.first() {
         Some(Tok::Word(w)) => w.as_str(),
         // `(SELECT ...)` and anything else unusual.
@@ -250,7 +234,8 @@ fn statement_risk(st: &[Tok]) -> SqlRisk {
             .any(|p| p[0] == "FOR" && matches!(p[1], "UPDATE" | "SHARE" | "NO" | "KEY"))
             || has("LOCK")
     };
-    match first {
+    let analyze = has("ANALYZE") || has("ANALYSE");
+    let base = match first {
         "SELECT" | "WITH" | "VALUES" | "TABLE" => {
             if changes_data() || locks() {
                 SqlRisk::Write
@@ -259,20 +244,77 @@ fn statement_risk(st: &[Tok]) -> SqlRisk {
             }
         }
         "SHOW" | "DESCRIBE" | "DESC" | "HELP" => SqlRisk::Read,
-        "EXPLAIN" => {
-            // EXPLAIN ANALYZE runs the statement.
-            if has("ANALYZE") || has("ANALYSE") {
-                SqlRisk::Write
-            } else {
-                SqlRisk::Read
-            }
-        }
+        // EXPLAIN ANALYZE runs the statement.
+        "EXPLAIN" if analyze => SqlRisk::Write,
+        "EXPLAIN" => return SqlRisk::Read,
         "DROP" | "TRUNCATE" | "GRANT" | "REVOKE" => SqlRisk::Destructive,
         "ALTER" if has("DROP") => SqlRisk::Destructive,
-        "DELETE" | "UPDATE" if !top_level("WHERE") => SqlRisk::Destructive,
         "COPY" if has("PROGRAM") => SqlRisk::Destructive,
         _ => SqlRisk::Write,
+    };
+    // A DELETE or UPDATE without its own WHERE changes every row, wherever it sits: at the
+    // start, after WITH, inside a WITH clause, or under EXPLAIN ANALYZE.
+    if unqualified_change(st) {
+        SqlRisk::Destructive
+    } else {
+        base
     }
+}
+
+/// Whether `st` holds a DELETE or UPDATE with no WHERE at its own level (one in a subquery
+/// does not count).
+fn unqualified_change(st: &[Tok]) -> bool {
+    // Parenthesis depth of each token (a closing one counts as outside).
+    let mut depth = 0i32;
+    let depths: Vec<i32> = st
+        .iter()
+        .map(|t| {
+            if *t == Tok::Close {
+                depth -= 1;
+            }
+            let d = depth;
+            if *t == Tok::Open {
+                depth += 1;
+            }
+            d
+        })
+        .collect();
+    let word = |i: usize| match st.get(i) {
+        Some(Tok::Word(w)) => Some(w.as_str()),
+        _ => None,
+    };
+    (0..st.len()).any(|i| {
+        if !matches!(word(i), Some("DELETE" | "UPDATE")) {
+            return false;
+        }
+        // Not a statement: ON DELETE/UPDATE (foreign keys), FOR [NO KEY] UPDATE, ON DUPLICATE
+        // KEY UPDATE, DO UPDATE, MERGE's THEN UPDATE, triggers' BEFORE/AFTER/OR/OF UPDATE.
+        if i > 0
+            && matches!(
+                word(i - 1),
+                Some(
+                    "ON" | "FOR"
+                        | "KEY"
+                        | "DO"
+                        | "THEN"
+                        | "BEFORE"
+                        | "AFTER"
+                        | "OR"
+                        | "OF"
+                        | "INSTEAD"
+                        | "GRANT"
+                )
+            )
+        {
+            return false;
+        }
+        let d = depths[i];
+        !st[i + 1..]
+            .iter()
+            .zip(&depths[i + 1..])
+            .take_while(|(_, dd)| **dd >= d)
+            .any(|(t, dd)| *dd == d && matches!(t, Tok::Word(w) if w == "WHERE"))
+    })
 }
 
 #[cfg(test)]
@@ -292,6 +334,7 @@ mod tests {
             "  select 1; -- DROP TABLE t\n SELECT 2",
             "SHOW TABLES",
             "EXPLAIN SELECT * FROM t",
+            "EXPLAIN DELETE FROM t",
             "WITH x AS (SELECT 1) SELECT * FROM x",
             "DESCRIBE t",
             "/* DROP TABLE t */ SELECT 1",
@@ -320,7 +363,11 @@ mod tests {
             "WITH d AS (DELETE FROM t WHERE a = 1 RETURNING *) SELECT * FROM d",
             "SELECT * INTO new_t FROM t",
             "SELECT * FROM t FOR UPDATE",
-            "EXPLAIN ANALYZE DELETE FROM t",
+            "EXPLAIN ANALYZE DELETE FROM t WHERE a = 1",
+            "INSERT INTO t VALUES (1) ON DUPLICATE KEY UPDATE a = 1",
+            "INSERT INTO t VALUES (1) ON CONFLICT (id) DO UPDATE SET a = 1",
+            "CREATE TABLE c (p int REFERENCES t ON DELETE CASCADE ON UPDATE CASCADE)",
+            "DELETE FROM t WHERE id IN (SELECT id FROM u)",
             "CREATE TABLE x (a int)",
             "BEGIN",
             "SET search_path = x",
@@ -343,6 +390,11 @@ mod tests {
             "ALTER TABLE t DROP COLUMN a",
             "SELECT 1; DROP TABLE t",
             "GRANT ALL ON t TO bob",
+            "WITH x AS (SELECT 1) DELETE FROM t",
+            "WITH d AS (DELETE FROM t RETURNING *) SELECT count(*) FROM d",
+            "WITH d AS (UPDATE t SET a = 1 RETURNING *) SELECT * FROM d WHERE a = 1",
+            "EXPLAIN ANALYZE DELETE FROM t",
+            "DELETE FROM t; SELECT 1 WHERE true",
         ] {
             assert_eq!(risk(Mysql, sql), Destructive, "{sql}");
             assert_eq!(risk(Postgres, sql), Destructive, "{sql}");

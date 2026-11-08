@@ -504,9 +504,13 @@ pub(crate) async fn agent_query(
             }
         }
     }
-    // The tab may have been closed or unshared while the user decided.
-    let s = shared(&state, &req.database_id).await?;
     let _turn = s.agent_turn.lock().await;
+    // The tab may have been closed, unshared or reopened while the user decided or another
+    // agent call ran: check again now that this call has its turn.
+    let current = shared(&state, &req.database_id).await?;
+    if !Arc::ptr_eq(&current, &s) {
+        return Err(Error::Denied("the database tab was closed".into()));
+    }
     let client = s
         .agent
         .get_or_try_init(|| DbClient::connect(&s.params))
