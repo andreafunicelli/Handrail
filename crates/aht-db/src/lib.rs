@@ -315,6 +315,25 @@ impl DbClient {
         }
     }
 
+    /// Apply edits made in the grid to `namespace.table`, all in one transaction; returns the
+    /// rows changed. Rows are found by their primary key (see [`sql::edit_statements`]).
+    pub async fn apply_edits(
+        &self,
+        namespace: &str,
+        table: &str,
+        edits: &[sql::RowEdit],
+    ) -> Result<u64> {
+        let columns = self.columns(namespace, table).await?;
+        let statements = sql::edit_statements(self.kind(), namespace, table, &columns, edits)?;
+        if statements.is_empty() {
+            return Ok(0);
+        }
+        match &self.inner {
+            Inner::Mysql(c) => c.apply_edits(&statements).await,
+            Inner::Postgres(c) => c.apply_edits(&statements).await,
+        }
+    }
+
     /// Ask the server to stop the statement running on the main connection, if any.
     pub async fn cancel(&self) -> Result<()> {
         match &self.inner {

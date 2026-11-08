@@ -79,6 +79,7 @@ export function createTauriApi(): Api {
     dbQuery: (id, sql, max_rows) => invoke("db_query", { id, sql, max_rows: max_rows ?? null }),
     dbTableRows: (id, namespace, table, max_rows) => invoke("db_table_rows", { id, namespace, table, max_rows: max_rows ?? null }),
     dbCancel: (id) => invoke("db_cancel", { id }),
+    dbApplyEdits: (id, namespace, table, edits) => invoke("db_apply_edits", { id, namespace, table, edits }),
     sftpReadText: (session_id, path, root = false) => invoke("sftp_read_text", { session_id, path, root }),
     sftpWriteText: (session_id, path, text, expected, backup, root = false) => invoke("sftp_write_text", { session_id, path, text, expected, backup, root }),
     editProposalDecide: (proposal_id, outcome, note) => invoke("edit_proposal_decide", { proposal_id, outcome, note }),

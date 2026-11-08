@@ -223,6 +223,19 @@ pub async fn db_table_rows(
     s.client.query(&sql, l).await
 }
 
+/// Save edits made in the grid to one table, in one transaction; returns the rows changed.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_apply_edits(
+    state: State<'_, AppState>,
+    id: String,
+    namespace: String,
+    table: String,
+    edits: Vec<aht_db::sql::RowEdit>,
+) -> Result<u64> {
+    let s = session(&state, &id).await?;
+    s.client.apply_edits(&namespace, &table, &edits).await
+}
+
 /// Stop the statement running in a tab.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn db_cancel(state: State<'_, AppState>, id: String) -> Result<()> {

@@ -1,8 +1,8 @@
 //! MySQL and MariaDB.
 
 use crate::{
-    map_err, Collector, ColumnInfo, DbParams, DbTls, QueryLimits, QueryOutput, Result,
-    ResultColumn, TableInfo, Value,
+    map_err, sql::EditStatement, Collector, ColumnInfo, DbParams, DbTls, QueryLimits, QueryOutput,
+    Result, ResultColumn, TableInfo, Value,
 };
 use aht_core::Error;
 use futures::future::BoxFuture;
@@ -298,6 +298,76 @@ impl Client {
                 .await
             {
                 Ok(_) => Ok(()),
+                Err(e) => {
+                    if broken(&e) {
+                        *slot = None;
+                    }
+                    Err(map_err(e))
+                }
+            }
+        })
+    }
+
+    /// Run `statements` in one transaction on the side connection: all or nothing. An update or
+    /// delete meant for one row that would change several rolls everything back.
+    pub(crate) fn apply_edits<'a>(
+        &'a self,
+        statements: &'a [EditStatement],
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(async move {
+            let mut slot = self.side.lock().await;
+            if slot.is_none() {
+                *slot = Some(self.open().await?);
+            }
+            let conn = slot.as_mut().expect("connected above");
+            if let Err(e) = (&mut *conn)
+                .execute(sqlx::raw_sql("START TRANSACTION"))
+                .await
+            {
+                if broken(&e) {
+                    *slot = None;
+                }
+                return Err(map_err(e));
+            }
+            let mut total = 0u64;
+            let mut failure: Option<(Error, bool)> = None;
+            for st in statements {
+                let mut q = sqlx::query::<sqlx::MySql>(&st.sql);
+                for p in &st.params {
+                    q = q.bind(p.as_deref());
+                }
+                match (&mut *conn).execute(q).await {
+                    Ok(done) => {
+                        let n = done.rows_affected();
+                        if st.single_row && n > 1 {
+                            failure = Some((
+                                Error::Invalid(format!(
+                                    "an edit would change {n} rows instead of one; nothing was saved"
+                                )),
+                                false,
+                            ));
+                            break;
+                        }
+                        total += n;
+                    }
+                    Err(e) => {
+                        let lost = broken(&e);
+                        failure = Some((map_err(e), lost));
+                        break;
+                    }
+                }
+            }
+            if let Some((e, lost)) = failure {
+                if lost {
+                    *slot = None;
+                } else if let Err(r) = (&mut *conn).execute(sqlx::raw_sql("ROLLBACK")).await {
+                    tracing::warn!("rolling back edits: {r}");
+                    *slot = None;
+                }
+                return Err(e);
+            }
+            match (&mut *conn).execute(sqlx::raw_sql("COMMIT")).await {
+                Ok(_) => Ok(total),
                 Err(e) => {
                     if broken(&e) {
                         *slot = None;

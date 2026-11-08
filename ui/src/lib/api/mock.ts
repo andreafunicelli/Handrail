@@ -1146,6 +1146,14 @@ export function createMockApi(): Api {
     async dbCancel(id) {
       mockDb(id).running?.();
     },
+    async dbApplyEdits(id, _namespace, table, edits) {
+      mockDb(id);
+      const t = MOCK_TABLES[table];
+      if (!t) throw fail("not_found", `table ${table}`);
+      if (!t.columns.some((c) => c.primary_key)) throw fail("invalid", `${table} has no primary key: its rows cannot be edited here`);
+      await sleep(120);
+      return edits.length;
+    },
     async copyBetween(from, path, to, toDir, overwrite, transfer_id) {
       const name = baseName(path);
       const now = Math.floor(Date.now() / 1000);

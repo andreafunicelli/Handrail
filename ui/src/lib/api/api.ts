@@ -52,6 +52,7 @@ import type {
   DbQueryOutput,
   DbTableInfo,
   DbColumnInfo,
+  DbRowEdit,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -183,6 +184,8 @@ export interface Api {
   dbTableRows(id: string, namespace: string, table: string, maxRows?: number): Promise<DbQueryOutput>;
   /** Stop the statement running in a tab. */
   dbCancel(id: string): Promise<void>;
+  /** Save grid edits to one table in one transaction; resolves to the rows changed. */
+  dbApplyEdits(id: string, namespace: string, table: string, edits: DbRowEdit[]): Promise<number>;
   /** UTF-8 text up to 5 MB (binary files are refused). */
   sftpReadText(sessionId: string, path: string, root?: boolean): Promise<TextFile>;
   /**
