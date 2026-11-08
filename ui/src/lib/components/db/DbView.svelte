@@ -188,8 +188,9 @@
   });
 
   onMount(() => {
-    if (conn?.auth.type === "prompt") phase = "password";
-    else void connect();
+    // The backend knows whether a password is saved (an identity's counts): it answers
+    // `password_required` when one has to be asked.
+    void connect();
     return () => {
       closed = true;
       editor?.destroy();
@@ -322,18 +323,19 @@
           class="pw"
           onsubmit={(e) => {
             e.preventDefault();
-            if (password) void connect(password);
+            // An empty password is a valid answer (servers that take none).
+            void connect(password);
           }}
         >
           <p>{t("db.passwordFor", { user: conn?.user ?? "", name: conn?.name ?? "" })}</p>
           <!-- svelte-ignore a11y_autofocus -->
           <input class="input" type="password" bind:value={password} autocomplete="off" autofocus aria-label={t("db.password")} />
-          <button class="btn primary sm" type="submit" disabled={!password}>{t("db.connect")}</button>
+          <button class="btn primary sm" type="submit">{t("db.connect")}</button>
         </form>
       {:else}
         <p>{t("db.failed", { name: conn?.name ?? "" })}</p>
         {#if problem}<p class="error">{problem}</p>{/if}
-        <button class="btn primary sm" onclick={() => (conn?.auth.type === "prompt" ? (phase = "password") : connect())}
+        <button class="btn primary sm" onclick={() => connect()}
           ><Icon name="refresh" size={13} />{t("db.retry")}</button
         >
       {/if}

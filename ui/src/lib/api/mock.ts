@@ -1104,7 +1104,7 @@ export function createMockApi(): Api {
     async dbOpen(connectionId, password) {
       const c = db.connections.find((x) => x.id === connectionId);
       if (!c || (c.kind !== "mysql" && c.kind !== "postgres")) throw fail("invalid", "not a database connection");
-      if (c.auth.type !== "password" && !password) throw fail("auth", "password_required");
+      if (c.auth.type !== "password" && password === undefined) throw fail("auth", "password_required");
       if (password === "wrong") throw fail("auth", `password authentication failed for user "${c.user}"`);
       await sleep(250);
       const id = uuid();

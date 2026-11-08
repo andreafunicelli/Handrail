@@ -39,6 +39,9 @@ impl DbHub {
     pub async fn close_all(&self) {
         let all: Vec<_> = self.sessions.lock().await.drain().map(|(_, s)| s).collect();
         for s in all {
+            // A running statement holds another reference: stop it, so its connection is
+            // released (and closed) when it returns.
+            let _ = s.client.cancel().await;
             if let Ok(s) = Arc::try_unwrap(s) {
                 s.client.close().await;
             }
