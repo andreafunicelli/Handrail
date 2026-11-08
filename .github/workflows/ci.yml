@@ -128,6 +128,23 @@ jobs:
             echo "HANDRAIL_S3_SECRET=handrail-ci-secret"
           } >> "$GITHUB_ENV"
 
+      # Real MySQL 8 and PostgreSQL 16 for aht-db/tests/real_db.rs.
+      - name: Start MySQL and PostgreSQL for the database tests (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo systemctl stop mysql 2>/dev/null || true
+          docker run -d --name hr-mysql -e MYSQL_ROOT_PASSWORD=handrail-ci -e MYSQL_DATABASE=handrail \
+            -p 127.0.0.1:3306:3306 mysql:8.4
+          docker run -d --name hr-pg -e POSTGRES_PASSWORD=handrail-ci -e POSTGRES_DB=handrail \
+            -p 127.0.0.1:5432:5432 postgres:16
+          # MySQL's image starts a temporary server first; the real one listens on port 3306.
+          for _ in $(seq 90); do docker logs hr-mysql 2>&1 | grep -q "port: 3306" && break; sleep 2; done
+          for _ in $(seq 60); do docker exec hr-pg pg_isready -U postgres -d handrail && break; sleep 1; done
+          {
+            echo "HANDRAIL_MYSQL_TEST=root:handrail-ci@127.0.0.1:3306/handrail"
+            echo "HANDRAIL_PG_TEST=postgres:handrail-ci@127.0.0.1:5432/handrail"
+          } >> "$GITHUB_ENV"
+
       - name: Test
         run: cargo test --workspace
 

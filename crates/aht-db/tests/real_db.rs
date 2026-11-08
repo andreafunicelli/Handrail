@@ -1,0 +1,227 @@
+//! Against real servers: set `HANDRAIL_MYSQL_TEST` and/or `HANDRAIL_PG_TEST` to
+//! `user:password@host:port/database` (CI starts MySQL 8 and PostgreSQL 16 in containers).
+//! Without them every test here passes without doing anything.
+
+use aht_db::{DbClient, DbKind, DbParams, DbTls, QueryLimits, Value};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use zeroize::Zeroizing;
+
+fn params(kind: DbKind) -> Option<DbParams> {
+    let var = match kind {
+        DbKind::Mysql => "HANDRAIL_MYSQL_TEST",
+        DbKind::Postgres => "HANDRAIL_PG_TEST",
+    };
+    let url = std::env::var(var).ok().filter(|v| !v.is_empty())?;
+    let (cred, rest) = url.rsplit_once('@').expect("user:password@host:port/db");
+    let (user, password) = cred.split_once(':').expect("user:password");
+    let (addr, db) = rest.split_once('/').expect("host:port/db");
+    let (host, port) = addr.rsplit_once(':').expect("host:port");
+    Some(DbParams {
+        kind,
+        host: host.into(),
+        port: port.parse().expect("port"),
+        user: user.into(),
+        password: Zeroizing::new(password.into()),
+        database: Some(db.into()),
+        tls: DbTls::Prefer,
+        verify_host: false,
+        connect_timeout: Duration::from_secs(20),
+    })
+}
+
+fn text(v: &Value) -> &str {
+    match v {
+        Value::Text(s) => s,
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
+async fn each_server(test: impl AsyncFn(DbClient, DbKind)) {
+    for kind in [DbKind::Mysql, DbKind::Postgres] {
+        if let Some(p) = params(kind) {
+            let client = DbClient::connect(&p).await.expect("connect");
+            assert_eq!(client.kind(), kind);
+            test(client, kind).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn statements_results_and_schema() {
+    each_server(async |db, kind| {
+        assert!(!db.version().await.unwrap().is_empty());
+        let limits = QueryLimits::default();
+        let id_type = match kind {
+            DbKind::Mysql => "INT AUTO_INCREMENT",
+            DbKind::Postgres => "SERIAL",
+        };
+        let out = db
+            .query(
+                &format!(
+                    "DROP TABLE IF EXISTS hr_people; \
+                     CREATE TABLE hr_people (id {id_type} PRIMARY KEY, name VARCHAR(40) NOT NULL, \
+                     note TEXT DEFAULT NULL); \
+                     INSERT INTO hr_people (name) VALUES ('ada'), ('grace'); \
+                     SELECT id, name, note FROM hr_people ORDER BY id"
+                ),
+                limits,
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.error, None, "{out:?}");
+        let last = out.results.last().unwrap();
+        assert_eq!(
+            last.columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
+            ["id", "name", "note"]
+        );
+        assert_eq!(last.rows.len(), 2);
+        assert_eq!(text(&last.rows[1][1]), "grace");
+        assert_eq!(last.rows[0][2], Value::Null);
+        assert!(out.results.iter().any(|r| r.rows_affected == 2), "{out:?}");
+
+        let ns = match kind {
+            DbKind::Mysql => db.current_database().await.unwrap().unwrap(),
+            DbKind::Postgres => "public".to_string(),
+        };
+        assert!(db.namespaces().await.unwrap().contains(&ns));
+        let tables = db.tables(&ns).await.unwrap();
+        assert!(tables.iter().any(|t| t.name == "hr_people" && !t.view));
+        let cols = db.columns(&ns, "hr_people").await.unwrap();
+        assert_eq!(cols.len(), 3);
+        assert!(cols[0].primary_key && !cols[1].primary_key);
+        assert!(!cols[1].nullable && cols[2].nullable);
+        assert!(
+            cols[1].data_type.to_lowercase().contains("char"),
+            "{cols:?}"
+        );
+
+        // An error stops the run but keeps what came before it.
+        let out = db
+            .query("SELECT 1; SELECT * FROM hr_missing; SELECT 2", limits)
+            .await
+            .unwrap();
+        assert!(out.error.is_some());
+        assert_eq!(text(&out.results[0].rows[0][0]), "1");
+        assert!(!out.results.iter().any(|r| r
+            .rows
+            .first()
+            .is_some_and(|row| row[0] == Value::Text("2".into()))));
+        db.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn session_state_lasts_between_runs() {
+    each_server(async |db, kind| {
+        let limits = QueryLimits::default();
+        let (set, get) = match kind {
+            DbKind::Mysql => ("SET @hr_x = 41 + 1", "SELECT @hr_x"),
+            DbKind::Postgres => (
+                "CREATE TEMP TABLE hr_tmp (x int); INSERT INTO hr_tmp VALUES (42)",
+                "SELECT x FROM hr_tmp",
+            ),
+        };
+        assert_eq!(db.query(set, limits).await.unwrap().error, None);
+        let out = db.query(get, limits).await.unwrap();
+        assert_eq!(text(&out.results[0].rows[0][0]), "42");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn long_results_are_cut_and_the_connection_stays_usable() {
+    each_server(async |db, kind| {
+        let many = match kind {
+            DbKind::Mysql => {
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200000) \
+                 SELECT i, REPEAT('x', 50) FROM n"
+            }
+            DbKind::Postgres => "SELECT i, repeat('x', 50) FROM generate_series(1, 200000) i",
+        };
+        // Recursion depth is limited per session in MySQL.
+        if kind == DbKind::Mysql {
+            db.query(
+                "SET SESSION cte_max_recursion_depth = 1000000",
+                QueryLimits::default(),
+            )
+            .await
+            .unwrap();
+        }
+        let limits = QueryLimits {
+            max_rows: 10,
+            max_bytes: 1 << 20,
+        };
+        let out = db.query(many, limits).await.unwrap();
+        assert_eq!(out.error, None, "{out:?}");
+        assert_eq!(out.results[0].rows.len(), 10);
+        assert!(out.results[0].truncated);
+        let again = db.query("SELECT 7", limits).await.unwrap();
+        assert_eq!(text(&again.results[0].rows[0][0]), "7");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_running_statement_can_be_cancelled() {
+    each_server(async |db, kind| {
+        let db = Arc::new(db);
+        let sleep = match kind {
+            DbKind::Mysql => "SELECT SLEEP(30)",
+            DbKind::Postgres => "SELECT pg_sleep(30)",
+        };
+        let started = Instant::now();
+        let runner = {
+            let db = db.clone();
+            tokio::spawn(async move { db.query(sleep, QueryLimits::default()).await })
+        };
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        db.cancel().await.unwrap();
+        let out = runner.await.unwrap().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(15));
+        // MySQL's SLEEP returns 1 when interrupted; PostgreSQL reports the cancel as an error.
+        match kind {
+            DbKind::Mysql => assert!(
+                out.error.is_some() || text(&out.results[0].rows[0][0]) == "1",
+                "{out:?}"
+            ),
+            DbKind::Postgres => assert!(out.error.is_some(), "{out:?}"),
+        }
+        let again = db.query("SELECT 3", QueryLimits::default()).await.unwrap();
+        assert_eq!(text(&again.results[0].rows[0][0]), "3");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn binary_values_are_hex() {
+    if let Some(p) = params(DbKind::Mysql) {
+        let db = DbClient::connect(&p).await.unwrap();
+        let out = db
+            .query("SELECT UNHEX('FF00')", QueryLimits::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            out.results[0].rows[0][0],
+            Value::Bytes { hex: "ff00".into() }
+        );
+    }
+}
+
+#[tokio::test]
+async fn wrong_password_is_an_auth_error() {
+    for kind in [DbKind::Mysql, DbKind::Postgres] {
+        if let Some(mut p) = params(kind) {
+            p.password = Zeroizing::new("definitely-wrong".into());
+            match DbClient::connect(&p).await {
+                Err(aht_db::Error::Auth(_)) => {}
+                Err(e) => panic!("{kind:?}: expected an auth error, got {e}"),
+                Ok(_) => panic!("{kind:?}: connected with a wrong password"),
+            }
+        }
+    }
+}
