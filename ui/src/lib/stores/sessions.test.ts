@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Sessions, isRdp, rdpConnectionOf } from "./sessions.svelte";
+import { Sessions, isView, viewConnectionOf } from "./sessions.svelte";
 import { connections } from "./connections.svelte";
 import { findLeafBySession, leaf, leaves, splitLeaf } from "../util/layout";
 import type { Connection, SessionInfo, SessionState } from "../api/types";
@@ -56,7 +56,7 @@ describe("retrying a failed login", () => {
     connections.list = [{ id: "w", kind: "rdp" } as Connection];
     s.retry("r");
     const id = (s.tabs[0].layout as { sessionId: string }).sessionId;
-    expect(isRdp(id) && rdpConnectionOf(id)).toBe("w");
+    expect(isView(id) && viewConnectionOf(id)).toBe("w");
     expect(s.pending.r).toBeUndefined();
   });
 });

@@ -121,6 +121,29 @@ function seed() {
       tags: ["windows", "ad"],
       auth: { type: "password", secret: adminPassword.id },
     }),
+    conn({
+      name: "shop-db",
+      kind: "mysql",
+      icon: "database",
+      host: "db.internal",
+      port: 3306,
+      env: "staging",
+      group_id: staging.id,
+      user: "app",
+      database: "shop",
+      auth: { type: "password", secret: adminPassword.id },
+    }),
+    conn({
+      name: "analytics-pg",
+      kind: "postgres",
+      icon: "database",
+      host: "pg.internal",
+      port: 5432,
+      group_id: dev.id,
+      user: "analyst",
+      database: "analytics",
+      auth: { type: "prompt" },
+    }),
   ];
   const providers: Provider[] = [
     {
@@ -1078,6 +1101,51 @@ export function createMockApi(): Api {
     async rdpClose(id) {
       rdp.delete(id);
     },
+    async dbOpen(connectionId, password) {
+      const c = db.connections.find((x) => x.id === connectionId);
+      if (!c || (c.kind !== "mysql" && c.kind !== "postgres")) throw fail("invalid", "not a database connection");
+      if (c.auth.type !== "password" && password === undefined) throw fail("auth", "password_required");
+      if (password === "wrong") throw fail("auth", `password authentication failed for user "${c.user}"`);
+      await sleep(250);
+      const id = uuid();
+      mockDbs.set(id, { kind: c.kind, running: null });
+      return { id, kind: c.kind, version: c.kind === "mysql" ? "8.4.2" : "PostgreSQL 16.4 on x86_64-pc-linux-gnu", database: c.database ?? null };
+    },
+    async dbClose(id) {
+      mockDbs.delete(id);
+    },
+    async dbDatabases(id) {
+      const d = mockDb(id);
+      return d.kind === "mysql" ? ["information_schema", "shop"] : ["analytics", "postgres"];
+    },
+    async dbNamespaces(id) {
+      const d = mockDb(id);
+      return d.kind === "mysql" ? ["information_schema", "shop"] : ["public", "reporting"];
+    },
+    async dbTables(id, namespace) {
+      mockDb(id);
+      await sleep(80);
+      return Object.keys(MOCK_TABLES)
+        .filter((t) => MOCK_TABLES[t].ns === namespace || (namespace !== "information_schema" && MOCK_TABLES[t].ns === "*"))
+        .map((name) => ({ name, view: !!MOCK_TABLES[name].view }));
+    },
+    async dbColumns(id, _namespace, table) {
+      mockDb(id);
+      const t = MOCK_TABLES[table];
+      if (!t) throw fail("not_found", `table ${table}`);
+      return t.columns;
+    },
+    async dbQuery(id, sql, maxRows = 1000) {
+      return mockRun(mockDb(id), sql, maxRows);
+    },
+    async dbTableRows(id, namespace, table, maxRows = 1000) {
+      const d = mockDb(id);
+      const q = d.kind === "mysql" ? "`" : '"';
+      return mockRun(d, `SELECT * FROM ${q}${namespace}${q}.${q}${table}${q} LIMIT ${maxRows}`, maxRows);
+    },
+    async dbCancel(id) {
+      mockDb(id).running?.();
+    },
     async copyBetween(from, path, to, toDir, overwrite, transfer_id) {
       const name = baseName(path);
       const now = Math.floor(Date.now() / 1000);
@@ -1516,4 +1584,91 @@ export function createMockApi(): Api {
     },
   };
   return api;
+}
+
+// ---- databases (mock) ----
+
+type MockDb = { kind: "mysql" | "postgres"; running: (() => void) | null };
+const mockDbs = new Map<string, MockDb>();
+
+function mockDb(id: string): MockDb {
+  const d = mockDbs.get(id);
+  if (!d) throw { kind: "not_found", message: `database tab ${id}` };
+  return d;
+}
+
+const col = (name: string, data_type: string, primary_key = false, nullable = false, dflt: string | null = null) => ({ name, data_type, nullable, default: dflt, primary_key });
+
+const MOCK_TABLES: Record<string, { ns: string; view?: boolean; columns: ReturnType<typeof col>[]; rows: (n: number) => (string | null)[] }> = {
+  customers: {
+    ns: "*",
+    columns: [col("id", "int", true), col("name", "varchar(80)"), col("email", "varchar(120)", false, true), col("created_at", "datetime", false, false, "CURRENT_TIMESTAMP")],
+    rows: (n) => [String(n), ["Ada Lovelace", "Grace Hopper", "Alan Turing", "Edsger Dijkstra", "Barbara Liskov"][n % 5], n % 7 === 0 ? null : `user${n}@example.com`, `2026-0${(n % 9) + 1}-1${n % 9} 10:2${n % 9}:00`],
+  },
+  orders: {
+    ns: "*",
+    columns: [col("id", "bigint", true), col("customer_id", "int"), col("total", "decimal(10,2)"), col("status", "varchar(20)")],
+    rows: (n) => [String(1000 + n), String((n % 40) + 1), ((n * 37) % 500 + 9.99).toFixed(2), ["paid", "shipped", "refunded"][n % 3]],
+  },
+  order_totals: {
+    ns: "*",
+    view: true,
+    columns: [col("customer_id", "int", false, true), col("total", "decimal(32,2)", false, true)],
+    rows: (n) => [String(n + 1), (n * 123.45).toFixed(2)],
+  },
+};
+
+const MOCK_SIZES: Record<string, number> = { customers: 40, orders: 2500, order_totals: 40 };
+
+async function mockRun(d: MockDb, sql: string, maxRows: number): Promise<import("./types").DbQueryOutput> {
+  const started = Date.now();
+  const out: import("./types").DbQueryOutput = { results: [], error: null, elapsed_ms: 0 };
+  const statements = sql.split(";").map((x) => x.trim()).filter(Boolean);
+  for (const st of statements) {
+    const sleepMatch = st.match(/sleep\((\d+)\)/i);
+    if (sleepMatch) {
+      const cancelled = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), Number(sleepMatch[1]) * 1000);
+        d.running = () => {
+          clearTimeout(timer);
+          resolve(true);
+        };
+      });
+      d.running = null;
+      if (cancelled) {
+        out.error = d.kind === "mysql" ? "Query execution was interrupted (70100)" : "canceling statement due to user request (57014)";
+        break;
+      }
+      out.results.push({ columns: [{ name: "sleep", type_name: "INT" }], rows: [["0"]], rows_affected: 0, truncated: false });
+      continue;
+    }
+    const from = st.match(/from\s+[`"]?(?:\w+[`"]?\.[`"]?)?(\w+)/i);
+    if (/^(select|show|with|explain)/i.test(st)) {
+      if (!from) {
+        const expr = st.replace(/^select\s+/i, "");
+        out.results.push({ columns: [{ name: expr, type_name: "BIGINT" }], rows: [[/^\d+$/.test(expr) ? expr : "1"]], rows_affected: 0, truncated: false });
+        continue;
+      }
+      const t = MOCK_TABLES[from[1]];
+      if (!t) {
+        out.error = d.kind === "mysql" ? `Table '${from[1]}' doesn't exist (42S02)` : `relation "${from[1]}" does not exist (42P01)`;
+        break;
+      }
+      const total = MOCK_SIZES[from[1]] ?? 10;
+      const limit = Number(st.match(/limit\s+(\d+)/i)?.[1] ?? total);
+      const n = Math.min(total, limit);
+      const rows = Array.from({ length: Math.min(n, maxRows) }, (_, i) => t.rows(i + 1));
+      out.results.push({ columns: t.columns.map((c) => ({ name: c.name, type_name: c.data_type.toUpperCase() })), rows, rows_affected: 0, truncated: n > maxRows });
+    } else if (/^(insert|update|delete)/i.test(st)) {
+      out.results.push({ columns: [], rows: [], rows_affected: 3, truncated: false });
+    } else if (/^(create|drop|alter|set|use|begin|commit|rollback|start)/i.test(st)) {
+      out.results.push({ columns: [], rows: [], rows_affected: 0, truncated: false });
+    } else {
+      out.error = d.kind === "mysql" ? "You have an error in your SQL syntax; check the manual (42000)" : `syntax error at or near "${st.split(/\s+/)[0]}" (42601)`;
+      break;
+    }
+  }
+  await sleep(60);
+  out.elapsed_ms = Date.now() - started;
+  return out;
 }

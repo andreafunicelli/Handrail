@@ -2454,6 +2454,7 @@ version = "1.0.0"
 dependencies = [
  "aht-agent",
  "aht-core",
+ "aht-db",
  "aht-harness",
  "aht-import",
  "aht-mcp",

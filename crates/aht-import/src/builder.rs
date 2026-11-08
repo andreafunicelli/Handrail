@@ -196,6 +196,8 @@ impl Builder {
             // Imported servers get an OS icon from their kind: SSH reads as Linux, RDP as
             // Windows. The user can change it in the editor.
             icon: Some("linux".into()),
+            database: None,
+            db_tls: None,
             identity: None,
         });
         id

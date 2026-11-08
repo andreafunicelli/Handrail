@@ -113,7 +113,7 @@ fn helper_path() -> Result<std::path::PathBuf> {
 
 /// An SSH local forward to `conn`'s RDP port through its jump hosts, the last one doing the
 /// forwarding. Host keys are checked (and new ones confirmed in the UI) as for terminals.
-async fn tunnel(
+pub(crate) async fn tunnel(
     app: &AppHandle,
     state: &AppState,
     conn: &Connection,

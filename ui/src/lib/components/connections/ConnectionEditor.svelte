@@ -44,7 +44,7 @@
   let identityId = $state(c.identity ?? "");
   const identity = $derived(credentials.identity(identityId));
   /** RDP needs a saved password, so it offers only identities that have one. */
-  const identityChoices = $derived(credentials.identities.filter((i) => c.kind !== "rdp" || i.auth.type === "password"));
+  const identityChoices = $derived(credentials.identities.filter((i) => c.kind === "ssh" || i.auth.type === "password"));
   let password = $state("");
   let keyText = $state("");
   let passphrase = $state("");
@@ -65,15 +65,22 @@
   const jumpFor = $derived(connections.list.filter((x) => x.id !== c.id && x.jump.includes(c.id)).map((x) => x.name));
   const tunnelsOk = $derived(c.tunnels.every((x) => !tunnelProblem(x)));
   const rdp = $derived(c.kind === "rdp");
+  /** MySQL/MariaDB or PostgreSQL: a password (saved or asked), a database, encryption. */
+  const dbKind = $derived(c.kind === "mysql" || c.kind === "postgres");
+  /** Databases log in with a password (saved or asked at connect time). */
+  const authKinds = $derived(dbKind ? (["password", "prompt"] as const) : (["password", "key", "agent", "prompt"] as const));
   /** RDP logs in with a saved password only (NLA needs it before the session starts). */
   const rdpPasswordOk = $derived(!rdp || (identityId ? identity?.auth.type === "password" : !!password || !!passwordId));
   const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk && rdpPasswordOk && !emojiBad);
 
-  function setKind(kind: "ssh" | "rdp") {
+  const DEFAULT_PORTS: Record<string, number> = { ssh: 22, rdp: 3389, mysql: 3306, postgres: 5432 };
+
+  function setKind(kind: "ssh" | "rdp" | "mysql" | "postgres") {
     if (c.kind === kind) return;
-    if (kind === "rdp" && c.port === 22) c.port = 3389;
-    if (kind === "ssh" && c.port === 3389) c.port = 22;
+    // A port left at the old kind's default follows the new kind.
+    if (c.port === DEFAULT_PORTS[c.kind]) c.port = DEFAULT_PORTS[kind];
     if (kind === "rdp") authType = "password";
+    if ((kind === "mysql" || kind === "postgres") && (authType === "key" || authType === "agent")) authType = "password";
     c.kind = kind;
   }
 
@@ -102,12 +109,19 @@
       out.tags = tagsText.split(",").map((s) => s.trim()).filter(Boolean);
       out.tunnels = out.tunnels.map((x) => ({ ...x, bind_host: x.bind_host.trim(), dest_host: x.kind === "dynamic" ? "" : x.dest_host.trim(), dest_port: x.kind === "dynamic" ? 0 : x.dest_port }));
       if (out.env === "prod" && out.approval_mode === "auto") out.approval_mode = null;
+      if (out.kind !== "ssh") out.tunnels = [];
       if (out.kind === "rdp") {
-        // Tunnels and agent approvals belong to SSH sessions.
-        out.tunnels = [];
+        // Agent approvals belong to terminal and database sessions.
         out.approval_mode = null;
       } else {
         out.rdp_admin = false;
+      }
+      if (out.kind === "mysql" || out.kind === "postgres") {
+        out.database = out.database?.trim() || null;
+        out.db_tls = out.db_tls ?? null;
+      } else {
+        out.database = null;
+        out.db_tls = null;
       }
       out.identity = identityId || null;
       if (identity) {
@@ -183,16 +197,18 @@
 
   <form class="body" onsubmit={(e) => (e.preventDefault(), save())}>
     <div class="seg kind" role="group" use:segmented aria-label={t("editor.kind")}>
-      <button type="button" aria-pressed={!rdp} onclick={() => setKind("ssh")}><Icon name="terminal" size={13} />SSH</button>
-      <button
-        type="button"
-        aria-pressed={rdp}
-        disabled={!rdp && jumpFor.length > 0}
-        title={!rdp && jumpFor.length ? t("editor.kind.rdpJump", { names: jumpFor.join(", ") }) : undefined}
-        onclick={() => setKind("rdp")}><Icon name="monitor" size={13} />{t("editor.kind.rdp")}</button
-      >
+      <button type="button" aria-pressed={c.kind === "ssh"} onclick={() => setKind("ssh")}><Icon name="terminal" size={13} />SSH</button>
+      {#each [["rdp", "monitor", t("editor.kind.rdp")], ["mysql", "database", "MySQL"], ["postgres", "database", "PostgreSQL"]] as const as [k, icon, label] (k)}
+        <button
+          type="button"
+          aria-pressed={c.kind === k}
+          disabled={c.kind !== k && jumpFor.length > 0}
+          title={c.kind !== k && jumpFor.length ? t("editor.kind.rdpJump", { names: jumpFor.join(", ") }) : undefined}
+          onclick={() => setKind(k)}><Icon name={icon} size={13} />{label}</button
+        >
+      {/each}
     </div>
-    {#if !rdp && c.port === 3389 && !jumpFor.length}
+    {#if c.kind === "ssh" && c.port === 3389 && !jumpFor.length}
       <p class="hint kindnote">
         <Icon name="monitor" size={13} />{t("editor.kind.rdpPort")}
         <button type="button" class="btn sm" onclick={() => setKind("rdp")}>{t("editor.kind.toRdp")}</button>
@@ -259,7 +275,7 @@
     {#if !identityId}
     <label class="field">
       <span class="label">{t("editor.user")}</span>
-      <input class="input mono" bind:value={c.user} placeholder={rdp ? "DOMAIN\\user" : "deploy"} spellcheck="false" autocapitalize="off" />
+      <input class="input mono" bind:value={c.user} placeholder={rdp ? "DOMAIN\\user" : dbKind ? "app" : "deploy"} spellcheck="false" autocapitalize="off" />
       {#if rdp}<span class="hint">{t("editor.rdpUser")}</span>{/if}
     </label>
     {/if}
@@ -275,7 +291,7 @@
     <fieldset class="field">
       <legend class="label">{rdp ? t("editor.auth.password") : t("editor.auth")}</legend>
       <div class="seg" role="group" hidden={rdp} use:segmented>
-        {#each ["password", "key", "agent", "prompt"] as const as a (a)}
+        {#each authKinds as a (a)}
           <button type="button" aria-pressed={authType === a} onclick={() => (authType = a)}>{t(`editor.auth.${a}`)}</button>
         {/each}
       </div>
@@ -334,7 +350,25 @@
       {/if}
     </fieldset>
 
-    <fieldset class="field" hidden={rdp}>
+    {#if dbKind}
+      <div class="grid3">
+        <label class="field host">
+          <span class="label">{t("editor.database")}</span>
+          <input class="input mono" bind:value={c.database} placeholder={c.kind === "postgres" ? "postgres" : t("editor.databaseAny")} spellcheck="false" autocapitalize="off" />
+        </label>
+        <label class="field">
+          <span class="label">{t("editor.dbTls")}</span>
+          <select class="select" bind:value={c.db_tls}>
+            <option value={null}>{t("editor.dbTls.prefer")}</option>
+            <option value="require">{t("editor.dbTls.require")}</option>
+            <option value="verify">{t("editor.dbTls.verify")}</option>
+            <option value="disable">{t("editor.dbTls.disable")}</option>
+          </select>
+        </label>
+      </div>
+      {#if c.kind === "postgres"}<span class="hint">{t("editor.databasePg")}</span>{/if}
+    {/if}
+    <fieldset class="field" hidden={c.kind !== "ssh"}>
       <legend class="label">{t("editor.tunnels")}</legend>
       {#each c.tunnels as x, i (i)}
         {@const problem = tunnelProblem(x)}

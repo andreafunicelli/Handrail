@@ -160,6 +160,7 @@ pub async fn vault_delete(state: State<'_, AppState>) -> Result<()> {
     vault_lock(state.clone()).await?;
     state.terminal.close_all().await;
     state.rdp.close_all().await;
+    state.db.close_all().await;
     let vault = state.vault.clone();
     let mut guard = vault.lock_owned().await;
     let vault_id = guard.vault_id().map(str::to_owned);

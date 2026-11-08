@@ -48,6 +48,10 @@ import type {
   VaultStatus,
   RdpInput,
   RdpSize,
+  DbOpened,
+  DbQueryOutput,
+  DbTableInfo,
+  DbColumnInfo,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -161,6 +165,24 @@ export interface Api {
   rdpInput(id: string, events: RdpInput[]): Promise<void>;
   rdpResize(id: string, size: RdpSize): Promise<void>;
   rdpClose(id: string): Promise<void>;
+
+  // databases
+  /** Open a database tab. `password` answers the prompt of a connection that saves none
+   *  (without it such a connection rejects with `{ kind: "auth", message: "password_required" }`). */
+  dbOpen(connectionId: string, password?: string): Promise<DbOpened>;
+  dbClose(id: string): Promise<void>;
+  /** Databases on the server (PostgreSQL: the ones a new tab could open). */
+  dbDatabases(id: string): Promise<string[]>;
+  /** Where tables live: databases on MySQL, schemas on PostgreSQL. */
+  dbNamespaces(id: string): Promise<string[]>;
+  dbTables(id: string, namespace: string): Promise<DbTableInfo[]>;
+  dbColumns(id: string, namespace: string, table: string): Promise<DbColumnInfo[]>;
+  /** Run one or more statements on the tab's connection (its session state carries over). */
+  dbQuery(id: string, sql: string, maxRows?: number): Promise<DbQueryOutput>;
+  /** The rows of one table. */
+  dbTableRows(id: string, namespace: string, table: string, maxRows?: number): Promise<DbQueryOutput>;
+  /** Stop the statement running in a tab. */
+  dbCancel(id: string): Promise<void>;
   /** UTF-8 text up to 5 MB (binary files are refused). */
   sftpReadText(sessionId: string, path: string, root?: boolean): Promise<TextFile>;
   /**

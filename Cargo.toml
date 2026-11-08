@@ -21,6 +21,7 @@ aht-agent = { path = "crates/aht-agent" }
 aht-sync = { path = "crates/aht-sync" }
 aht-import = { path = "crates/aht-import" }
 aht-s3 = { path = "crates/aht-s3" }
+aht-db = { path = "crates/aht-db" }
 
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
