@@ -829,12 +829,10 @@ fn classify_words(words: &[String]) -> RiskClass {
             // A program file or loaded extension is unknown; in the program, `system()`, pipes
             // to or from commands and `print > file` run or write.
             let external = has_flag(args, 'f', "file")
+                || has_flag(args, 'E', "exec")
                 || has_flag(args, 'i', "include")
                 || has_flag(args, 'l', "load");
-            // The program is the first operand; `-F '|'` and `-v x=…` values are not.
-            let j = skip_opts(args, &["-F", "-v", "--field-separator", "--assign"]);
-            let program = args.get(j).map_or("", String::as_str);
-            return if external || awk_runs_or_writes(program) {
+            return if external || awk_programs(args).any(awk_runs_or_writes) {
                 RiskClass::Write
             } else {
                 RiskClass::Read
@@ -1128,6 +1126,37 @@ fn sed_script_runs_or_writes(script: &str) -> bool {
         }
     }
     false
+}
+
+/// The program texts of an awk invocation: every `-e`/`--source` value (GNU awk), or else the
+/// first operand. Values of `-F` and `-v` are not programs (`-F '|'` is a field separator).
+fn awk_programs(args: &[String]) -> impl Iterator<Item = &str> {
+    let mut explicit = Vec::new();
+    let mut first_operand = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "--" {
+            first_operand = first_operand.or(args.get(i + 1).map(String::as_str));
+            break;
+        } else if a == "-e" || a == "--source" {
+            explicit.extend(args.get(i + 1).map(String::as_str));
+            i += 1;
+        } else if let Some(v) = a.strip_prefix("--source=") {
+            explicit.push(v);
+        } else if let Some(v) = a.strip_prefix("-e").filter(|v| !v.is_empty()) {
+            explicit.push(v);
+        } else if matches!(a, "-F" | "-v" | "--field-separator" | "--assign") {
+            i += 1;
+        } else if !a.starts_with('-') && first_operand.is_none() {
+            first_operand = Some(a);
+        }
+        i += 1;
+    }
+    if explicit.is_empty() {
+        explicit.extend(first_operand);
+    }
+    explicit.into_iter()
 }
 
 /// Whether an awk program runs commands or writes files: `system()`, a pipe to or from a
@@ -1427,6 +1456,10 @@ mod tests {
             ("awk -F'|' '$3 > 100 || $2 == 0 {print $1}' f", Read),
             ("awk -F '|' '{print $2}' f", Read),
             ("awk -f prog.awk f", Write),
+            ("gawk --source='BEGIN{system(\"id\")}'", Write),
+            ("gawk -e 'BEGIN{x=1}' -e '{print | \"sh\"}' f", Write),
+            ("gawk -e '{print $1}' f", Read),
+            ("gawk -E prog.awk f", Write),
             ("alias ls='touch x'", Write),
             ("alias", Read),
             ("alias ll", Read),
