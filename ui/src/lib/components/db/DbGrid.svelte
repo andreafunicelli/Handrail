@@ -12,7 +12,14 @@
     result,
     edits = $bindable(null),
     selected = $bindable(null),
-  }: { result: DbResultSet; edits?: GridEdits | null; selected?: { r: number; c: number } | null } = $props();
+    locked = false,
+  }: {
+    result: DbResultSet;
+    edits?: GridEdits | null;
+    selected?: { r: number; c: number } | null;
+    /** Edits are being saved: nothing more can be changed until they are. */
+    locked?: boolean;
+  } = $props();
 
   const ROW = 26;
   const OVERSCAN = 8;
@@ -43,7 +50,7 @@
     !!edits && (r >= result.rows.length ? c in (edits.added[r - result.rows.length] ?? {}) : c in (edits.cells[r] ?? {}));
 
   async function startEdit(r: number, c: number) {
-    if (!edits || edits.deleted[r]) return;
+    if (!edits || locked || edits.deleted[r]) return;
     const v = value(r, c);
     // Binary values are shown as hex and cannot be typed back.
     if (v !== null && v !== undefined && typeof v !== "string") return;
@@ -64,7 +71,7 @@
 
   /** Set a cell of the edited rows; going back to the original value drops the change. */
   export function setCell(r: number, c: number, v: string | null) {
-    if (!edits || edits.deleted[r]) return;
+    if (!edits || locked || edits.deleted[r]) return;
     if (r >= result.rows.length) {
       edits.added[r - result.rows.length][c] = v;
       return;

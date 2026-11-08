@@ -158,7 +158,7 @@
     ranLabel = `${ns}.${table}`;
     editTarget = null;
     edits = null;
-    await execute(() => api.dbTableRows(id!, ns, table, maxRows));
+    const seq = await execute(() => api.dbTableRows(id!, ns, table, maxRows));
     const r = output?.results[0];
     const view = Array.isArray(tables[ns]) && (tables[ns] as DbTableInfo[]).find((x) => x.name === table)?.view;
     if (!id || closed || !r || output?.error || output?.results.length !== 1 || view) return;
@@ -166,6 +166,10 @@
       const key = `${ns}.${table}`;
       const cols = Array.isArray(columns[key]) ? (columns[key] as DbColumnInfo[]) : await api.dbColumns(id, ns, table);
       columns[key] = cols;
+      // Something else ran while the columns loaded: these rows are no longer the ones shown.
+      if (seq !== runs || closed) return;
+      // A query without rows reports no columns: show the table's own, so rows can be added.
+      if (!r.rows.length && !r.columns.length) r.columns = cols.map((c) => ({ name: c.name, type_name: c.data_type }));
       const pk = cols.filter((c) => c.primary_key).map((c) => c.name);
       const names = r.columns.map((c) => c.name);
       // Rows are found by their primary key: without one (or without all of its columns) the
@@ -180,7 +184,7 @@
   }
 
   function addRow() {
-    if (!edits || !output?.results[0]) return;
+    if (!edits || saving || !output?.results[0]) return;
     edits.added.push({});
     const r = output.results[0].rows.length + edits.added.length - 1;
     selected = { r, c: 0 };
@@ -189,7 +193,7 @@
 
   /** Mark the selected row for deletion (or drop it, if it is a new one); again to unmark. */
   function deleteRow() {
-    if (!edits || !selected || !output?.results[0]) return;
+    if (!edits || saving || !selected || !output?.results[0]) return;
     const n = output.results[0].rows.length;
     if (selected.r >= n) {
       edits.added.splice(selected.r - n, 1);
@@ -226,11 +230,15 @@
     }
   }
 
-  async function execute(call: () => Promise<DbQueryOutput>) {
+  /** Counts what was run, so a late answer can tell it is about rows no longer shown. */
+  let runs = 0;
+
+  async function execute(call: () => Promise<DbQueryOutput>): Promise<number> {
+    const seq = ++runs;
     running = true;
     try {
       const out = await call();
-      if (closed) return;
+      if (closed) return seq;
       output = out;
       active = Math.max(0, primaryResult(out));
     } catch (e) {
@@ -238,6 +246,7 @@
     } finally {
       running = false;
     }
+    return seq;
   }
 
   async function stop() {
@@ -376,9 +385,9 @@
             {/if}
             {#if edits && current}
               <span class="edit-tools">
-                <button class="btn sm ghost" onclick={addRow} title={t("db.addRow")}><Icon name="plus" size={12} />{t("db.addRow")}</button>
-                <button class="btn sm ghost" onclick={deleteRow} disabled={!selected} title={t("db.deleteRow")}><Icon name="trash" size={12} />{t("db.deleteRow")}</button>
-                <button class="btn sm ghost" onclick={setNull} disabled={!selected} title={t("db.setNull")}>NULL</button>
+                <button class="btn sm ghost" onclick={addRow} disabled={saving} title={t("db.addRow")}><Icon name="plus" size={12} />{t("db.addRow")}</button>
+                <button class="btn sm ghost" onclick={deleteRow} disabled={!selected || saving} title={t("db.deleteRow")}><Icon name="trash" size={12} />{t("db.deleteRow")}</button>
+                <button class="btn sm ghost" onclick={setNull} disabled={!selected || saving} title={t("db.setNull")}>NULL</button>
                 {#if pending}
                   <button class="btn sm primary" onclick={save} disabled={saving}><Icon name="check" size={12} />{t("db.save", { n: pending })}</button>
                   <button class="btn sm" onclick={() => ((edits = noEdits()), (selected = null))} disabled={saving}>{t("db.discard")}</button>
@@ -402,7 +411,7 @@
           {#if current && current.columns.length}
             <div class="gridbox">
               {#if edits && active === 0}
-                <DbGrid result={current} bind:edits bind:selected bind:this={grid} />
+                <DbGrid result={current} bind:edits bind:selected bind:this={grid} locked={saving} />
               {:else}
                 <DbGrid result={current} />
               {/if}
