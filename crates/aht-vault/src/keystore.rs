@@ -1,7 +1,7 @@
 //! Storage for the Secret Key on a device, so users only type it once per device.
 
 use crate::error::{Result, VaultError};
-use crate::fsutil::atomic_write;
+use crate::fsutil::atomic_write_private;
 use crate::secret_key::SecretKey;
 use std::path::PathBuf;
 
@@ -56,12 +56,7 @@ impl SecretKeyStore for FileSecretKeyStore {
     fn set(&self, vault_id: &str, key: &SecretKey) -> Result<()> {
         let path = self.path(vault_id)?;
         std::fs::create_dir_all(&self.dir)?;
-        atomic_write(&path, key.reveal().as_bytes())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        }
+        atomic_write_private(&path, key.reveal().as_bytes())?;
         Ok(())
     }
 

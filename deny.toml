@@ -33,7 +33,7 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant (zbus 5): via keyring's Linux Secret Service store; no release on zbus 6 yet. Re-check on keyring upgrades." },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names (zbus 5): via keyring's Linux Secret Service store; no release on zbus 6 yet. Re-check on keyring upgrades." },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive (zbus 5, proc macro): via keyring's Linux Secret Service store; no release on zbus 6 yet. Re-check on keyring upgrades." },
-    { id = "RUSTSEC-2023-0071", reason = "Marvin timing attack; russh uses rsa only for client-side signing during login (a few operations per connection). No patched rsa release (RustCrypto/RSA#626); RSA key login must stay supported. Re-check when rsa ships a fix." },
+    { id = "RUSTSEC-2023-0071", reason = "Marvin timing attack; russh uses rsa only for client-side signing during login (a few operations per connection). No patched rsa release (RustCrypto/RSA#626); RSA key login must stay supported. sqlx-mysql uses rsa only to encrypt the password with the server's public key (no private-key operation). Re-check when rsa ships a fix." },
 ]
 
 [licenses]

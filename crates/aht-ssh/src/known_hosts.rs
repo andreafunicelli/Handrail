@@ -22,6 +22,8 @@ pub enum HostKeyStatus {
     New { fingerprint: String },
     /// An entry of the same algorithm exists with a different key. Possible MITM.
     Changed { old: String, new: String },
+    /// The key is marked `@revoked` in a known_hosts file: never accept it.
+    Revoked { fingerprint: String },
 }
 
 /// SHA256 fingerprint in OpenSSH format, e.g. `SHA256:abc...`.
@@ -42,6 +44,8 @@ pub fn host_token(host: &str, port: u16) -> String {
 struct Entry {
     patterns: String,
     key: PublicKey,
+    /// An `@revoked` line: this key must be refused.
+    revoked: bool,
 }
 
 fn parse_file(path: &Path) -> Vec<Entry> {
@@ -53,8 +57,12 @@ fn parse_file(path: &Path) -> Vec<Entry> {
 
 fn parse_line(line: &str) -> Option<Entry> {
     let line = line.trim();
+    let (line, revoked) = match line.strip_prefix("@revoked") {
+        Some(rest) if rest.starts_with(char::is_whitespace) => (rest.trim_start(), true),
+        _ => (line, false),
+    };
     if line.is_empty() || line.starts_with('#') || line.starts_with('@') {
-        // `@cert-authority` / `@revoked` markers are not supported; skip them.
+        // `@cert-authority` lines are not supported; skip them.
         return None;
     }
     let mut parts = line.split_whitespace();
@@ -62,7 +70,11 @@ fn parse_line(line: &str) -> Option<Entry> {
     let _alg = parts.next()?;
     let b64 = parts.next()?;
     let key = russh::keys::parse_public_key_base64(b64).ok()?;
-    Some(Entry { patterns, key })
+    Some(Entry {
+        patterns,
+        key,
+        revoked,
+    })
 }
 
 /// Does `token` (e.g. `[h]:2222`) match a comma-separated known_hosts pattern list?
@@ -167,7 +179,7 @@ impl KnownHosts {
     fn entries_for(&self, token: &str) -> Vec<Entry> {
         let app: Vec<Entry> = parse_file(&self.app_file)
             .into_iter()
-            .filter(|e| matches_patterns(token, &e.patterns))
+            .filter(|e| !e.revoked && matches_patterns(token, &e.patterns))
             .collect();
         if !app.is_empty() {
             return app;
@@ -175,8 +187,20 @@ impl KnownHosts {
         self.read_only
             .iter()
             .flat_map(|p| parse_file(p))
-            .filter(|e| matches_patterns(token, &e.patterns))
+            .filter(|e| !e.revoked && matches_patterns(token, &e.patterns))
             .collect()
+    }
+
+    /// Whether any file (the app's or a read-only one) revokes `key` for `token`.
+    fn is_revoked(&self, token: &str, key: &PublicKey) -> bool {
+        std::iter::once(&self.app_file)
+            .chain(&self.read_only)
+            .flat_map(|p| parse_file(p))
+            .any(|e| {
+                e.revoked
+                    && e.key.key_data() == key.key_data()
+                    && matches_patterns(token, &e.patterns)
+            })
     }
 
     /// Algorithms of the keys recorded for `host:port`, to ask the server for one of those.
@@ -191,7 +215,13 @@ impl KnownHosts {
     /// Look up `key` for `host:port`.
     pub fn check(&self, host: &str, port: u16, key: &PublicKey) -> HostKeyStatus {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let entries = self.entries_for(&host_token(host, port));
+        let token = host_token(host, port);
+        if self.is_revoked(&token, key) {
+            return HostKeyStatus::Revoked {
+                fingerprint: fingerprint(key),
+            };
+        }
+        let entries = self.entries_for(&token);
         if entries.iter().any(|e| e.key.key_data() == key.key_data()) {
             return HostKeyStatus::Known;
         }
@@ -227,8 +257,9 @@ impl KnownHosts {
                 .lines()
                 .filter(|l| match parse_line(l) {
                     Some(e) => {
-                        !(matches_patterns(&token, &e.patterns)
-                            && e.key.algorithm() == key.algorithm())
+                        e.revoked
+                            || !(matches_patterns(&token, &e.patterns)
+                                && e.key.algorithm() == key.algorithm())
                     }
                     None => true,
                 })
@@ -365,5 +396,27 @@ mod tests {
         assert_eq!(kh.check("srv", 2200, &k2), HostKeyStatus::Known);
         // Read-only file untouched.
         assert!(std::fs::read_to_string(&ro).unwrap().contains(&token));
+    }
+
+    #[test]
+    fn revoked_keys_are_refused_whatever_else_trusts_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (bad, good) = (key(), key());
+        let ro = dir.path().join("user_kh");
+        std::fs::write(&ro, format!("@revoked {}", line("*", &bad))).unwrap();
+        let kh = KnownHosts::new(dir.path().join("app")).add_read_only(&ro);
+        kh.add("srv", 22, &bad).unwrap();
+        assert!(matches!(
+            kh.check("srv", 22, &bad),
+            HostKeyStatus::Revoked { .. }
+        ));
+        assert!(matches!(
+            kh.check("srv", 22, &good),
+            HostKeyStatus::Changed { .. }
+        ));
+        assert!(matches!(
+            kh.check("other", 22, &good),
+            HostKeyStatus::New { .. }
+        ));
     }
 }
