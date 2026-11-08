@@ -7,6 +7,7 @@
   import { errorMessage, isIpcError } from "../../api/errors";
   import { t } from "../../i18n";
   import { connections } from "../../stores/connections.svelte";
+  import { dbApprovals } from "../../stores/dbApprovals.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { copyText } from "../../util/clipboard";
   import { createSqlEditor, type SqlEditorHandle } from "../../util/codemirror";
@@ -24,7 +25,13 @@
   let password = $state("");
   let info = $state<DbOpened | null>(null);
   let id: string | null = null;
+  /** `id`, for what has to follow it on screen. */
+  let tabId = $state<string | null>(null);
   let closed = false;
+  /** Shared with agents (off for every new connection). */
+  let shared = $state(false);
+  let denyNote = $state<Record<string, string>>({});
+  const asks = $derived(dbApprovals.forTab(tabId));
 
   let namespaces = $state<string[]>([]);
   /** Tables per namespace, loaded when the namespace is opened. */
@@ -72,6 +79,8 @@
       const opened = await api.dbOpen(connectionId, pw);
       if (closed) return void api.dbClose(opened.id).catch(() => {});
       id = opened.id;
+      tabId = opened.id;
+      shared = false;
       info = opened;
       phase = "live";
       password = "";
@@ -249,6 +258,23 @@
     return seq;
   }
 
+  async function toggleShare() {
+    if (!id) return;
+    try {
+      await api.dbShare(id, !shared);
+      shared = !shared;
+      toasts.info(t(shared ? "db.sharedNow" : "db.unsharedNow"));
+    } catch (e) {
+      toasts.error(e);
+    }
+  }
+
+  function decide(approvalId: string, approve: boolean) {
+    const note = denyNote[approvalId]?.trim();
+    delete denyNote[approvalId];
+    void dbApprovals.decide(approvalId, approve ? { type: "approve" } : { type: "deny", message: note || null });
+  }
+
   async function stop() {
     if (id) await api.dbCancel(id).catch((e) => toasts.error(e));
   }
@@ -365,10 +391,32 @@
           </select>
         </label>
         <span class="spacer"></span>
+        <button class="btn sm share" class:on={shared} onclick={toggleShare} title={t("db.shareHint")} aria-pressed={shared}
+          ><Icon name="sparkle" size={12} />{shared ? t("db.shared") : t("db.share")}</button
+        >
         <span class="ver" title={info?.version}>{info?.kind === "postgres" ? "PostgreSQL" : "MySQL"} · {conn?.user}@{conn?.host}</span>
       </div>
       <div class="editor" bind:this={editorHost}></div>
       <div class="results">
+        {#each asks as a (a.approval_id)}
+          <div class="ask risk-{a.risk}" role="alertdialog" aria-label={t("db.askTitle", { who: a.actor_label })}>
+            <div class="ask-head">
+              <Icon name="sparkle" size={13} />
+              <strong>{t("db.askTitle", { who: a.actor_label })}</strong>
+              <span class="pill">{t(`db.risk.${a.risk}`)}</span>
+              <span class="note">{a.policy_note}{a.statements > 1 ? ` · ${t("db.statements", { n: a.statements })}` : ""}</span>
+            </div>
+            {#if a.reason}<p class="why">{a.reason}</p>{/if}
+            <pre class="sql">{a.sql}</pre>
+            <div class="ask-actions">
+              <input class="input" placeholder={t("db.denyNote")} bind:value={denyNote[a.approval_id]} aria-label={t("db.denyNote")} />
+              <button class="btn sm" onclick={() => decide(a.approval_id, false)}>{t("db.deny")}</button>
+              <button class="btn sm primary" class:danger={a.risk === "destructive"} onclick={() => decide(a.approval_id, true)}
+                >{t("db.approve")}</button
+              >
+            </div>
+          </div>
+        {/each}
         {#if running}
           <div class="status"><span class="spinner"></span>{t("db.running")}</div>
         {:else if output}
@@ -639,6 +687,73 @@
     color: var(--text);
     border-color: var(--accent);
     background: var(--accent-soft);
+  }
+  .share.on {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .ask {
+    display: grid;
+    gap: 6px;
+    margin: 8px;
+    padding: 10px;
+    border: 1px solid var(--warn);
+    border-radius: 8px;
+    background: var(--warn-soft);
+  }
+  .ask.risk-destructive {
+    border-color: var(--danger);
+    background: var(--danger-soft);
+  }
+  .ask.risk-read {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .ask-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12.5px;
+  }
+  .ask .pill {
+    padding: 0 6px;
+    border-radius: 4px;
+    border: 1px solid currentColor;
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+  .ask .note,
+  .ask .why {
+    color: var(--muted);
+    font-size: 12px;
+    margin: 0;
+  }
+  .ask .sql {
+    margin: 0;
+    max-height: 160px;
+    overflow: auto;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .ask-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .ask-actions .input {
+    flex: 1;
+    min-width: 0;
+  }
+  .btn.danger {
+    background: var(--danger);
+    border-color: var(--danger);
   }
   .edit-tools {
     display: flex;

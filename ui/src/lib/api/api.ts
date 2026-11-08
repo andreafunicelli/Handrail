@@ -53,6 +53,7 @@ import type {
   DbTableInfo,
   DbColumnInfo,
   DbRowEdit,
+  DbApprovalRequest,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -70,6 +71,10 @@ export interface EventMap {
   /** A proposal ended without the user (agent cancelled or timed out): drop its diff. */
   "edit://resolved": string;
   "approval://requested": ApprovalRequest;
+  /** An agent's SQL waits for the user in a database tab. */
+  "db://approval": DbApprovalRequest;
+  /** Its wait ended (answered, timed out, tab closed): drop the card. */
+  "db://approval-resolved": string;
   "agent://event": AgentEventEnvelope;
   "sync://status": SyncStatus;
 }
@@ -186,6 +191,10 @@ export interface Api {
   dbCancel(id: string): Promise<void>;
   /** Save grid edits to one table in one transaction; resolves to the rows changed. */
   dbApplyEdits(id: string, namespace: string, table: string, edits: DbRowEdit[]): Promise<number>;
+  /** Share a tab with agents (they can read its schema and query it, with approvals), or stop. */
+  dbShare(id: string, shared: boolean): Promise<void>;
+  /** Answer an agent's SQL shown in a tab. */
+  dbApprovalDecide(approvalId: string, decision: ApprovalDecision): Promise<void>;
   /** UTF-8 text up to 5 MB (binary files are refused). */
   sftpReadText(sessionId: string, path: string, root?: boolean): Promise<TextFile>;
   /**

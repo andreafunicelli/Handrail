@@ -6,6 +6,10 @@ use serde_json::Value;
 
 /// Pretty JSON for a successful tool result; `run_command` gets a one-line summary first.
 pub(crate) fn success_text(tool: &str, value: &Value) -> String {
+    // Rows of cells: one line per cell would multiply their size.
+    if matches!(tool, "db_query" | "db_schema") {
+        return value.to_string();
+    }
     let json = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
     if tool == "run_command" {
         if let Ok(r) = serde_json::from_value::<CommandResult>(value.clone()) {

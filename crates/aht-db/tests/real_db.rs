@@ -305,3 +305,44 @@ async fn grid_edits_apply_in_one_transaction() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn agent_reads_cannot_write_and_open_transactions_roll_back() {
+    each_server(async |db, _kind| {
+        let limits = QueryLimits::default();
+        let setup = db
+            .query(
+                "DROP TABLE IF EXISTS hr_agent; CREATE TABLE hr_agent (id INT PRIMARY KEY)",
+                limits,
+            )
+            .await
+            .unwrap();
+        assert_eq!(setup.error, None);
+        // A write inside the read-only transaction is refused by the server.
+        let out = db
+            .run_agent("INSERT INTO hr_agent VALUES (1)", limits, true)
+            .await
+            .unwrap();
+        assert!(out.error.is_some(), "{out:?}");
+        // A transaction the SQL opens and does not commit is rolled back after the call.
+        let out = db
+            .run_agent("BEGIN; INSERT INTO hr_agent VALUES (2)", limits, false)
+            .await
+            .unwrap();
+        assert_eq!(out.error, None, "{out:?}");
+        // A plain write commits.
+        let out = db
+            .run_agent("INSERT INTO hr_agent VALUES (3)", limits, false)
+            .await
+            .unwrap();
+        assert_eq!(out.error, None, "{out:?}");
+        let out = db
+            .run_agent("SELECT id FROM hr_agent ORDER BY id", limits, true)
+            .await
+            .unwrap();
+        assert_eq!(out.error, None, "{out:?}");
+        let ids: Vec<&str> = out.results[0].rows.iter().map(|r| text(&r[0])).collect();
+        assert_eq!(ids, ["3"]);
+    })
+    .await;
+}

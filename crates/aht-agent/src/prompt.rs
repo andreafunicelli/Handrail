@@ -29,6 +29,9 @@ rest; do not ask for the whole thing at once.
 complete new contents: the user reviews the diff in the editor and saves it. Do not edit files \
 with sed, echo, tee or heredocs. If the outcome is rejected, read the user's note and do not \
 propose the same change again.
+- Databases the user shared with agents are listed by list_databases. Read their schema with \
+db_schema and query them with db_query (select only the columns you need, with LIMIT), not with \
+a database client in the terminal. Writes may wait for the user's approval; if denied, ask them.
 - NEVER ask the user for, type, or handle passwords, passphrases, tokens or other secrets, and \
 never echo them. If authentication is needed, ask the user to do it themselves in the terminal.
 - Be concise. Say what you are about to do in a sentence, then do it; summarize findings briefly \

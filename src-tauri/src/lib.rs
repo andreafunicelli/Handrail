@@ -187,6 +187,8 @@ pub fn run() {
             db::db_query,
             db::db_table_rows,
             db::db_cancel,
+            db::db_share,
+            db::db_approval_decide,
             db::db_apply_edits,
             sftp::sftp_sudo,
             sftp::sftp_root_off,
