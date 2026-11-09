@@ -41,15 +41,16 @@
       fs.filter((f) => f.count > 0 || !total.get(f.group.id)).map((f) => ({ ...f, folders: prune(f.folders) }));
     return { folders: prune(t.folders), root: t.root };
   });
-  // A connection just saved (or imported) of the other kind: show the tab that lists it.
-  let known: Set<string> | null = null;
+  // A connection just saved of the other kind (a new one, an imported one, or one edited into
+  // the other kind): show the tab that lists it.
+  let known: Map<string, boolean> | null = null;
   $effect(() => {
     const list = connections.list;
     if (known && kind !== "s3") {
-      const added = list.find((c) => !known!.has(c.id));
-      if (added && !inTab(added)) kind = isDbConnection(added) ? "db" : "ssh";
+      const moved = list.find((c) => known!.get(c.id) !== isDbConnection(c));
+      if (moved && !inTab(moved)) kind = isDbConnection(moved) ? "db" : "ssh";
     }
-    if (connections.loaded) known = new Set(list.map((c) => c.id));
+    if (connections.loaded) known = new Map(list.map((c) => [c.id, isDbConnection(c)]));
   });
   function newDatabase(groupId: string | null = null) {
     kind = "db";
