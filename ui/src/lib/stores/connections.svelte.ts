@@ -5,6 +5,14 @@ import { load, save } from "../util/storage";
 import { buildTree, isDescendant } from "../util/tree";
 import type { QuickTarget } from "../util/quickconnect";
 
+/** A database connection is listed under Databases; every other one under Servers. */
+export const isDbConnection = (c: Pick<Connection, "kind">) => c.kind === "mysql" || c.kind === "postgres";
+
+/** A new MySQL connection (the editor switches it to PostgreSQL); the password is asked until one is saved. */
+export function blankDbConnection(groupId: string | null = null): Connection {
+  return { ...blankConnection(groupId), kind: "mysql", port: 3306, auth: { type: "prompt" } };
+}
+
 export function blankConnection(groupId: string | null = null): Connection {
   return {
     id: uuid(),
