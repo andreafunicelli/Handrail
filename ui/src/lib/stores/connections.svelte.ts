@@ -8,9 +8,20 @@ import type { QuickTarget } from "../util/quickconnect";
 /** A database connection is listed under Databases; every other one under Servers. */
 export const isDbConnection = (c: Pick<Connection, "kind">) => c.kind === "mysql" || c.kind === "postgres";
 
-/** A new MySQL connection (the editor switches it to PostgreSQL); the password is asked until one is saved. */
-export function blankDbConnection(groupId: string | null = null): Connection {
-  return { ...blankConnection(groupId), kind: "mysql", port: 3306, auth: { type: "prompt" } };
+/** A new MySQL connection (the editor switches it to PostgreSQL); the password is asked until one is
+ *  saved. `via`: an SSH server to reach it through (after that server's own jump hosts), the
+ *  database on that server (`localhost`). */
+export function blankDbConnection(groupId: string | null = null, via?: Connection): Connection {
+  const c: Connection = { ...blankConnection(groupId), kind: "mysql", port: 3306, auth: { type: "prompt" } };
+  if (via) {
+    c.name = `${via.name} MySQL`;
+    c.host = "localhost";
+    // Through the server's own jump hosts first: the tunnel does not follow them by itself.
+    c.jump = [...via.jump.filter((id) => id !== via.id), via.id];
+    c.env = via.env;
+    c.group_id = via.group_id;
+  }
+  return c;
 }
 
 export function blankConnection(groupId: string | null = null): Connection {

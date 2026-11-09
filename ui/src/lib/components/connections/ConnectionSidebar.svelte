@@ -134,6 +134,9 @@
         { label: t("ctx.connectSplit"), icon: "splitRight", disabled: !sessions.activeTab, action: () => connect(c, "row") },
         "sep",
         { label: t("ctx.edit"), icon: "edit", action: () => ui.edit(c) },
+        ...(c.kind === "ssh"
+          ? [{ label: t("ctx.newDatabaseVia"), icon: "database" as const, action: () => ((kind = "db"), ui.edit(blankDbConnection(c.group_id, c), true)) }]
+          : []),
         { label: t("ctx.duplicate"), icon: "copy", action: () => connections.duplicate(c.id, t("ctx.copySuffix")).catch(toasts.error) },
         { label: pinned ? t("ctx.unpin") : t("ctx.pin"), icon: "pin", action: () => connections.togglePin(c.id) },
         "sep",

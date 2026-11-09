@@ -253,7 +253,7 @@
     <div class="grid3">
       <label class="field host">
         <span class="label">{t("editor.host")}</span>
-        <input class="input mono" bind:value={c.host} placeholder="10.0.1.11" spellcheck="false" autocapitalize="off" />
+        <input class="input mono" bind:value={c.host} placeholder={dbKind && c.jump.length ? "localhost" : "10.0.1.11"} spellcheck="false" autocapitalize="off" />
       </label>
       <label class="field">
         <span class="label">{t("editor.port")}</span>
@@ -335,8 +335,9 @@
     {/if}
 
     <fieldset class="field">
-      <legend class="label">{t("editor.jump")}</legend>
+      <legend class="label">{t(dbKind ? "editor.dbTunnel" : "editor.jump")}</legend>
       {#if rdp}<p class="hint">{t("editor.rdpJump")}</p>{/if}
+      {#if dbKind}<p class="hint">{t("editor.dbTunnelHint")}</p>{/if}
       {#if !jumpCandidates.length}
         <p class="hint">{t("editor.jumpNone")}</p>
       {:else}
