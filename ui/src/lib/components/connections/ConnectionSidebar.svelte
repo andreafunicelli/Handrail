@@ -4,13 +4,13 @@
   import Icon from "../icons/Icon.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
   import { t } from "../../i18n";
-  import { connections, blankConnection } from "../../stores/connections.svelte";
+  import { connections, blankConnection, blankDbConnection, isDbConnection } from "../../stores/connections.svelte";
   import { sessions } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { ui } from "../../stores/ui.svelte";
   import { fuzzyFilter } from "../../util/fuzzy";
   import { parseQuickConnect } from "../../util/quickconnect";
-  import { groupPath, type FolderNode } from "../../util/tree";
+  import { buildTree, groupPath, type FolderNode } from "../../util/tree";
   import type { Connection, S3Account, SessionState } from "../../api/types";
   import { blankS3Account, s3 } from "../../stores/s3.svelte";
   import { s3Where } from "../../util/s3";
@@ -26,7 +26,36 @@
   let folderName = $state("");
   let dropTarget = $state<string | null>(null);
   /** Which list the sidebar shows. */
-  let kind = $state<"ssh" | "s3">("ssh");
+  let kind = $state<"ssh" | "db" | "s3">("ssh");
+  /** Databases are listed under their own tab; SSH and RDP servers under Servers. */
+  const inTab = (c: Connection) => (kind === "db" ? isDbConnection(c) : !isDbConnection(c));
+  const blankForTab = (groupId: string | null = null) => (kind === "db" ? blankDbConnection(groupId) : blankConnection(groupId));
+  /** The folder tree of this tab's connections. Folders are shared: one holding only the other
+   *  tab's connections is left out, an empty one shows in both. */
+  const tabTree = $derived.by(() => {
+    const t = buildTree(connections.groups, connections.list.filter(inTab), connections.order);
+    const total = new Map<string, number>();
+    const walk = (fs: FolderNode[]) => fs.forEach((f) => (total.set(f.group.id, f.count), walk(f.folders)));
+    walk(connections.tree.folders);
+    const prune = (fs: FolderNode[]): FolderNode[] =>
+      fs.filter((f) => f.count > 0 || !total.get(f.group.id)).map((f) => ({ ...f, folders: prune(f.folders) }));
+    return { folders: prune(t.folders), root: t.root };
+  });
+  // A connection just saved of the other kind (a new one, an imported one, or one edited into
+  // the other kind): show the tab that lists it.
+  let known: Map<string, boolean> | null = null;
+  $effect(() => {
+    const list = connections.list;
+    if (known && kind !== "s3") {
+      const moved = list.find((c) => known!.get(c.id) !== isDbConnection(c));
+      if (moved && !inTab(moved)) kind = isDbConnection(moved) ? "db" : "ssh";
+    }
+    if (connections.loaded) known = new Map(list.map((c) => [c.id, isDbConnection(c)]));
+  });
+  function newDatabase(groupId: string | null = null) {
+    kind = "db";
+    ui.edit(blankDbConnection(groupId), true);
+  }
 
   const s3Results = $derived(query.trim() ? fuzzyFilter(s3.list, query, (a) => [a.name, a.endpoint, a.bucket ?? "", a.region]) : s3.sorted);
 
@@ -51,7 +80,7 @@
 
   const results = $derived(
     query.trim()
-      ? fuzzyFilter(connections.list, query, (c) => [c.name, c.host, `${c.user}@${c.host}`, ...c.tags, groupPath(connections.groups, c.group_id)])
+      ? fuzzyFilter(connections.list.filter(inTab), query, (c) => [c.name, c.host, `${c.user}@${c.host}`, ...c.tags, groupPath(connections.groups, c.group_id)])
       : null,
   );
 
@@ -128,7 +157,7 @@
       x: e.clientX,
       y: e.clientY,
       items: [
-        { label: t("ctx.newConnectionHere"), icon: "plus", action: () => ui.edit(blankConnection(f.group.id), true) },
+        { label: t(kind === "db" ? "ctx.newDatabaseHere" : "ctx.newConnectionHere"), icon: "plus", action: () => ui.edit(blankForTab(f.group.id), true) },
         { label: t("sidebar.newFolder"), icon: "folderPlus", action: () => startFolder(f.group.id) },
         { label: t("ctx.rename"), icon: "edit", action: () => ((renaming = f.group.id), (renameValue = f.group.name)) },
         "sep",
@@ -352,6 +381,7 @@
 
   <div class="kinds" role="tablist" data-tour="kinds" use:segmented>
     <button role="tab" aria-selected={kind === "ssh"} class="kind" class:on={kind === "ssh"} onclick={() => (kind = "ssh")}>{t("sidebar.servers")}</button>
+    <button role="tab" aria-selected={kind === "db"} class="kind" class:on={kind === "db"} onclick={() => (kind = "db")}>{t("sidebar.databases")}</button>
     <button role="tab" aria-selected={kind === "s3"} class="kind" class:on={kind === "s3"} onclick={() => (kind = "s3")}>S3</button>
   </div>
 
@@ -404,27 +434,39 @@
     {#if results}
       {#each results as c (c.id)}{@render row(c, 0, true)}{/each}
       {#if !results.length}<p class="empty-line">{t("sidebar.noResults", { q: query })}</p>{/if}
-    {:else if connections.loaded && !connections.list.length && !connections.groups.length && !creatingFolder}
-      <div class="empty">
-        <Icon name="server" size={20} />
-        <strong>{t("sidebar.empty.title")}</strong>
-        <p>{t("sidebar.empty.body")}</p>
-        <div class="empty-actions">
-          <button class="btn sm primary" onclick={() => ui.edit(blankConnection(), true)}>{t("sidebar.newConnection")}</button>
-          <button class="btn sm" onclick={() => ui.openSettings("import")}>{t("sidebar.empty.import")}</button>
+    {:else if connections.loaded && !tabTree.root.length && !tabTree.folders.length && !creatingFolder}
+      {#if kind === "db"}
+        <div class="empty">
+          <Icon name="database" size={20} />
+          <strong>{t("sidebar.emptyDb.title")}</strong>
+          <p>{t("sidebar.emptyDb.body")}</p>
+          <div class="empty-actions">
+            <button class="btn sm primary" onclick={() => newDatabase()}>{t("sidebar.newDatabase")}</button>
+          </div>
         </div>
-      </div>
+      {:else}
+        <div class="empty">
+          <Icon name="server" size={20} />
+          <strong>{t("sidebar.empty.title")}</strong>
+          <p>{t("sidebar.empty.body")}</p>
+          <div class="empty-actions">
+            <button class="btn sm primary" onclick={() => ui.edit(blankConnection(), true)}>{t("sidebar.newConnection")}</button>
+            <button class="btn sm" onclick={() => ui.openSettings("import")}>{t("sidebar.empty.import")}</button>
+          </div>
+        </div>
+      {/if}
     {:else}
       {#if creatingFolder?.parent === null}{@render folderInput(0)}{/if}
-      {#each connections.tree.folders as f (f.group.id)}{@render folder(f, 0)}{/each}
-      {#if connections.tree.root.length}
-        {#if connections.tree.folders.length}<div class="section">{t("sidebar.ungrouped")}</div>{/if}
-        {#each connections.tree.root as c (c.id)}{@render row(c, 0)}{/each}
+      {#each tabTree.folders as f (f.group.id)}{@render folder(f, 0)}{/each}
+      {#if tabTree.root.length}
+        {#if tabTree.folders.length}<div class="section">{t("sidebar.ungrouped")}</div>{/if}
+        {#each tabTree.root as c (c.id)}{@render row(c, 0)}{/each}
       {/if}
     {/if}
   </div>
   {/if}
 
+  {#if kind === "ssh"}
   <form class="quick" onsubmit={submitQuick}>
     <Icon name="bolt" size={13} />
     <input
@@ -439,6 +481,7 @@
     />
     {#if quickError}<span class="qerr">{t("sidebar.quickInvalid")}</span>{:else if quick}<span class="kbd">↵</span>{/if}
   </form>
+  {/if}
 </aside>
 
 {#if menu}<ContextMenu {...menu} onclose={() => (menu = null)} />{/if}
@@ -446,7 +489,8 @@
   <ContextMenu
     {...newMenu}
     items={[
-      { label: t("sidebar.newConnection"), icon: "server", action: () => ui.edit(blankConnection(), true) },
+      { label: t("sidebar.newConnection"), icon: "server", action: () => ((kind = "ssh"), ui.edit(blankConnection(), true)) },
+      { label: t("sidebar.newDatabase"), icon: "database", action: () => newDatabase() },
       { label: t("sidebar.newFolder"), icon: "folderPlus", action: () => startFolder(null) },
       { label: t("s3.new"), icon: "bucket", action: () => s3.edit(blankS3Account(), true) },
       "sep",
