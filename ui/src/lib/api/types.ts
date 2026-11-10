@@ -717,3 +717,40 @@ export interface DbPickedFile {
   name: string;
   size: number;
 }
+
+/** A table (or view) of an SQL backup read without a server. */
+export interface DbBackupTable {
+  schema: string | null;
+  name: string;
+  view: boolean;
+  columns: string[];
+  rows: number;
+  /** The statement that creates it, as the file has it. */
+  create: string | null;
+}
+
+export interface DbBackupIndex {
+  kind: "mysql" | "postgres";
+  tables: DbBackupTable[];
+  statements: number;
+  bytes: number;
+}
+
+export interface DbBackupOpened {
+  token: string;
+  name: string;
+  size: number;
+  compressed: boolean;
+  index: DbBackupIndex;
+}
+
+export interface DbBackupPage {
+  columns: string[];
+  rows: DbValue[][];
+  /** Each row's position in its table (file order). */
+  positions: number[];
+  /** Where the next page starts, if more rows follow. */
+  next: number | null;
+}
+
+export type DbBackupFormat = "csv" | "json" | "sql";

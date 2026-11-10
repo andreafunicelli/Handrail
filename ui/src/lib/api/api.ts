@@ -64,6 +64,10 @@ import type {
   DbPickedFile,
   DbTransferProgress,
   DbTransferSummary,
+  DbBackupFormat,
+  DbBackupIndex,
+  DbBackupOpened,
+  DbBackupPage,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -228,6 +232,16 @@ export interface Api {
   dbImportCsv(id: string, token: string, namespace: string, table: string, options: DbCsvOptions, transferId: string): Promise<DbTransferSummary>;
   /** Stop an export or import. */
   dbTransferCancel(transferId: string): Promise<void>;
+  /** Pick an SQL backup and index it, no server needed (null: cancelled). Progress: "db://transfer". */
+  dbBackupOpen(kind: "mysql" | "postgres" | null, transferId: string): Promise<DbBackupOpened | null>;
+  /** Read an open backup again as the other dialect. */
+  dbBackupReindex(token: string, kind: "mysql" | "postgres", transferId: string): Promise<DbBackupIndex>;
+  /** A page of a backup table's rows, from position `from` (only rows holding `filter`). */
+  dbBackupRows(token: string, table: number, from: number, limit: number, filter: string | null): Promise<DbBackupPage>;
+  /** Save a backup table to a file picked in a save dialog (null: cancelled). */
+  dbBackupExport(token: string, table: number, format: DbBackupFormat, filter: string | null, transferId: string): Promise<{ path: string; rows: number } | null>;
+  /** Forget an open backup. */
+  dbBackupClose(token: string): Promise<void>;
   /** Stop the statement running in a tab. */
   dbCancel(id: string): Promise<void>;
   /** Save grid edits to one table in one transaction; resolves to the rows changed. */

@@ -8,6 +8,7 @@
 //! every value arrives as text, so any column type can be shown without a decoder per type.
 
 pub mod accounts;
+pub mod backup;
 pub mod dump;
 mod mysql;
 mod postgres;

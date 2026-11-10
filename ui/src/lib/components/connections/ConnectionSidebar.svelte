@@ -445,6 +445,7 @@
           <p>{t("sidebar.emptyDb.body")}</p>
           <div class="empty-actions">
             <button class="btn sm primary" onclick={() => newDatabase()}>{t("sidebar.newDatabase")}</button>
+            <button class="btn sm" onclick={() => sessions.openBackup()}>{t("backup.open")}</button>
           </div>
         </div>
       {:else}
@@ -494,6 +495,7 @@
     items={[
       { label: t("sidebar.newConnection"), icon: "server", action: () => ((kind = "ssh"), ui.edit(blankConnection(), true)) },
       { label: t("sidebar.newDatabase"), icon: "database", action: () => newDatabase() },
+      { label: t("backup.open"), icon: "file", action: () => sessions.openBackup() },
       { label: t("sidebar.newFolder"), icon: "folderPlus", action: () => startFolder(null) },
       { label: t("s3.new"), icon: "bucket", action: () => s3.edit(blankS3Account(), true) },
       "sep",

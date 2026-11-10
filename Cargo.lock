@@ -2466,6 +2466,7 @@ dependencies = [
  "aht-vault",
  "async-trait",
  "base64 0.23.1",
+ "flate2",
  "hex",
  "regex",
  "reqwest",

@@ -3,6 +3,7 @@ mod cmd_misc;
 mod cmd_vault;
 mod copy;
 mod db;
+mod db_backup;
 mod rdp;
 mod s3;
 mod sftp;
@@ -200,6 +201,11 @@ pub fn run() {
             db::db_import_sql,
             db::db_import_csv,
             db::db_transfer_cancel,
+            db_backup::db_backup_open,
+            db_backup::db_backup_reindex,
+            db_backup::db_backup_rows,
+            db_backup::db_backup_export,
+            db_backup::db_backup_close,
             db::db_cancel,
             db::db_share,
             db::db_approval_decide,
