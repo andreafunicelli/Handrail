@@ -212,7 +212,7 @@ impl Client {
                 "SELECT c.relname::text, CASE WHEN c.relkind IN ('v', 'm') THEN 'YES' ELSE 'NO' END, \
                  CASE WHEN c.relkind IN ('r', 'p', 'm') THEN c.reltuples::bigint::text END, \
                  CASE WHEN c.relkind IN ('r', 'p', 'm') THEN pg_total_relation_size(c.oid)::text END, \
-                 obj_description(c.oid, 'pg_class') \
+                 obj_description(c.oid, 'pg_class'), c.relkind::text \
                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
                  WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'f') ORDER BY 1",
                 &[schema],
@@ -228,6 +228,7 @@ impl Client {
                 size: crate::count(r.get(3).and_then(|v| v.as_ref())),
                 engine: None,
                 comment: crate::non_empty(r.get(4).and_then(|v| v.as_ref())),
+                materialized: text_at(r, 5) == "m",
             })
             .collect())
     }

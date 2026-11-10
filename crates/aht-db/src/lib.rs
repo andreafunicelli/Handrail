@@ -220,6 +220,8 @@ impl Collector {
 pub struct TableInfo {
     pub name: String,
     pub view: bool,
+    /// A PostgreSQL materialized view (also `view`): it has its own DROP / RENAME.
+    pub materialized: bool,
     /// The server's estimate of the rows (statistics, not a count); `None` for views and
     /// tables never analysed.
     pub rows: Option<i64>,

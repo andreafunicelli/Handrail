@@ -8,8 +8,10 @@ describe("structure SQL", () => {
   });
 
   it("builds table and namespace statements", () => {
-    expect(dropTableSql("mysql", "shop", "orders", false)).toBe("DROP TABLE `shop`.`orders`;");
-    expect(dropTableSql("postgres", "public", "v", true)).toBe('DROP VIEW "public"."v";');
+    expect(dropTableSql("mysql", "shop", "orders", "table")).toBe("DROP TABLE `shop`.`orders`;");
+    expect(dropTableSql("postgres", "public", "v", "view")).toBe('DROP VIEW "public"."v";');
+    expect(dropTableSql("postgres", "public", "m", "materialized")).toBe('DROP MATERIALIZED VIEW "public"."m";');
+    expect(renameTableSql("postgres", "public", "m", "n", "materialized")).toBe('ALTER MATERIALIZED VIEW "public"."m" RENAME TO "n";');
     expect(truncateTableSql("postgres", "public", "t")).toBe('TRUNCATE TABLE "public"."t";');
     expect(renameTableSql("mysql", "shop", "a", "b")).toBe("RENAME TABLE `shop`.`a` TO `shop`.`b`;");
     expect(renameTableSql("postgres", "public", "a", "b; DROP TABLE x")).toBe('ALTER TABLE "public"."a" RENAME TO "b; DROP TABLE x";');

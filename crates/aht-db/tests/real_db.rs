@@ -388,6 +388,7 @@ async fn table_pages_info_and_ddl() {
         assert!(!t.view && t.size.is_some(), "{t:?}");
         let v = tables.iter().find(|t| t.name == "hr_page_v").unwrap();
         assert!(v.view && v.size.is_none() && v.rows.is_none(), "{v:?}");
+        assert!(!v.materialized && !t.materialized);
 
         let ddl = db.ddl(&ns, "hr_page").await.unwrap();
         assert!(ddl.starts_with("CREATE TABLE"), "{ddl}");

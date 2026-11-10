@@ -18,13 +18,19 @@ export const namespaceWord = (d: SqlDialect) => (d === "mysql" ? "DATABASE" : "S
 export const createNamespaceSql = (d: SqlDialect, name: string) => `CREATE ${namespaceWord(d)} ${quoteIdent(d, name)};`;
 export const dropNamespaceSql = (d: SqlDialect, name: string) => `DROP ${namespaceWord(d)} ${quoteIdent(d, name)};`;
 
-export const dropTableSql = (d: SqlDialect, ns: string, table: string, view: boolean) => `DROP ${view ? "VIEW" : "TABLE"} ${qualified(d, ns, table)};`;
+/** What kind of relation a statement is about. */
+export type RelKind = "table" | "view" | "materialized";
+const relWord = (k: RelKind) => (k === "materialized" ? "MATERIALIZED VIEW" : k === "view" ? "VIEW" : "TABLE");
+
+export const dropTableSql = (d: SqlDialect, ns: string, table: string, kind: RelKind) => `DROP ${relWord(kind)} ${qualified(d, ns, table)};`;
 export const truncateTableSql = (d: SqlDialect, ns: string, table: string) => `TRUNCATE TABLE ${qualified(d, ns, table)};`;
 
-export function renameTableSql(d: SqlDialect, ns: string, table: string, to: string, view = false): string {
+export function renameTableSql(d: SqlDialect, ns: string, table: string, to: string, kind: RelKind = "table"): string {
   if (d === "mysql") return `RENAME TABLE ${qualified(d, ns, table)} TO ${qualified(d, ns, to)};`;
-  return `ALTER ${view ? "VIEW" : "TABLE"} ${qualified(d, ns, table)} RENAME TO ${quoteIdent(d, to)};`;
+  return `ALTER ${relWord(kind)} ${qualified(d, ns, table)} RENAME TO ${quoteIdent(d, to)};`;
 }
+
+export const relKind = (t: { view: boolean; materialized?: boolean }): RelKind => (t.materialized ? "materialized" : t.view ? "view" : "table");
 
 /** A name a user typed for a new table or namespace: trimmed, non-empty, one line. */
 export function validName(name: string): boolean {

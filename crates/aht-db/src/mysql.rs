@@ -231,6 +231,7 @@ impl Client {
                     } else {
                         crate::non_empty(r.get(5).and_then(|v| v.as_ref()))
                     },
+                    materialized: false,
                 }
             })
             .collect())

@@ -561,6 +561,8 @@ export interface DbQueryOutput {
 export interface DbTableInfo {
   name: string;
   view: boolean;
+  /** A PostgreSQL materialized view (also `view`). */
+  materialized?: boolean;
   /** The server's estimate (statistics, not a count); null for views and unanalysed tables. */
   rows: number | null;
   /** Data and indexes, in bytes. */

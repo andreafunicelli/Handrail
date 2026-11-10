@@ -17,7 +17,7 @@
   import { buildEdits, editCount, noEdits, primaryResult, resultSummary, tableOverview, tableStats, toCsv, toInserts, toJson, type GridEdits } from "../../util/db";
   import { addHistory, clearHistory, loadHistory, loadTabs, nextTabName, saveTabs, type HistoryEntry, type QueryTabDoc } from "../../util/dbtabs";
   import { statementAt } from "../../util/sqltext";
-  import { createNamespaceSql, dropNamespaceSql, dropTableSql, renameTableSql, truncateTableSql, validName } from "../../util/ddl";
+  import { createNamespaceSql, dropNamespaceSql, dropTableSql, relKind, renameTableSql, truncateTableSql, validName } from "../../util/ddl";
   import { relativeTime } from "../../util/time";
 
   /** A database in a pane: schema on the left, SQL editor over the results on the right. */
@@ -121,6 +121,8 @@
     browse: typeof browse;
     filterText: string;
     editTarget: typeof editTarget;
+    tableView: typeof tableView;
+    structure: typeof structure;
   };
   /** What each other tab showed, by tab key. */
   const views: Record<string, View> = {};
@@ -130,7 +132,7 @@
     if (i === qcur || running || blocked()) return;
     // A table's columns still loading for this tab must not make the next tab's rows editable.
     runs++;
-    views[qtabs[qcur].key] = { output, active, ranLabel, browse, filterText, editTarget };
+    views[qtabs[qcur].key] = { output, active, ranLabel, browse, filterText, editTarget, tableView, structure };
     qcur = i;
     const v = views[qtabs[i].key];
     output = v?.output ?? null;
@@ -140,6 +142,8 @@
     filterText = v?.filterText ?? "";
     editTarget = v?.editTarget ?? null;
     edits = editTarget ? noEdits() : null;
+    tableView = v?.tableView ?? "data";
+    structure = v?.structure ?? null;
     ddl = null;
     selected = null;
     editor?.setText(qtabs[i].sql);
@@ -449,7 +453,7 @@
             (ddlDialog = {
               title: t("db.renameTitle", { name }),
               input: { label: t("db.newName"), value: tb.name },
-              sql: (v) => (validName(v) && v.trim() !== tb.name ? renameTableSql(d, ns, tb.name, v.trim(), tb.view) : null),
+              sql: (v) => (validName(v) && v.trim() !== tb.name ? renameTableSql(d, ns, tb.name, v.trim(), relKind(tb)) : null),
               confirmName: prod ? tb.name : null,
               after: () => (forget(ns, tb.name), void reloadTables(ns)),
             }),
@@ -483,7 +487,7 @@
             (ddlDialog = {
               title: t(tb.view ? "db.dropViewTitle" : "db.dropTableTitle", { name }),
               body: t("db.dropBody"),
-              sql: () => dropTableSql(d, ns, tb.name, tb.view),
+              sql: () => dropTableSql(d, ns, tb.name, relKind(tb)),
               confirmName: tb.name,
               danger: true,
               after: () => (forget(ns, tb.name), void reloadTables(ns)),
