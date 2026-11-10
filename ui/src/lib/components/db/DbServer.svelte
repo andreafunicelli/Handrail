@@ -34,11 +34,20 @@
     return typeof v === "string" && /^\d+$/.test(v) ? Number(v) : null;
   });
 
+  /** Counts the requests, so an answer for a tab no longer shown (or overtaken by a newer one)
+   *  is dropped: rows of Users read as Processes would offer to stop the wrong process. */
+  let requests = 0;
+
   async function load() {
+    const n = ++requests;
+    const asked = what;
     try {
-      result = await api.dbServerInfo(id, what);
+      const r = await api.dbServerInfo(id, asked);
+      if (n !== requests || asked !== what) return;
+      result = r;
       error = null;
     } catch (e) {
+      if (n !== requests || asked !== what) return;
       error = String((e as { message?: string })?.message ?? e);
       result = null;
     }
