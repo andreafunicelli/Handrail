@@ -190,6 +190,8 @@ export interface Api {
   dbTableRows(id: string, namespace: string, table: string, page?: DbRowsPage): Promise<DbQueryOutput>;
   /** The statement that creates a table or view. */
   dbTableDdl(id: string, namespace: string, table: string): Promise<string>;
+  /** Save exported rows to a file the user picks in a save dialog; null when cancelled. */
+  dbExportFile(fileName: string, contents: string): Promise<string | null>;
   /** Stop the statement running in a tab. */
   dbCancel(id: string): Promise<void>;
   /** Save grid edits to one table in one transaction; resolves to the rows changed. */

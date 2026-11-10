@@ -323,6 +323,48 @@ pub async fn db_cancel(state: State<'_, AppState>, id: String) -> Result<()> {
     session(&state, &id).await?.client.cancel().await
 }
 
+/// Save exported rows (CSV, JSON, SQL) to a file the user picks in a save dialog; `None` when
+/// they cancel. The path comes from the dialog, never from the page, so the page cannot write
+/// files where it likes.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_export_file(
+    app: AppHandle,
+    file_name: String,
+    contents: String,
+) -> Result<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    // Only a suggested name: no folders.
+    let name = std::path::Path::new(&file_name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("export.txt")
+        .to_string();
+    let ext = std::path::Path::new(&name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt")
+        .to_string();
+    let (tx, rx) = oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name(&name)
+        .add_filter(ext.to_uppercase(), &[ext.as_str()])
+        .save_file(move |picked| {
+            let _ = tx.send(picked);
+        });
+    let Some(picked) = rx
+        .await
+        .map_err(|_| Error::Other("the save dialog closed".into()))?
+    else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| Error::Other(e.to_string()))?;
+    tokio::fs::write(&path, contents).await?;
+    Ok(Some(path.display().to_string()))
+}
+
 // ---------- agents ----------
 
 /// Share a tab with agents, or stop sharing it.

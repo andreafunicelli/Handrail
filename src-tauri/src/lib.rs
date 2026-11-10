@@ -187,6 +187,7 @@ pub fn run() {
             db::db_query,
             db::db_table_rows,
             db::db_table_ddl,
+            db::db_export_file,
             db::db_cancel,
             db::db_share,
             db::db_approval_decide,

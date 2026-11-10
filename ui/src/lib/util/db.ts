@@ -118,3 +118,26 @@ export function tableOverview(list: DbTableInfo[]): DbResultSet {
     truncated: false,
   };
 }
+
+/** Rows as a JSON array of objects (binary values as `0x…` hex text). */
+export function toJson(result: DbResultSet): string {
+  const names = result.columns.map((c) => c.name);
+  const rows = result.rows.map((row) => Object.fromEntries(names.map((n, i) => [n, row[i] === null ? null : cellText(row[i])])));
+  return JSON.stringify(rows, null, 2);
+}
+
+/** Rows as INSERT statements into the table named by `path` (e.g. `["shop", "orders"]`). */
+export function toInserts(result: DbResultSet, path: string[], dialect: "mysql" | "postgres"): string {
+  const q = (n: string) => (dialect === "mysql" ? `\`${n.replace(/`/g, "``")}\`` : `"${n.replace(/"/g, '""')}"`);
+  const target = path.map(q).join(".");
+  const cols = result.columns.map((c) => q(c.name)).join(", ");
+  const literal = (v: DbValue): string => {
+    if (v === null) return "NULL";
+    if (typeof v !== "string") return dialect === "mysql" ? `X'${v.hex}'` : `'\\x${v.hex}'::bytea`;
+    let s = v.replace(/'/g, "''");
+    // MySQL reads backslashes in strings as escapes (unless NO_BACKSLASH_ESCAPES).
+    if (dialect === "mysql") s = s.replace(/\\/g, "\\\\");
+    return `'${s}'`;
+  };
+  return result.rows.map((row) => `INSERT INTO ${target} (${cols}) VALUES (${row.map(literal).join(", ")});`).join("\n") + (result.rows.length ? "\n" : "");
+}

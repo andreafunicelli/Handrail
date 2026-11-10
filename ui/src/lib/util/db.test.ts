@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DbResultSet } from "../api/types";
-import { buildEdits, cellText, tableOverview, tableStats, columnWidths, editCount, editedValue, noEdits, primaryResult, toCsv } from "./db";
+import { buildEdits, cellText, tableOverview, tableStats, toInserts, toJson, columnWidths, editCount, editedValue, noEdits, primaryResult, toCsv } from "./db";
 
 const set = (columns: string[], rows: DbResultSet["rows"], extra: Partial<DbResultSet> = {}): DbResultSet => ({
   columns: columns.map((name) => ({ name, type_name: "TEXT" })),
@@ -68,5 +68,22 @@ describe("db helpers", () => {
       ["orders", "table", "2500", "4.2 KB", "InnoDB", "checkouts"],
       ["totals", "view", null, null, null, null],
     ]);
+  });
+
+  it("exports rows as JSON and INSERT statements", () => {
+    const r = set(["id", "note"], [["1", "it's \\ ok"], ["2", null], ["3", { hex: "ff00" }]]);
+    expect(JSON.parse(toJson(r))).toEqual([
+      { id: "1", note: "it's \\ ok" },
+      { id: "2", note: null },
+      { id: "3", note: "0xff00" },
+    ]);
+    expect(toInserts(r, ["shop", "t"], "mysql").split("\n")).toEqual([
+      "INSERT INTO `shop`.`t` (`id`, `note`) VALUES ('1', 'it''s \\\\ ok');",
+      "INSERT INTO `shop`.`t` (`id`, `note`) VALUES ('2', NULL);",
+      "INSERT INTO `shop`.`t` (`id`, `note`) VALUES ('3', X'ff00');",
+      "",
+    ]);
+    expect(toInserts(r, ["t"], "postgres").split("\n")[0]).toBe(`INSERT INTO "t" ("id", "note") VALUES ('1', 'it''s \\ ok');`);
+    expect(toInserts(r, ["t"], "postgres").split("\n")[2]).toBe(`INSERT INTO "t" ("id", "note") VALUES ('3', '\\xff00'::bytea);`);
   });
 });
