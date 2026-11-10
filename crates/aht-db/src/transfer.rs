@@ -269,29 +269,60 @@ impl DbClient {
     /// the ones it reads.
     async fn view_order(&self, ns: &str) -> Result<Vec<String>> {
         Ok(match &self.inner {
-            Inner::Mysql(c) => dump::order_views(
-                c.side_rows(
-                    "SELECT TABLE_NAME, VIEW_DEFINITION FROM information_schema.VIEWS \
-                     WHERE TABLE_SCHEMA = ?",
-                    &[ns],
+            Inner::Mysql(c) => {
+                let defs: Vec<(String, String)> = c
+                    .side_rows(
+                        "SELECT TABLE_NAME, VIEW_DEFINITION FROM information_schema.VIEWS \
+                         WHERE TABLE_SCHEMA = ?",
+                        &[ns],
+                    )
+                    .await?
+                    .iter()
+                    .map(|r| (at(r, 0), at(r, 1)))
+                    .collect();
+                let names: Vec<String> = defs.iter().map(|(n, _)| n.clone()).collect();
+                dump::order_views(
+                    defs.iter()
+                        .map(|(n, d)| (n.clone(), dump::mysql_view_deps(d, n, &names)))
+                        .collect(),
                 )
-                .await?
-                .iter()
-                .map(|r| (at(r, 0), at(r, 1)))
-                .collect(),
-            ),
-            // Creation order: a view exists after what it reads.
-            Inner::Postgres(c) => c
-                .side_rows(
-                    "SELECT c.relname::text FROM pg_class c \
-                     JOIN pg_namespace n ON n.oid = c.relnamespace \
-                     WHERE n.nspname = $1 AND c.relkind IN ('v', 'm') ORDER BY c.oid",
-                    &[ns],
-                )
-                .await?
-                .iter()
-                .map(|r| at(r, 0))
-                .collect(),
+            }
+            // What each view reads, from its rewrite rule's dependencies (a view replaced to
+            // read a newer one keeps its older oid, so creation order is not enough).
+            Inner::Postgres(c) => {
+                let mut deps: std::collections::BTreeMap<String, Vec<String>> = c
+                    .side_rows(
+                        "SELECT c.relname::text FROM pg_class c \
+                         JOIN pg_namespace n ON n.oid = c.relnamespace \
+                         WHERE n.nspname = $1 AND c.relkind IN ('v', 'm')",
+                        &[ns],
+                    )
+                    .await?
+                    .iter()
+                    .map(|r| (at(r, 0), Vec::new()))
+                    .collect();
+                for r in c
+                    .side_rows(
+                        "SELECT DISTINCT v.relname::text, d.relname::text FROM pg_depend dep \
+                         JOIN pg_rewrite rw ON rw.oid = dep.objid \
+                         JOIN pg_class v ON v.oid = rw.ev_class \
+                         JOIN pg_class d ON d.oid = dep.refobjid \
+                         JOIN pg_namespace n ON n.oid = v.relnamespace \
+                         WHERE dep.classid = 'pg_rewrite'::regclass \
+                           AND dep.refclassid = 'pg_class'::regclass \
+                           AND n.nspname = $1 AND d.relnamespace = v.relnamespace \
+                           AND v.relkind IN ('v', 'm') AND d.relkind IN ('v', 'm') \
+                           AND d.oid <> v.oid",
+                        &[ns],
+                    )
+                    .await?
+                {
+                    if let Some(list) = deps.get_mut(&at(&r, 0)) {
+                        list.push(at(&r, 1));
+                    }
+                }
+                dump::order_views(deps.into_iter().collect())
+            }
         })
     }
 
@@ -319,7 +350,11 @@ impl DbClient {
             Inner::Postgres(c) => {
                 c.side_rows(
                     "SELECT s.relname::text, t.relname::text, a.attname::text, d.deptype::text, \
-                     ps.last_value::text FROM pg_class s \
+                     ps.last_value::text, format_type(ps.data_type, NULL), \
+                     ps.increment_by::text, ps.min_value::text, ps.max_value::text, \
+                     ps.start_value::text, ps.cache_size::text, \
+                     CASE WHEN ps.cycle THEN 'CYCLE' ELSE 'NO CYCLE' END \
+                     FROM pg_class s \
                      JOIN pg_namespace n ON n.oid = s.relnamespace \
                      LEFT JOIN pg_depend d ON d.objid = s.oid \
                        AND d.classid = 'pg_class'::regclass AND d.refclassid = 'pg_class'::regclass \
@@ -546,8 +581,9 @@ async fn dump_body(
                 first = false;
             }
             out.statement(&format!(
-                "CREATE SEQUENCE IF NOT EXISTS {};",
-                name(&at(r, 0))
+                "CREATE SEQUENCE IF NOT EXISTS {}{};",
+                name(&at(r, 0)),
+                sequence_options(r)
             ))?;
         }
     }
@@ -699,11 +735,38 @@ async fn dump_rows(
     Ok(true)
 }
 
-fn read_error(line: u64, e: std::io::Error) -> Error {
-    if e.kind() == std::io::ErrorKind::InvalidData {
-        Error::Invalid(format!("line {line}: the file is not UTF-8 text"))
+/// A sequence's settings as `CREATE SEQUENCE` options (type, increment, bounds, start, cache,
+/// cycle), so a restored one counts as the original did. Each value comes from the catalog and
+/// is checked before it reaches the file; none is written when one is missing.
+fn sequence_options(r: &[Option<String>]) -> String {
+    let num = |i: usize| at(r, i).parse::<i64>().ok();
+    let ty = at(r, 5);
+    let (Some(inc), Some(min), Some(max), Some(start), Some(cache)) =
+        (num(6), num(7), num(8), num(9), num(10))
+    else {
+        return String::new();
+    };
+    let ty = match ty.as_str() {
+        "smallint" | "integer" | "bigint" => format!(" AS {ty}"),
+        _ => String::new(),
+    };
+    let cycle = if at(r, 11) == "CYCLE" {
+        "CYCLE"
     } else {
-        e.into()
+        "NO CYCLE"
+    };
+    format!(
+        "{ty} INCREMENT BY {inc} MINVALUE {min} MAXVALUE {max} START WITH {start} CACHE {cache} {cycle}"
+    )
+}
+
+fn read_error(line: u64, e: std::io::Error) -> Error {
+    match e.kind() {
+        std::io::ErrorKind::InvalidData => {
+            Error::Invalid(format!("line {line}: the file is not UTF-8 text"))
+        }
+        std::io::ErrorKind::UnexpectedEof => Error::Invalid(format!("line {line}: {e}")),
+        _ => e.into(),
     }
 }
 
@@ -765,6 +828,27 @@ async fn import_sql_on(
             if cancel.load(Ordering::Relaxed) {
                 s.cancelled = true;
                 break 'file;
+            }
+            // The whole file is one transaction already: its own BEGIN and COMMIT would end
+            // it early (and keep what ran so far), so they are skipped; a ROLLBACK stops it.
+            if atomic {
+                match dump::transaction_control(&st.sql) {
+                    Some(false) => {
+                        s.progress.statements += 1;
+                        continue;
+                    }
+                    Some(true) => {
+                        s.error(
+                            st.line,
+                            &st.sql,
+                            "the file rolls back its transaction: the whole file runs as one, \
+                             so nothing is kept"
+                                .into(),
+                        );
+                        break 'file;
+                    }
+                    None => {}
+                }
             }
             let copy = dump::is_copy_from_stdin(&st.sql);
             let outcome = match (copy, &mut *conn) {
@@ -961,7 +1045,11 @@ async fn import_csv_on(
         let record = match reader.next_record() {
             Ok(Some(r)) => r,
             Ok(None) => break,
-            Err(e) => return Err(read_error(start, e)),
+            // Kept as the import's error, so the transaction is rolled back and reported.
+            Err(e) => {
+                s.error(start, "", read_error(start, e).to_string());
+                break;
+            }
         };
         if std::mem::take(&mut first) && opts.header {
             continue;

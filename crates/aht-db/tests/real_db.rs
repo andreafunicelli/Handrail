@@ -680,7 +680,8 @@ async fn dump_and_import_round_trip() {
         let schema = match kind {
             DbKind::Mysql => format!(
                 "CREATE TABLE {b} (id INT AUTO_INCREMENT PRIMARY KEY, name TEXT, raw BLOB, \
-                   twice INT GENERATED ALWAYS AS (id * 2) STORED, at TIMESTAMP NULL); \
+                   twice INT GENERATED ALWAYS AS (CHAR_LENGTH(name) * 2) STORED, \
+                   at TIMESTAMP NULL); \
                  CREATE TABLE {a} (id INT PRIMARY KEY, parent INT, \
                    CONSTRAINT a_fk FOREIGN KEY (parent) REFERENCES {b} (id)); \
                  CREATE VIEW {v1} AS SELECT id, name FROM {b}; \
@@ -706,10 +707,18 @@ async fn dump_and_import_round_trip() {
                    (E'it''s a \\\\ back\\nslash; -- not a comment', '\\x00ff27', '2026-01-02 03:04:05+00'), \
                    ('ünïcode', NULL, NULL), (NULL, '\\x', NULL); \
                  INSERT INTO {a} VALUES (1, 1), (2, 3); \
-                 INSERT INTO {c} (tag) VALUES ('x'), ('y')",
+                 INSERT INTO {c} (tag) VALUES ('x'), ('y'); \
+                 CREATE SEQUENCE {d} INCREMENT BY -1 MINVALUE -100 MAXVALUE -1 START WITH -1; \
+                 SELECT nextval('{d}'), nextval('{d}'); \
+                 CREATE VIEW {old} AS SELECT 1 AS x; \
+                 CREATE VIEW {new} AS SELECT id FROM {b}; \
+                 CREATE OR REPLACE VIEW {old} AS SELECT id AS x FROM {new}",
                 a = q("a_child"),
                 b = q("b_parent"),
                 c = q("c_ident"),
+                d = q("down_seq"),
+                old = q("m_old_view"),
+                new = q("n_new_view"),
                 v0 = q("a_view"),
                 v1 = q("z_view"),
             ),
@@ -804,6 +813,37 @@ async fn dump_and_import_round_trip() {
             )
             .await;
             assert_eq!(id, vec![vec!["3"]]);
+            // A descending sequence keeps its settings and position.
+            let down = rows_of(&db, &format!("SELECT nextval('{}')", q("down_seq"))).await;
+            assert_eq!(down, vec![vec!["-3"]]);
+            // A view replaced to read a newer one is created after it.
+            let x = rows_of(&db, &format!("SELECT COUNT(*) FROM {}", q("m_old_view"))).await;
+            assert_eq!(x, vec![vec!["4"]]);
+
+            // The file's own BEGIN and COMMIT do not end the import's transaction early.
+            let file = format!(
+                "BEGIN;\nCREATE TABLE {t} (id INT);\nCOMMIT;\nSELECT 1/0;\n",
+                t = q("hr_committed")
+            );
+            let sum = transfer::import_sql(
+                &db,
+                Some(ns),
+                &mut file.as_bytes(),
+                &ImportOptions {
+                    stop_on_error: true,
+                },
+                &mut report,
+                &stop,
+            )
+            .await
+            .unwrap();
+            assert!(sum.rolled_back && sum.errors[0].line == 4, "{sum:?}");
+            let gone = rows_of(
+                &db,
+                &format!("SELECT to_regclass('{}') IS NULL", q("hr_committed")),
+            )
+            .await;
+            assert_eq!(gone, vec![vec!["t"]]);
         }
 
         // A refused statement: the PostgreSQL run is rolled back as a whole.
@@ -876,6 +916,20 @@ async fn dump_and_import_round_trip() {
         .await
         .unwrap();
         assert!(sum.rolled_back && sum.errors[0].line == 3, "{sum:?}");
+        // A file cut inside a quoted field is refused, not imported half.
+        let cut = "id;name;note\n7;\"never closed\n";
+        let sum = transfer::import_csv(
+            &db,
+            ns,
+            "hr_csv",
+            &mut cut.as_bytes(),
+            &copts,
+            &mut report,
+            &stop,
+        )
+        .await
+        .unwrap();
+        assert!(sum.rolled_back && !sum.errors.is_empty(), "{sum:?}");
         assert_eq!(
             rows_of(&db, &format!("SELECT COUNT(*) FROM {t}")).await,
             vec![vec!["2"]]

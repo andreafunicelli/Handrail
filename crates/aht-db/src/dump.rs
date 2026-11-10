@@ -236,7 +236,7 @@ impl Splitter {
         if mysql && self.state == State::Normal && self.start.is_none() {
             let t = line.trim_start();
             if t.len() > 9
-                && t[..9].eq_ignore_ascii_case("delimiter")
+                && t.as_bytes()[..9].eq_ignore_ascii_case(b"delimiter")
                 && t.as_bytes()[9].is_ascii_whitespace()
             {
                 if let Some(d) = t[9..].split_whitespace().next() {
@@ -398,21 +398,57 @@ pub fn strip_definer(create: &str) -> String {
     create.to_string()
 }
 
-/// Views in an order that creates each after the views it reads: `defs` is (name, its
-/// definition, which names other views in backquotes). Cycles keep their name order.
-pub fn order_views(mut defs: Vec<(String, String)>) -> Vec<String> {
+/// Views in an order that creates each after the views it reads: `defs` is (name, the
+/// names it reads). A cycle (or a dependency outside the list) keeps name order.
+pub fn order_views(mut defs: Vec<(String, Vec<String>)>) -> Vec<String> {
     defs.sort();
     let mut out = Vec::new();
     while !defs.is_empty() {
-        let ready = defs.iter().position(|(n, d)| {
-            !defs
+        let ready = defs.iter().position(|(n, deps)| {
+            !deps
                 .iter()
-                .any(|(o, _)| o != n && d.contains(&format!("`{}`", o.replace('`', "``"))))
+                .any(|d| d != n && defs.iter().any(|(o, _)| o == d))
         });
         let (n, _) = defs.remove(ready.unwrap_or(0));
         out.push(n);
     }
     out
+}
+
+/// The views a MySQL view definition reads: the other names in `views` it mentions in
+/// backquotes (MySQL writes definitions fully quoted).
+pub fn mysql_view_deps(definition: &str, name: &str, views: &[String]) -> Vec<String> {
+    views
+        .iter()
+        .filter(|o| *o != name && definition.contains(&format!("`{}`", o.replace('`', "``"))))
+        .cloned()
+        .collect()
+}
+
+/// Whether a statement starts or ends a transaction (`BEGIN`, `START TRANSACTION`, `COMMIT`,
+/// `END`; `rollback`: `ROLLBACK`, `ABORT`). `ROLLBACK TO` a savepoint is neither.
+pub fn transaction_control(sql: &str) -> Option<bool> {
+    let mut words = sql
+        .split_whitespace()
+        .map(|w| w.trim_end_matches(';').to_ascii_uppercase());
+    let first = words.next()?;
+    match first.as_str() {
+        "BEGIN" | "COMMIT" | "END" => Some(false),
+        "START" if words.next().as_deref() == Some("TRANSACTION") => Some(false),
+        "ROLLBACK" | "ABORT" => {
+            let next = words.next();
+            if matches!(next.as_deref(), Some("TO")) {
+                None
+            } else if matches!(next.as_deref(), Some("WORK") | Some("TRANSACTION"))
+                && matches!(words.next().as_deref(), Some("TO"))
+            {
+                None
+            } else {
+                Some(true)
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Reads CSV records: fields split by `delimiter`, `"` quotes (doubled inside), line breaks
@@ -454,9 +490,11 @@ impl<R: BufRead> CsvReader<R> {
                 if !started {
                     return Ok(None);
                 }
-                // The file ended inside quotes: keep what was read.
-                fields.push(std::mem::take(&mut field));
-                return Ok(Some(fields));
+                // The file ended inside quotes: it is cut short, not a record.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "the file ends inside a quoted field",
+                ));
             }
             self.line += 1;
             let mut text = line.as_str();
@@ -627,12 +665,36 @@ mod tests {
             strip_definer("CREATE VIEW v AS select 1"),
             "CREATE VIEW v AS select 1"
         );
-        let order = order_views(vec![
-            ("a".into(), "select * from `s`.`b`".into()),
-            ("b".into(), "select * from `s`.`c`".into()),
-            ("c".into(), "select * from `s`.`t`".into()),
-        ]);
+        let views: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
+        let defs = [
+            ("a", "select * from `s`.`b`"),
+            ("b", "select * from `s`.`c`"),
+            ("c", "select * from `s`.`t`"),
+        ];
+        let order = order_views(
+            defs.iter()
+                .map(|(n, d)| (n.to_string(), mysql_view_deps(d, n, &views)))
+                .collect(),
+        );
         assert_eq!(order, vec!["c", "b", "a"]);
+        // PostgreSQL: dependencies from the catalog, whatever the creation order.
+        let order = order_views(vec![
+            ("old".into(), vec!["new".into(), "some_table".into()]),
+            ("new".into(), vec![]),
+        ]);
+        assert_eq!(order, vec!["new", "old"]);
+        assert_eq!(transaction_control("BEGIN"), Some(false));
+        assert_eq!(
+            transaction_control("start transaction isolation level serializable"),
+            Some(false)
+        );
+        assert_eq!(transaction_control("COMMIT"), Some(false));
+        assert_eq!(transaction_control("end"), Some(false));
+        assert_eq!(transaction_control("ROLLBACK"), Some(true));
+        assert_eq!(transaction_control("ROLLBACK TO SAVEPOINT a"), None);
+        assert_eq!(transaction_control("rollback work to a"), None);
+        assert_eq!(transaction_control("SELECT 1"), None);
+        assert_eq!(transaction_control("START REPLICA"), None);
     }
 
     #[test]
@@ -655,5 +717,16 @@ mod tests {
         assert_eq!(r.next_record().unwrap(), None);
         assert_eq!(r.line, 6);
         assert_eq!(r.bytes, data.len() as u64);
+        // Cut short inside quotes: an error, not a record.
+        let mut r = CsvReader::new("id;name\n1;\"trunc".as_bytes(), ';');
+        r.next_record().unwrap();
+        assert_eq!(
+            r.next_record().unwrap_err().kind(),
+            std::io::ErrorKind::UnexpectedEof
+        );
+        // A DELIMITER check must not cut a multi-byte character.
+        let mut sp = Splitter::new(DbKind::Mysql, true);
+        assert!(sp.push_line("-- 12345\u{e9} comment\n").is_empty());
+        assert_eq!(sp.push_line("SELECT 1;\n").len(), 1);
     }
 }
