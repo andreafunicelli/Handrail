@@ -11,7 +11,7 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { copyText } from "../../util/clipboard";
   import { createSqlEditor, type SqlEditorHandle } from "../../util/codemirror";
-  import { buildEdits, editCount, noEdits, primaryResult, resultSummary, toCsv, type GridEdits } from "../../util/db";
+  import { buildEdits, editCount, noEdits, primaryResult, resultSummary, tableOverview, tableStats, toCsv, type GridEdits } from "../../util/db";
 
   /** A database in a pane: schema on the left, SQL editor over the results on the right. */
   let { connectionId, focused }: { connectionId: string; focused: boolean } = $props();
@@ -48,6 +48,24 @@
   let active = $state(0);
   let maxRows = $state(1000);
   let ranLabel = $state("");
+
+  /** The table whose rows are shown, and which page of them. */
+  let browse = $state<{
+    ns: string;
+    table: string;
+    offset: number;
+    /** Offsets of the pages before this one (Previous goes back to the last). */
+    back: number[];
+    /** The row limit this page was loaded with. */
+    limit: number;
+    orderBy: string | null;
+    desc: boolean;
+    filter: string;
+  } | null>(null);
+  let filterText = $state("");
+  /** A table's CREATE statement, shown over the results. */
+  let ddl = $state<{ title: string; text: string } | null>(null);
+  const tableInfo = (ns: string, table: string) => (Array.isArray(tables[ns]) ? (tables[ns] as DbTableInfo[]).find((x) => x.name === table) : undefined);
 
   /** The table whose rows are shown, when they can be edited (it has a primary key). */
   let editTarget = $state<{ ns: string; table: string; pk: string[] } | null>(null);
@@ -158,18 +176,28 @@
     if (!sql || blocked()) return;
     editTarget = null;
     edits = null;
+    browse = null;
+    ddl = null;
     ranLabel = sql.length > 80 ? `${sql.slice(0, 80)}…` : sql;
     await execute(() => api.dbQuery(id!, sql, maxRows));
   }
 
-  async function openTable(ns: string, table: string, force = false) {
+  /** Show a table's rows from the first page; `keep` stays on the page, sort and filter shown. */
+  async function openTable(ns: string, table: string, force = false, keep = false) {
     if (!id || running || (!force && blocked())) return;
+    if (!keep || browse?.ns !== ns || browse.table !== table) {
+      browse = { ns, table, offset: 0, back: [], limit: maxRows, orderBy: null, desc: false, filter: "" };
+      filterText = "";
+    }
+    const b = browse!;
+    b.limit = maxRows;
     ranLabel = `${ns}.${table}`;
     editTarget = null;
     edits = null;
-    const seq = await execute(() => api.dbTableRows(id!, ns, table, maxRows));
+    ddl = null;
+    const seq = await execute(() => api.dbTableRows(id!, ns, table, { maxRows, offset: b.offset, orderBy: b.orderBy, desc: b.desc, filter: b.filter }));
     const r = output?.results[0];
-    const view = Array.isArray(tables[ns]) && (tables[ns] as DbTableInfo[]).find((x) => x.name === table)?.view;
+    const view = tableInfo(ns, table)?.view;
     if (!id || closed || !r || output?.error || output?.results.length !== 1 || view) return;
     try {
       const key = `${ns}.${table}`;
@@ -190,6 +218,66 @@
     } catch {
       // Columns could not be read: the rows stay read-only.
     }
+  }
+
+  /** Change the page, sort or filter of the table shown, and load it again. */
+  function reshow(change: (b: NonNullable<typeof browse>) => void) {
+    if (!browse || running || blocked()) return;
+    change(browse);
+    void openTable(browse.ns, browse.table, true, true);
+  }
+  /** Next starts after the rows shown (fewer than the limit when the size cap cut the page);
+   *  Previous goes back to where the page before started. */
+  const page = (dir: 1 | -1) =>
+    reshow((b) => {
+      if (dir > 0) {
+        b.back.push(b.offset);
+        b.offset += output?.results[0]?.rows.length ?? 0;
+      } else b.offset = b.back.pop() ?? 0;
+    });
+  /** Whether rows may follow the page shown. */
+  const hasMore = $derived.by(() => {
+    const r = output?.results[0];
+    return !!browse && !!r && r.rows.length > 0 && (r.truncated || r.rows.length >= browse.limit);
+  });
+  /** A header click sorts ascending, then descending, then back to the table's order. */
+  const sortBy = (col: string) =>
+    reshow((b) => {
+      if (b.orderBy !== col) [b.orderBy, b.desc] = [col, false];
+      else if (!b.desc) b.desc = true;
+      else [b.orderBy, b.desc] = [null, false];
+      b.offset = 0;
+      b.back = [];
+    });
+  const applyFilter = () =>
+    reshow((b) => {
+      b.filter = filterText.trim();
+      b.offset = 0;
+      b.back = [];
+    });
+
+  async function showDdl(ns: string, table: string) {
+    if (!id) return;
+    try {
+      ddl = { title: `${ns}.${table}`, text: await api.dbTableDdl(id, ns, table) };
+    } catch (e) {
+      toasts.error(e);
+    }
+  }
+
+  /** A namespace's tables with their size and estimated rows, in the grid. */
+  async function overview(ns: string) {
+    if (!id || running || blocked()) return;
+    await toggleNs(ns, true);
+    const list = tables[ns];
+    if (!Array.isArray(list)) return;
+    browse = null;
+    editTarget = null;
+    edits = null;
+    ddl = null;
+    ranLabel = ns;
+    output = { results: [tableOverview(list)], error: null, elapsed_ms: 0 };
+    active = 0;
   }
 
   function addRow() {
@@ -231,7 +319,7 @@
       if (closed) return;
       toasts.success(t("db.saved", { n }));
       edits = noEdits();
-      await openTable(target.ns, target.table, true);
+      await openTable(target.ns, target.table, true, true);
     } catch (e) {
       toasts.error(e);
     } finally {
@@ -335,9 +423,12 @@
       <ul class="tree">
         {#each namespaces as ns (ns)}
           <li>
-            <button class="node ns" onclick={() => toggleNs(ns)} aria-expanded={!!openNs[ns]}>
-              <Icon name={openNs[ns] ? "chevronDown" : "chevronRight"} size={11} /><Icon name="folder" size={12} />{ns}
-            </button>
+            <div class="nsrow">
+              <button class="node ns" onclick={() => toggleNs(ns)} aria-expanded={!!openNs[ns]}>
+                <Icon name={openNs[ns] ? "chevronDown" : "chevronRight"} size={11} /><Icon name="folder" size={12} />{ns}
+              </button>
+              <button class="icon-btn over" title={t("db.overview")} aria-label={t("db.overviewOf", { ns })} onclick={() => overview(ns)}><Icon name="info" size={12} /></button>
+            </div>
             {#if openNs[ns]}
               {@const list = tables[ns]}
               <ul>
@@ -353,7 +444,12 @@
                         <button class="twisty" aria-label={t("db.columns")} aria-expanded={!!openTables[key]} onclick={() => toggleTable(ns, tb.name)}
                           ><Icon name={openTables[key] ? "chevronDown" : "chevronRight"} size={11} /></button
                         >
-                        <button class="tbname" title={t("db.openTable")} onclick={() => openTable(ns, tb.name)} ondblclick={() => openTable(ns, tb.name)}>
+                        <button
+                          class="tbname"
+                          title={[t("db.openTable"), tableStats(tb), tb.comment].filter(Boolean).join("\n")}
+                          onclick={() => openTable(ns, tb.name)}
+                          ondblclick={() => openTable(ns, tb.name)}
+                        >
                           <Icon name={tb.view ? "eye" : "layout"} size={12} />{tb.name}
                         </button>
                       </div>
@@ -398,6 +494,42 @@
       </div>
       <div class="editor" bind:this={editorHost}></div>
       <div class="results">
+        {#if browse}
+          {@const info = tableInfo(browse.ns, browse.table)}
+          {@const shown = output?.results[0]?.rows.length ?? 0}
+          <form class="browse" onsubmit={(e) => (e.preventDefault(), applyFilter())}>
+            <span class="where mono">WHERE</span>
+            <input
+              class="input mono"
+              bind:value={filterText}
+              placeholder={t("db.filterHint")}
+              aria-label={t("db.filter")}
+              spellcheck="false"
+              autocapitalize="off"
+            />
+            {#if browse.filter}<button type="button" class="icon-btn" title={t("db.filterClear")} aria-label={t("db.filterClear")} onclick={() => ((filterText = ""), applyFilter())}><Icon name="x" size={12} /></button>{/if}
+            <button type="submit" class="btn sm" disabled={running}>{t("db.filterApply")}</button>
+            <span class="pager">
+              <button type="button" class="icon-btn" disabled={running || browse.offset === 0} title={t("db.pagePrev")} aria-label={t("db.pagePrev")} onclick={() => page(-1)}>‹</button>
+              <span class="mono">{shown ? `${(browse.offset + 1).toLocaleString()}–${(browse.offset + shown).toLocaleString()}` : "0"}</span>
+              <button type="button" class="icon-btn" disabled={running || !hasMore} title={t("db.pageNext")} aria-label={t("db.pageNext")} onclick={() => page(1)}>›</button>
+            </span>
+            {#if info && tableStats(info)}<span class="stats" title={info.comment ?? undefined}>{tableStats(info)}</span>{/if}
+            <button type="button" class="btn sm ghost" onclick={() => showDdl(browse!.ns, browse!.table)}><Icon name="file" size={12} />{t("db.ddl")}</button>
+          </form>
+        {/if}
+        {#if ddl}
+          <div class="ddl">
+            <div class="ddl-head">
+              <strong class="mono">{ddl.title}</strong>
+              <span class="spacer"></span>
+              <button class="btn sm ghost" onclick={() => ddl && void copyText(ddl.text).then((ok) => ok && toasts.success(t("db.ddlCopied")))}><Icon name="copy" size={12} />{t("edit.copy")}</button>
+              <button class="btn sm ghost" onclick={() => ddl && (editor?.append(ddl.text), (ddl = null))}><Icon name="edit" size={12} />{t("db.ddlToEditor")}</button>
+              <button class="icon-btn" aria-label={t("common.close")} onclick={() => (ddl = null)}><Icon name="x" size={13} /></button>
+            </div>
+            <pre class="mono">{ddl.text}</pre>
+          </div>
+        {/if}
         {#each asks as a (a.approval_id)}
           <div class="ask risk-{a.risk}" role="alertdialog" aria-label={t("db.askTitle", { who: a.actor_label })}>
             <div class="ask-head">
@@ -459,7 +591,18 @@
           {#if current && current.columns.length}
             <div class="gridbox">
               {#if edits && active === 0}
-                <DbGrid result={current} bind:edits bind:selected bind:this={grid} locked={saving} />
+                <DbGrid
+                  result={current}
+                  bind:edits
+                  bind:selected
+                  bind:this={grid}
+                  locked={saving}
+                  sort={browse && { column: browse.orderBy, desc: browse.desc }}
+                  onsort={browse ? sortBy : undefined}
+                  firstRow={browse?.offset ?? 0}
+                />
+              {:else if browse}
+                <DbGrid result={current} sort={{ column: browse.orderBy, desc: browse.desc }} onsort={sortBy} firstRow={browse.offset} />
               {:else}
                 <DbGrid result={current} />
               {/if}
@@ -687,6 +830,76 @@
     color: var(--text);
     border-color: var(--accent);
     background: var(--accent-soft);
+  }
+  .nsrow {
+    display: flex;
+    align-items: center;
+  }
+  .nsrow .node {
+    flex: 1;
+    min-width: 0;
+  }
+  .nsrow .over {
+    opacity: 0;
+    margin-right: 4px;
+  }
+  .nsrow:hover .over,
+  .nsrow .over:focus-visible {
+    opacity: 1;
+  }
+  .browse {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .browse .where {
+    color: var(--faint);
+    font-size: 11px;
+  }
+  .browse .input {
+    flex: 1;
+    min-width: 160px;
+    height: 26px;
+    font-size: 12px;
+  }
+  .pager {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .stats {
+    color: var(--faint);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .ddl {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: 60%;
+    margin: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+  }
+  .ddl-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .ddl pre {
+    margin: 0;
+    padding: 10px;
+    overflow: auto;
+    font-size: 12px;
+    white-space: pre;
   }
   .share.on {
     color: var(--accent);

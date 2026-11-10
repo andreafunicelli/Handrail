@@ -458,6 +458,8 @@ export interface SqlEditorHandle {
   /** Tables and their columns, for completion (`{ "shop.orders": ["id", "total"] }`). */
   setSchema(schema: Record<string, string[]>, defaultNamespace?: string): void;
   focus(): void;
+  /** Add text at the end (after a blank line) and select it. */
+  append(text: string): void;
   destroy(): void;
 }
 
@@ -497,6 +499,17 @@ export function createSqlEditor(
       view.dispatch({ effects: lang.reconfigure(sql({ dialect, upperCaseKeywords: true, schema, defaultSchema: defaultNamespace })) });
     },
     focus: () => view.focus(),
+    append(text) {
+      const doc = view.state.doc.toString();
+      const end = doc.length;
+      const sep = !end || doc.endsWith("\n\n") ? "" : doc.endsWith("\n") ? "\n" : "\n\n";
+      view.dispatch({
+        changes: { from: end, insert: sep + text },
+        selection: { anchor: end + sep.length, head: end + sep.length + text.length },
+        scrollIntoView: true,
+      });
+      view.focus();
+    },
     destroy: () => view.destroy(),
   };
 }

@@ -1,4 +1,5 @@
-import type { DbCellValue, DbQueryOutput, DbResultSet, DbRowEdit, DbValue } from "../api/types";
+import type { DbCellValue, DbQueryOutput, DbResultSet, DbRowEdit, DbTableInfo, DbValue } from "../api/types";
+import { formatBytes } from "./time";
 
 /** A cell as text: NULL as an empty string, bytes as `0x…`. */
 export function cellText(v: DbValue): string {
@@ -89,4 +90,31 @@ export function buildEdits(result: DbResultSet, primaryKey: string[], e: GridEdi
     out.push({ op: "insert", values: Object.entries(row).map(([c, v]) => [names[Number(c)], v] as [string, DbCellValue]) });
   }
   return out;
+}
+
+/** "~1,234 rows · 4.2 MB · InnoDB" for a table, from the server's statistics. */
+export function tableStats(t: DbTableInfo): string {
+  const parts: string[] = [];
+  if (t.rows !== null) parts.push(`~${t.rows.toLocaleString()} rows`);
+  if (t.size !== null) parts.push(formatBytes(t.size));
+  if (t.engine) parts.push(t.engine);
+  return parts.join(" · ");
+}
+
+/** A namespace's tables as a result set (the database overview). */
+export function tableOverview(list: DbTableInfo[]): DbResultSet {
+  const text = (name: string) => ({ name, type_name: "TEXT" });
+  return {
+    columns: [text("name"), text("type"), { name: "rows (estimate)", type_name: "BIGINT" }, text("size"), text("engine"), text("comment")],
+    rows: list.map((t) => [
+      t.name,
+      t.view ? "view" : "table",
+      t.rows === null ? null : String(t.rows),
+      t.size === null ? null : formatBytes(t.size),
+      t.engine,
+      t.comment,
+    ]),
+    rows_affected: 0,
+    truncated: false,
+  };
 }

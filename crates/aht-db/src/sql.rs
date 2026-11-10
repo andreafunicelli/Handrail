@@ -32,12 +32,36 @@ pub fn qualified(kind: DbKind, namespace: &str, table: &str) -> String {
     )
 }
 
-/// The statement that shows a table's rows.
-pub fn select_rows(kind: DbKind, namespace: &str, table: &str, limit: usize) -> String {
-    format!(
-        "SELECT * FROM {} LIMIT {limit}",
-        qualified(kind, namespace, table)
-    )
+/// Which of a table's rows to show.
+#[derive(Clone, Debug, Default)]
+pub struct RowsQuery<'a> {
+    pub limit: usize,
+    pub offset: usize,
+    /// A column to sort by, descending when `true`.
+    pub order: Option<(&'a str, bool)>,
+    /// A `WHERE` condition the user typed (SQL, as in the editor).
+    pub filter: Option<&'a str>,
+}
+
+/// The statement that shows a table's rows. The filter goes on lines of its own, so a `--`
+/// comment in it cannot swallow what follows.
+pub fn select_rows(kind: DbKind, namespace: &str, table: &str, q: &RowsQuery) -> String {
+    let mut sql = format!("SELECT * FROM {}", qualified(kind, namespace, table));
+    if let Some(f) = q.filter.map(str::trim).filter(|f| !f.is_empty()) {
+        sql.push_str(&format!("\nWHERE (\n{f}\n)"));
+    }
+    if let Some((col, desc)) = q.order {
+        sql.push_str(&format!(
+            "\nORDER BY {} {}",
+            quote_ident(kind, col),
+            if desc { "DESC" } else { "ASC" }
+        ));
+    }
+    sql.push_str(&format!("\nLIMIT {}", q.limit));
+    if q.offset > 0 {
+        sql.push_str(&format!(" OFFSET {}", q.offset));
+    }
+    sql
 }
 
 /// A cell value sent by the grid: `None` is SQL NULL, text is converted by the server to the
@@ -218,9 +242,24 @@ mod tests {
         assert_eq!(quote_ident(DbKind::Mysql, "a`b"), "`a``b`");
         assert_eq!(quote_ident(DbKind::Postgres, "a\"b"), "\"a\"\"b\"");
         assert_eq!(quote_ident(DbKind::Postgres, "a`b"), "\"a`b\"");
+        let page = RowsQuery {
+            limit: 200,
+            ..Default::default()
+        };
         assert_eq!(
-            select_rows(DbKind::Mysql, "shop", "order items", 200),
-            "SELECT * FROM `shop`.`order items` LIMIT 200"
+            select_rows(DbKind::Mysql, "shop", "order items", &page),
+            "SELECT * FROM `shop`.`order items`\nLIMIT 200"
+        );
+        let q = RowsQuery {
+            limit: 50,
+            offset: 100,
+            order: Some(("na\"me", true)),
+            filter: Some(" qty > 3 -- big "),
+        };
+        assert_eq!(
+            select_rows(DbKind::Postgres, "public", "t", &q),
+            "SELECT * FROM \"public\".\"t\"\nWHERE (\nqty > 3 -- big\n)\n\
+             ORDER BY \"na\"\"me\" DESC\nLIMIT 50 OFFSET 100"
         );
         assert_eq!(
             qualified(DbKind::Postgres, "public", "Users"),

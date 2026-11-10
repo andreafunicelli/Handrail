@@ -262,7 +262,9 @@ pub async fn db_query(
     s.client.query(&sql, limits(max_rows)).await
 }
 
-/// The rows of one table (opening it from the schema tree).
+/// A page of one table's rows (opening it from the schema tree), sorted by a column and
+/// filtered by a `WHERE` condition when the user set them.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(rename_all = "snake_case")]
 pub async fn db_table_rows(
     state: State<'_, AppState>,
@@ -270,11 +272,36 @@ pub async fn db_table_rows(
     namespace: String,
     table: String,
     max_rows: Option<usize>,
+    offset: Option<usize>,
+    order_by: Option<String>,
+    desc: Option<bool>,
+    filter: Option<String>,
 ) -> Result<QueryOutput> {
     let s = session(&state, &id).await?;
     let l = limits(max_rows);
-    let sql = aht_db::sql::select_rows(s.kind, &namespace, &table, l.max_rows);
+    let q = aht_db::sql::RowsQuery {
+        limit: l.max_rows,
+        offset: offset.unwrap_or(0),
+        order: order_by.as_deref().map(|c| (c, desc.unwrap_or(false))),
+        filter: filter.as_deref(),
+    };
+    let sql = aht_db::sql::select_rows(s.kind, &namespace, &table, &q);
     s.client.query(&sql, l).await
+}
+
+/// The statement that creates a table or view.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_table_ddl(
+    state: State<'_, AppState>,
+    id: String,
+    namespace: String,
+    table: String,
+) -> Result<String> {
+    session(&state, &id)
+        .await?
+        .client
+        .ddl(&namespace, &table)
+        .await
 }
 
 /// Save edits made in the grid to one table, in one transaction; returns the rows changed.

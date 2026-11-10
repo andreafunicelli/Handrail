@@ -200,18 +200,50 @@ impl Client {
     pub(crate) async fn tables(&self, db: &str) -> Result<Vec<TableInfo>> {
         let rows = self
             .side_rows(
-                "SELECT TABLE_NAME, IF(TABLE_TYPE = 'BASE TABLE', 'NO', 'YES') \
+                "SELECT TABLE_NAME, IF(TABLE_TYPE = 'BASE TABLE', 'NO', 'YES'), \
+                 CAST(TABLE_ROWS AS CHAR), CAST(DATA_LENGTH + INDEX_LENGTH AS CHAR), ENGINE, \
+                 TABLE_COMMENT \
                  FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
                 &[db],
             )
             .await?;
         Ok(rows
             .iter()
-            .map(|r| TableInfo {
-                name: text_at(r, 0),
-                view: text_at(r, 1) == "YES",
+            .map(|r| {
+                let view = text_at(r, 1) == "YES";
+                TableInfo {
+                    name: text_at(r, 0),
+                    view,
+                    rows: if view {
+                        None
+                    } else {
+                        crate::count(r.get(2).and_then(|v| v.as_ref()))
+                    },
+                    size: if view {
+                        None
+                    } else {
+                        crate::count(r.get(3).and_then(|v| v.as_ref()))
+                    },
+                    engine: crate::non_empty(r.get(4).and_then(|v| v.as_ref())),
+                    // A view's comment is the word VIEW.
+                    comment: if view {
+                        None
+                    } else {
+                        crate::non_empty(r.get(5).and_then(|v| v.as_ref()))
+                    },
+                }
             })
             .collect())
+    }
+
+    pub(crate) async fn ddl(&self, db: &str, table: &str) -> Result<String> {
+        let sql = format!(
+            "SHOW CREATE TABLE {}",
+            crate::sql::qualified(crate::DbKind::Mysql, db, table)
+        );
+        let rows = self.side_rows(&sql, &[]).await?;
+        // Columns: Table, Create Table (or View, Create View, ...).
+        Ok(rows.first().map(|r| text_at(r, 1)).unwrap_or_default())
     }
 
     pub(crate) async fn columns(&self, db: &str, table: &str) -> Result<Vec<ColumnInfo>> {

@@ -1123,11 +1123,22 @@ export function createMockApi(): Api {
       return d.kind === "mysql" ? ["information_schema", "shop"] : ["public", "reporting"];
     },
     async dbTables(id, namespace) {
-      mockDb(id);
+      const d = mockDb(id);
       await sleep(80);
       return Object.keys(MOCK_TABLES)
         .filter((t) => MOCK_TABLES[t].ns === namespace || (namespace !== "information_schema" && MOCK_TABLES[t].ns === "*"))
-        .map((name) => ({ name, view: !!MOCK_TABLES[name].view }));
+        .map((name) => {
+          const view = !!MOCK_TABLES[name].view;
+          const rows = MOCK_SIZES[name] ?? 10;
+          return {
+            name,
+            view,
+            rows: view ? null : rows,
+            size: view ? null : 16384 + rows * 96,
+            engine: d.kind === "mysql" ? (view ? null : "InnoDB") : null,
+            comment: name === "orders" ? "One row per checkout" : null,
+          };
+        });
     },
     async dbColumns(id, _namespace, table) {
       mockDb(id);
@@ -1138,10 +1149,44 @@ export function createMockApi(): Api {
     async dbQuery(id, sql, maxRows = 1000) {
       return mockRun(mockDb(id), sql, maxRows);
     },
-    async dbTableRows(id, namespace, table, maxRows = 1000) {
+    async dbTableRows(id, _namespace, table, page = {}) {
+      mockDb(id);
+      const t = MOCK_TABLES[table];
+      if (!t) throw fail("not_found", `table ${table}`);
+      await sleep(60);
+      const maxRows = page.maxRows ?? 1000;
+      let rows = Array.from({ length: MOCK_SIZES[table] ?? 10 }, (_, i) => t.rows(i + 1));
+      // The mock understands one kind of filter: rows holding the first quoted text.
+      const needle = page.filter?.match(/'([^']*)'/)?.[1];
+      if (page.filter?.trim()) rows = rows.filter((r) => (needle === undefined ? true : r.some((v) => v?.includes(needle.replace(/%/g, "")))));
+      if (page.orderBy) {
+        const c = t.columns.findIndex((x) => x.name === page.orderBy);
+        if (c < 0) throw fail("other", `Unknown column '${page.orderBy}' in 'order clause' (42S22)`);
+        const num = (v: string | null) => (v !== null && /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v);
+        rows.sort((a, b) => {
+          const x = num(a[c]);
+          const y = num(b[c]);
+          const cmp = x === y ? 0 : x === null ? -1 : y === null ? 1 : x < y ? -1 : 1;
+          return page.desc ? -cmp : cmp;
+        });
+      }
+      const slice = rows.slice(page.offset ?? 0, (page.offset ?? 0) + maxRows);
+      return {
+        results: [{ columns: t.columns.map((c) => ({ name: c.name, type_name: c.data_type.toUpperCase() })), rows: slice, rows_affected: 0, truncated: false }],
+        error: null,
+        elapsed_ms: 12,
+      };
+    },
+    async dbTableDdl(id, namespace, table) {
       const d = mockDb(id);
-      const q = d.kind === "mysql" ? "`" : '"';
-      return mockRun(d, `SELECT * FROM ${q}${namespace}${q}.${q}${table}${q} LIMIT ${maxRows}`, maxRows);
+      const t = MOCK_TABLES[table];
+      if (!t) throw fail("not_found", `table ${table}`);
+      const q = (n: string) => (d.kind === "mysql" ? `\`${n}\`` : `"${n}"`);
+      if (t.view) return `CREATE VIEW ${q(namespace)}.${q(table)} AS\nSELECT customer_id, sum(total) AS total\n  FROM orders\n GROUP BY customer_id`;
+      const cols = t.columns.map((c) => `  ${q(c.name)} ${c.data_type}${c.nullable ? "" : " NOT NULL"}${c.default ? ` DEFAULT ${c.default}` : ""}`);
+      const pk = t.columns.filter((c) => c.primary_key).map((c) => q(c.name));
+      if (pk.length) cols.push(`  PRIMARY KEY (${pk.join(", ")})`);
+      return `CREATE TABLE ${q(table)} (\n${cols.join(",\n")}\n)${d.kind === "mysql" ? " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" : ""};`;
     },
     async dbCancel(id) {
       mockDb(id).running?.();

@@ -51,6 +51,7 @@ import type {
   DbOpened,
   DbQueryOutput,
   DbTableInfo,
+  DbRowsPage,
   DbColumnInfo,
   DbRowEdit,
   DbApprovalRequest,
@@ -186,7 +187,9 @@ export interface Api {
   /** Run one or more statements on the tab's connection (its session state carries over). */
   dbQuery(id: string, sql: string, maxRows?: number): Promise<DbQueryOutput>;
   /** The rows of one table. */
-  dbTableRows(id: string, namespace: string, table: string, maxRows?: number): Promise<DbQueryOutput>;
+  dbTableRows(id: string, namespace: string, table: string, page?: DbRowsPage): Promise<DbQueryOutput>;
+  /** The statement that creates a table or view. */
+  dbTableDdl(id: string, namespace: string, table: string): Promise<string>;
   /** Stop the statement running in a tab. */
   dbCancel(id: string): Promise<void>;
   /** Save grid edits to one table in one transaction; resolves to the rows changed. */
