@@ -290,15 +290,27 @@ pub async fn db_backup_export(
     let path = picked
         .into_path()
         .map_err(|e| Error::Other(e.to_string()))?;
-    if path == b.path {
+    let same = |a: &PathBuf, b: &PathBuf| match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    };
+    if same(&path, &b.path) {
         return Err(Error::Invalid(
             "pick another file: this one is the backup being read".into(),
         ));
     }
+    // Written next to it, then renamed over it: a destination that is a link to the backup
+    // replaces the link, never truncates the backup being read.
+    let part = path.with_file_name(format!(
+        ".{}.part",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("export")
+    ));
     let running = Running::new(&state.db, "backup", &transfer_id);
     let stop = running.stop.clone();
     let mut report = transfer_reporter(&app, &transfer_id);
-    let out_path = path.clone();
+    let out_path = part.clone();
     let done = blocking(move || {
         let mut out = std::io::BufWriter::with_capacity(1 << 20, File::create(&out_path)?);
         let mut src = FileSource {
@@ -323,13 +335,16 @@ pub async fn db_backup_export(
     })
     .await;
     drop(running);
-    match done {
+    match done.and_then(|rows| {
+        std::fs::rename(&part, &path)?;
+        Ok(rows)
+    }) {
         Ok(rows) => Ok(Some(BackupSaved {
             path: path.display().to_string(),
             rows,
         })),
         Err(e) => {
-            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(&part);
             Err(e)
         }
     }

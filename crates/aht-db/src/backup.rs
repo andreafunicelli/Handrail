@@ -338,13 +338,13 @@ impl<'a> Cur<'a> {
 
     /// Hex digits as bytes (`X'..'`, `0x..`, `\x..` of bytea).
     fn hex(digits: &[u8]) -> Option<Vec<u8>> {
-        let pairs = digits.chunks_exact(2);
-        if !pairs.remainder().is_empty() {
-            return None;
+        let mut out = Vec::with_capacity(digits.len() / 2);
+        let mut i = 0;
+        while i + 1 < digits.len() {
+            out.push(u8::from_str_radix(std::str::from_utf8(&digits[i..i + 2]).ok()?, 16).ok()?);
+            i += 2;
         }
-        pairs
-            .map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
-            .collect()
+        (i == digits.len()).then_some(out)
     }
 
     /// Skip a PostgreSQL `::type` after a value; returns the type's name (lower case).
@@ -660,6 +660,28 @@ impl Builder {
         (schema.or_else(|| self.current_db.clone()), name)
     }
 
+    /// A sequence's key: `schema.name` (two schemas may each have `orders_id_seq`); an
+    /// unqualified name matches the one sequence of that name seen so far, if only one.
+    fn seq_key(&self, n: &(Option<String>, String)) -> String {
+        let n = self.qualify(n.clone());
+        match &n.0 {
+            Some(s) => format!("{s}.{}", n.1),
+            None => {
+                let suffix = format!(".{}", n.1);
+                let same: Vec<&String> = self
+                    .seq_stmts
+                    .keys()
+                    .filter(|k| k.ends_with(&suffix) || **k == n.1)
+                    .collect();
+                if same.len() == 1 {
+                    same[0].clone()
+                } else {
+                    n.1
+                }
+            }
+        }
+    }
+
     fn table(&mut self, n: (Option<String>, String)) -> usize {
         let n = self.qualify(n);
         let k = key(&n.0, &n.1);
@@ -803,7 +825,7 @@ impl Builder {
                     c.kw("IF");
                     c.kw("EXISTS");
                     if let Some(n) = c.name() {
-                        let seq = seq_key(&n);
+                        let seq = self.seq_key(&n);
                         let upper = raw.to_ascii_uppercase();
                         if let Some(p) = find_ci(&text, b"OWNED BY ") {
                             let mut oc = Cur::new(&text[p + 9..], self.kind);
@@ -832,11 +854,8 @@ impl Builder {
                         let parts = dotted(&mut nc);
                         if let Some(name) = parts.last() {
                             let schema = (parts.len() >= 2).then(|| parts[parts.len() - 2].clone());
-                            self.seq_stmts
-                                .entry(seq_key(&(schema, name.clone())))
-                                .or_default()
-                                .1
-                                .push(raw.clone());
+                            let k = self.seq_key(&(schema, name.clone()));
+                            self.seq_stmts.entry(k).or_default().1.push(raw.clone());
                         }
                     }
                 }
@@ -918,7 +937,8 @@ impl Builder {
             c.kw("NOT");
             c.kw("EXISTS");
             let n = c.name()?;
-            self.seq_stmts.entry(seq_key(&n)).or_default().0.push(raw);
+            let k = self.seq_key(&n);
+            self.seq_stmts.entry(k).or_default().0.push(raw);
             return None;
         }
         // CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] [name] ON [ONLY] table
@@ -994,10 +1014,6 @@ fn dotted(c: &mut Cur) -> Vec<String> {
         c.i += 1;
     }
     parts
-}
-
-fn seq_key(n: &(Option<String>, String)) -> String {
-    n.1.clone()
 }
 
 fn cancelled() -> Error {
@@ -1291,6 +1307,41 @@ pub fn rows(
     Ok(page)
 }
 
+/// A table's CSV header: its columns, then any other a data statement of it names.
+fn csv_header(t: &BackupTable) -> Vec<String> {
+    let mut h = t.columns.clone();
+    for ch in &t.chunks {
+        for n in ch.columns.iter().flatten() {
+            if !h.contains(n) {
+                h.push(n.clone());
+            }
+        }
+    }
+    h
+}
+
+/// A row's values in `header`'s order: by name when the row's columns are named in the
+/// header (a column the statement left out is NULL), else by position.
+fn align(header: &[String], names: &[String], v: Vec<Value>) -> Vec<Value> {
+    if names == header {
+        return v;
+    }
+    if names.iter().all(|n| header.contains(n)) {
+        return header
+            .iter()
+            .map(|h| {
+                names
+                    .iter()
+                    .position(|n| n == h)
+                    .map_or(Value::Null, |i| v[i].clone())
+            })
+            .collect();
+    }
+    let mut v = v;
+    v.resize(header.len(), Value::Null);
+    v
+}
+
 /// How a table is saved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1379,6 +1430,8 @@ pub fn export(
     match format {
         Format::Csv | Format::Json => {
             let mut header: Option<Vec<String>> = None;
+            // One header for every row: statements may name columns in another order.
+            let fixed = csv_header(&t);
             if format == Format::Json {
                 out.write_all(b"[")?;
             }
@@ -1390,17 +1443,22 @@ pub fn export(
                     Format::Csv => {
                         let mut s = String::new();
                         if header.is_none() {
-                            header = Some(names.to_vec());
+                            let h = if fixed.is_empty() {
+                                names.to_vec()
+                            } else {
+                                fixed.clone()
+                            };
                             s.push_str(
-                                &names
-                                    .iter()
+                                &h.iter()
                                     .map(|n| csv_field(&Value::Text(n.clone())))
                                     .collect::<Vec<_>>()
                                     .join(","),
                             );
                             s.push_str("\r\n");
+                            header = Some(h);
                         }
-                        s.push_str(&v.iter().map(csv_field).collect::<Vec<_>>().join(","));
+                        let row = align(header.as_deref().unwrap_or_default(), names, v);
+                        s.push_str(&row.iter().map(csv_field).collect::<Vec<_>>().join(","));
                         s.push_str("\r\n");
                         s
                     }
@@ -1495,6 +1553,9 @@ pub fn export(
                                 // COPY: its rows, then the end mark.
                                 let mut rows = 0;
                                 while rows < ch.rows {
+                                    if cancel.load(Ordering::Relaxed) {
+                                        return Err(cancelled());
+                                    }
                                     line.clear();
                                     if input.read_until(b'\n', &mut line)? == 0 {
                                         break;
@@ -1569,6 +1630,9 @@ pub fn export(
                 put_statement(out, s)?;
             }
         }
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(cancelled());
     }
     out.flush()?;
     report(written);
@@ -1884,6 +1948,45 @@ INSERT INTO \"s\".\"t\" (\"id\") VALUES\n('1'),\n('2');\n";
         let p = rows(&mut src, &ix, 0, 0, 10, None, &stop).unwrap();
         assert_eq!(p.columns, vec!["id"]);
         assert_eq!(texts(&p), vec![vec!["1"], vec!["2"]]);
+        // Columns named in another order land under the right header; a column left out is
+        // empty.
+        let mixed = b"CREATE TABLE t (a int, b int, c int);\nINSERT INTO t (a, b) VALUES (1, 2);\nINSERT INTO t (b, a) VALUES (3, 4);\nINSERT INTO t VALUES (5, 6, 7);\n";
+        let (mut src, ix) = build(mixed, Some(DbKind::Postgres));
+        let stop = AtomicBool::new(false);
+        let mut out = Vec::new();
+        export(
+            &mut src,
+            &ix,
+            0,
+            Format::Csv,
+            None,
+            &mut out,
+            &mut |_| {},
+            &stop,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "a,b,c\r\n1,2,\r\n4,3,\r\n5,6,7\r\n"
+        );
+        // Same-named sequences in two schemas stay apart.
+        let two = b"CREATE TABLE a.t (id int);\nCREATE TABLE b.t (id int);\n\
+CREATE SEQUENCE a.t_id_seq;\nCREATE SEQUENCE b.t_id_seq;\n\
+ALTER SEQUENCE a.t_id_seq OWNED BY a.t.id;\nALTER SEQUENCE b.t_id_seq OWNED BY b.t.id;\n\
+SELECT pg_catalog.setval('a.t_id_seq', 7, true);\nSELECT pg_catalog.setval('b.t_id_seq', 9, true);\n";
+        let (_, ix) = build(two, Some(DbKind::Postgres));
+        let after = |i: usize| ix.tables[i].after.join(" ");
+        assert!(
+            after(0).contains("'a.t_id_seq', 7") && !after(0).contains("b.t_id_seq"),
+            "{}",
+            after(0)
+        );
+        assert!(
+            after(1).contains("'b.t_id_seq', 9") && !after(1).contains("a.t_id_seq"),
+            "{}",
+            after(1)
+        );
+        assert_eq!(ix.tables[0].before, vec!["CREATE SEQUENCE a.t_id_seq"]);
         // Cancelled: an error, not a half index.
         let stop = AtomicBool::new(true);
         assert!(index(&mut &ours[..], None, &mut |_| {}, &stop).is_err());
