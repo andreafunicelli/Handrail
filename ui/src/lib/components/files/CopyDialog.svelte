@@ -6,10 +6,10 @@
   import type { FileEntry } from "../../api/types";
   import { s3 } from "../../stores/s3.svelte";
   import { sessions } from "../../stores/sessions.svelte";
-  import { errorMessage, toasts } from "../../stores/toasts.svelte";
+  import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
-  import { ui } from "../../stores/ui.svelte";
-  import { alreadyExists, canCopy, s3Backend, sftpBackend, type FileBackend } from "../../util/fileBackends";
+  import { canCopy, s3Backend, sftpBackend, type FileBackend } from "../../util/fileBackends";
+  import { copyItems } from "./copyFlow";
 
   /**
    * Copy `entries` from `fs` into a folder of another file system: an open SSH session's server
@@ -76,31 +76,11 @@
     ev.preventDefault();
     // Read everything first: closing the dialog drops its props.
     const d = dest;
-    const [src, where, items] = [fs, dir.trim(), entries.map((e) => ({ path: e.path, name: e.name, kind: e.kind }))];
+    const [src, where, items] = [fs, dir.trim(), entries.map((e) => ({ ...e }))];
     if (!d || !dirOk) return;
     onclose();
-    let copied = 0;
-    let last = "";
-    for (const item of items) {
-      const run = (overwrite: boolean) => transfers.copy(src, item.path, d.fs, where, overwrite);
-      try {
-        try {
-          last = await run(false);
-        } catch (e) {
-          if (!alreadyExists(e)) throw e;
-          const ok = await ui.ask(t("files.copyExists", { name: item.name }), {
-            body: t(item.kind === "dir" ? "files.copyMerge" : "files.copyReplace"),
-            confirmLabel: t("files.copyOverwrite"),
-            danger: true,
-          });
-          if (!ok) continue;
-          last = await run(true);
-        }
-        copied++;
-      } catch (e) {
-        toasts.error(items.length > 1 ? `${item.name}: ${errorMessage(e)}` : e);
-      }
-    }
+    // A taken name opens the comparison (see `copyItems`).
+    const { copied, last } = await copyItems(src, items, d.fs, where);
     if (copied === 1 && items.length === 1) toasts.success(t("files.copied", { path: last, where: d.label }));
     else if (copied) toasts.success(t("files.copiedMany", { n: copied, where: d.label }));
   }

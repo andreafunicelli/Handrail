@@ -7,6 +7,7 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
   import TransferPanel from "../files/TransferPanel.svelte";
+  import CompareHost from "../files/CompareHost.svelte";
 
   let transfersBtn = $state<HTMLButtonElement>();
   const transfersLabel = $derived(transfers.running ? t("files.transfers.buttonRunning", { n: transfers.running }) : t("files.transfers.title"));
@@ -47,6 +48,7 @@
   </button>
 </nav>
 {#if transfers.panelOpen}<TransferPanel onclose={closeTransfers} />{/if}
+<CompareHost rank={0} />
 
 <style>
   .rail {

@@ -19,6 +19,8 @@
   import { joinPath, modeString, parentDir, validName } from "../../util/files";
   import { nameMatcher, searchTree, type SearchProgress } from "../../util/fileSearch";
   import { formatBytes, relativeTime } from "../../util/time";
+  import { uploadFiles } from "./copyFlow";
+  import CompareHost from "./CompareHost.svelte";
 
   /** Browser for one remote file system; `label` names it (user@host, account name). */
 
@@ -242,14 +244,9 @@
   async function upload() {
     const picked = await api.pickFiles().catch((e) => (toasts.error(e), [] as string[]));
     const dir = path;
-    for (const p of picked) {
-      try {
-        await transfers.upload(fs, p, dir);
-      } catch (e) {
-        toasts.error(e);
-      }
-    }
-    if (picked.length && dir === path) await refresh();
+    // A name already taken in the folder opens the comparison before anything is replaced.
+    const n = await uploadFiles(fs, picked, dir, dir === path ? entries : undefined);
+    if (n && dir === path) await refresh();
   }
 
   async function remove(list: FileEntry[]) {
@@ -536,6 +533,7 @@
 
 {#if menu}<ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />{/if}
 {#if copying}<CopyDialog {fs} entries={copying} onclose={() => (copying = null)} />{/if}
+<CompareHost rank={1} />
 
 {#if naming}
   {@const n = naming}
