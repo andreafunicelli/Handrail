@@ -571,3 +571,74 @@ async fn server_panel_and_kill() {
         assert!(started.elapsed() < Duration::from_secs(20), "{kind:?}");
     }
 }
+
+#[tokio::test]
+async fn accounts_and_privileges() {
+    use aht_db::accounts::AccountChange;
+    for kind in [DbKind::Mysql, DbKind::Postgres] {
+        let Some(p) = params(kind) else { continue };
+        let db = DbClient::connect(&p).await.unwrap();
+        let ns = match kind {
+            DbKind::Mysql => db.current_database().await.unwrap().unwrap(),
+            DbKind::Postgres => "public".to_string(),
+        };
+        let user = "hr_acc_user".to_string();
+        // A password a careless quoting would break.
+        let password = "o'ne\\two\"three".to_string();
+        let _ = db
+            .account(&AccountChange::Drop {
+                user: user.clone(),
+                host: None,
+            })
+            .await;
+        db.account(&AccountChange::Create {
+            user: user.clone(),
+            host: None,
+            password: password.clone(),
+        })
+        .await
+        .unwrap();
+        db.account(&AccountChange::Grant {
+            user: user.clone(),
+            host: None,
+            privileges: vec!["SELECT".into()],
+            namespace: Some(ns.clone()),
+        })
+        .await
+        .unwrap();
+        let grants = db.grants(&user, None).await.unwrap();
+        let text = format!("{:?}", grants.rows);
+        assert!(
+            text.contains("SELECT") || matches!(kind, DbKind::Postgres),
+            "{kind:?}: {text}"
+        );
+
+        // The new account logs in with the password as typed.
+        let mut login = p.clone();
+        login.user = user.clone();
+        login.password = Zeroizing::new(password.clone());
+        let as_user = DbClient::connect(&login)
+            .await
+            .expect("log in as the new account");
+        as_user.close().await;
+
+        db.account(&AccountChange::Revoke {
+            user: user.clone(),
+            host: None,
+            privileges: vec!["SELECT".into()],
+            namespace: Some(ns.clone()),
+        })
+        .await
+        .unwrap();
+        db.account(&AccountChange::Drop {
+            user: user.clone(),
+            host: None,
+        })
+        .await
+        .unwrap();
+        assert!(
+            DbClient::connect(&login).await.is_err(),
+            "{kind:?}: dropped account still logs in"
+        );
+    }
+}

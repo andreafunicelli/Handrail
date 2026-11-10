@@ -7,6 +7,7 @@
 //! Statements run with the simple (text) protocol: several statements may be sent at once, and
 //! every value arrives as text, so any column type can be shown without a decoder per type.
 
+pub mod accounts;
 mod mysql;
 mod postgres;
 pub mod risk;
@@ -435,6 +436,41 @@ impl DbClient {
         match &self.inner {
             Inner::Mysql(c) => c.server_info(what).await,
             Inner::Postgres(c) => c.server_info(what).await,
+        }
+    }
+
+    /// Apply a change to an account (on the side connection). On MySQL the password is quoted
+    /// for the session's `sql_mode`.
+    pub async fn account(&self, change: &accounts::AccountChange) -> Result<()> {
+        match &self.inner {
+            Inner::Mysql(c) => {
+                let mode = c.sql_mode().await?;
+                let escapes = !mode.to_uppercase().contains("NO_BACKSLASH_ESCAPES");
+                for st in accounts::account_sql(DbKind::Mysql, change, escapes, false)? {
+                    c.side_exec(&st).await?;
+                }
+                Ok(())
+            }
+            Inner::Postgres(c) => {
+                // One string: PostgreSQL runs it as one transaction (all or nothing).
+                let all = accounts::account_sql(DbKind::Postgres, change, true, false)?.join("\n");
+                c.side_exec(&all).await
+            }
+        }
+    }
+
+    /// An account's privileges as rows (`SHOW GRANTS` on MySQL; table privileges per schema
+    /// on PostgreSQL).
+    pub async fn grants(&self, user: &str, host: Option<&str>) -> Result<ResultSet> {
+        match &self.inner {
+            Inner::Mysql(c) => {
+                let mode = c.sql_mode().await?;
+                let escapes = !mode.to_uppercase().contains("NO_BACKSLASH_ESCAPES");
+                let a = accounts::account(DbKind::Mysql, user, host, escapes)?;
+                c.side_text(&format!("SHOW GRANTS FOR {a}"), &["grant"])
+                    .await
+            }
+            Inner::Postgres(c) => c.role_grants(user).await,
         }
     }
 

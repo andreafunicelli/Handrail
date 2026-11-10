@@ -656,3 +656,10 @@ export interface DbTableStructure {
 
 /** What the server panel shows. */
 export type DbServerInfo = "processes" | "variables" | "status" | "users";
+
+/** A change to a database account (the backend builds the SQL; passwords never show in a preview). */
+export type DbAccountChange =
+  | { op: "create"; user: string; host?: string | null; password: string }
+  | { op: "password"; user: string; host?: string | null; password: string }
+  | { op: "drop"; user: string; host?: string | null }
+  | { op: "grant" | "revoke"; user: string; host?: string | null; privileges: string[]; namespace?: string | null };

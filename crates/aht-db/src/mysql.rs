@@ -282,6 +282,21 @@ impl Client {
         })
     }
 
+    pub(crate) async fn sql_mode(&self) -> Result<String> {
+        let rows = self.side_text_rows("SELECT @@SESSION.sql_mode").await?;
+        Ok(rows.first().map(|r| text_at(r, 0)).unwrap_or_default())
+    }
+
+    /// Run a statement without results on the side connection (text protocol).
+    pub(crate) async fn side_exec(&self, sql: &str) -> Result<()> {
+        self.side_text_rows(sql).await.map(|_| ())
+    }
+
+    pub(crate) async fn side_text(&self, sql: &str, columns: &[&str]) -> Result<crate::ResultSet> {
+        let rows = self.side_text_rows(sql).await?;
+        Ok(crate::text_result(columns, rows))
+    }
+
     pub(crate) async fn kill(&self, pid: u64, connection: bool) -> Result<()> {
         // A number, so nothing but the id reaches the statement.
         let sql = format!("KILL {}{pid}", if connection { "" } else { "QUERY " });

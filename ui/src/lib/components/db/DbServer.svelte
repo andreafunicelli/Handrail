@@ -2,6 +2,7 @@
   import { onDestroy } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import DbGrid from "./DbGrid.svelte";
+  import DbAccountDialog from "./DbAccountDialog.svelte";
   import { api } from "../../api";
   import type { DbResultSet, DbServerInfo } from "../../api/types";
   import { t } from "../../i18n";
@@ -10,7 +11,8 @@
 
   /** The server panel of a database tab: processes (stop a query or close a connection),
    *  variables, status counters and accounts. Read on the side connection. */
-  let { id, prod }: { id: string; prod: boolean } = $props();
+  let { id, prod, dialect, namespaces }: { id: string; prod: boolean; dialect: "mysql" | "postgres"; namespaces: string[] } = $props();
+  let account = $state<{ mode: "create" | "password" | "drop" | "grants"; user?: string; host?: string | null } | null>(null);
 
   const TABS: DbServerInfo[] = ["processes", "variables", "status", "users"];
   let what = $state<DbServerInfo>("processes");
@@ -37,6 +39,16 @@
   /** Counts the requests, so an answer for a tab no longer shown (or overtaken by a newer one)
    *  is dropped: rows of Users read as Processes would offer to stop the wrong process. */
   let requests = 0;
+
+  /** The account of the row picked in Users. */
+  const pickedUser = $derived.by(() => {
+    if (what !== "users" || !shown || !selected) return null;
+    const row = shown.rows[selected.r];
+    const u = row?.[0];
+    if (typeof u !== "string") return null;
+    const h = dialect === "mysql" && typeof row[1] === "string" ? row[1] : null;
+    return { user: u, host: h };
+  });
 
   async function load() {
     const n = ++requests;
@@ -103,8 +115,27 @@
       <span class="spacer"></span>
       <button class="btn sm" disabled={pickedPid === null} onclick={() => kill(false)}>{t("db.srv.killQuery")}</button>
       <button class="btn sm danger" disabled={pickedPid === null} onclick={() => kill(true)}>{t("db.srv.killConn")}</button>
+    {:else if what === "users"}
+      <span class="spacer"></span>
+      <button class="btn sm" onclick={() => (account = { mode: "create" })}>{t("db.acc.create")}</button>
+      <button class="btn sm" disabled={!pickedUser} onclick={() => pickedUser && (account = { mode: "password", ...pickedUser })}>{t("db.acc.password")}</button>
+      <button class="btn sm" disabled={!pickedUser} onclick={() => pickedUser && (account = { mode: "grants", ...pickedUser })}>{t("db.acc.grants")}</button>
+      <button class="btn sm danger" disabled={!pickedUser} onclick={() => pickedUser && (account = { mode: "drop", ...pickedUser })}>{t("db.acc.drop")}</button>
     {/if}
   </div>
+  {#if account}
+    <DbAccountDialog
+      {id}
+      {dialect}
+      mode={account.mode}
+      user={account.user}
+      host={account.host}
+      {namespaces}
+      {prod}
+      ondone={() => void load()}
+      onclose={() => (account = null)}
+    />
+  {/if}
   {#if error}
     <p class="error" role="alert">{error}</p>
   {:else if shown}

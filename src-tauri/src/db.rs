@@ -299,6 +299,51 @@ pub async fn db_server_info(
     session(&state, &id).await?.client.server_info(what).await
 }
 
+/// The statements an account change would run, with the password masked (the preview).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_account_preview(
+    state: State<'_, AppState>,
+    id: String,
+    mut change: aht_db::accounts::AccountChange,
+) -> Result<Vec<String>> {
+    let kind = session(&state, &id).await?.kind;
+    let out = aht_db::accounts::account_sql(kind, &change, true, true);
+    if let Some(p) = change.password_mut() {
+        zeroize::Zeroize::zeroize(p);
+    }
+    out
+}
+
+/// Create, change or drop an account, or grant or revoke privileges.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_account(
+    state: State<'_, AppState>,
+    id: String,
+    mut change: aht_db::accounts::AccountChange,
+) -> Result<()> {
+    let s = session(&state, &id).await?;
+    let out = s.client.account(&change).await;
+    if let Some(p) = change.password_mut() {
+        zeroize::Zeroize::zeroize(p);
+    }
+    out
+}
+
+/// An account's privileges.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_grants(
+    state: State<'_, AppState>,
+    id: String,
+    user: String,
+    host: Option<String>,
+) -> Result<aht_db::ResultSet> {
+    session(&state, &id)
+        .await?
+        .client
+        .grants(&user, host.as_deref())
+        .await
+}
+
 /// Stop a server process's statement, or close its connection.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn db_kill(

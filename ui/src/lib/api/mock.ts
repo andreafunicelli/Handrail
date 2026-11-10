@@ -1203,7 +1203,30 @@ export function createMockApi(): Api {
       }
       if (what === "variables") return set(["name", "value"], [["max_connections", "151"], ["innodb_buffer_pool_size", "134217728"], ["sql_mode", "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES"], ["time_zone", "SYSTEM"], ["version", "8.4.0"]]);
       if (what === "status") return set(["name", "value"], [["Threads_connected", "3"], ["Questions", "184220"], ["Slow_queries", "4"], ["Uptime", "864000"]]);
-      return set(["user", "host"], [["app", "%"], ["report", "10.0.4.%"], ["root", "localhost"]]);
+      return set(["user", "host"], d.users ?? [["app", "%"], ["report", "10.0.4.%"], ["root", "localhost"]]);
+    },
+    async dbAccountPreview(id, c) {
+      const d = mockDb(id);
+      const a = d.kind === "mysql" ? `'${c.user}'@'${c.host || "%"}'` : `"${c.user}"`;
+      if (c.op === "create") return [d.kind === "mysql" ? `CREATE USER ${a} IDENTIFIED BY '********';` : `CREATE ROLE ${a} LOGIN PASSWORD '********';`];
+      if (c.op === "password") return [d.kind === "mysql" ? `ALTER USER ${a} IDENTIFIED BY '********';` : `ALTER ROLE ${a} PASSWORD '********';`];
+      if (c.op === "drop") return d.kind === "mysql" ? [`DROP USER ${a};`] : [`REASSIGN OWNED BY ${a} TO CURRENT_USER;`, `DROP OWNED BY ${a};`, `DROP ROLE ${a};`];
+      if (!c.privileges.length) throw fail("invalid", "pick at least one privilege");
+      const on = d.kind === "mysql" ? (c.namespace ? `\`${c.namespace}\`.*` : "*.*") : `ALL TABLES IN SCHEMA "${c.namespace}"`;
+      return [`${c.op.toUpperCase()} ${c.privileges.join(", ")} ON ${on} ${c.op === "grant" ? "TO" : "FROM"} ${a};`];
+    },
+    async dbAccount(id, c) {
+      const d = mockDb(id);
+      await sleep(80);
+      const users = (d.users ??= [["app", "%"], ["report", "10.0.4.%"], ["root", "localhost"]]);
+      if (c.op === "create") users.push([c.user, c.host || "%"]);
+      if (c.op === "drop") d.users = users.filter((u) => !(u[0] === c.user && u[1] === (c.host || "%")));
+    },
+    async dbGrants(id, user, host) {
+      const d = mockDb(id);
+      await sleep(60);
+      const rows = d.kind === "mysql" ? [[`GRANT USAGE ON *.* TO \`${user}\`@\`${host ?? "%"}\``], [`GRANT SELECT, INSERT ON \`shop\`.* TO \`${user}\`@\`${host ?? "%"}\``]] : [["public", "orders", "INSERT, SELECT"]];
+      return { columns: (d.kind === "mysql" ? ["grant"] : ["schema", "table", "privileges"]).map((name) => ({ name, type_name: "TEXT" })), rows, rows_affected: 0, truncated: false };
     },
     async dbKill(id, pid) {
       const d = mockDb(id);
@@ -1737,6 +1760,7 @@ type MockDb = {
   extraNs?: string[];
   dropped?: Set<string>;
   killed?: Set<string>;
+  users?: string[][];
 };
 const mockDbs = new Map<string, MockDb>();
 
