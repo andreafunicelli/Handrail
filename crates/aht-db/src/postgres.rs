@@ -274,6 +274,40 @@ impl Client {
         Ok(crate::text_result(columns, rows))
     }
 
+    /// Run statements without results on the side connection, as one simple query (one
+    /// implicit transaction).
+    pub(crate) fn side_exec<'a>(&'a self, sql: &'a str) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let mut slot = self.side.lock().await;
+            if slot.is_none() {
+                *slot = Some(self.open().await?);
+            }
+            let conn = slot.as_mut().expect("connected above");
+            match (&mut *conn).execute(sqlx::raw_sql(sql)).await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    if broken(&e) {
+                        *slot = None;
+                    }
+                    Err(map_err(e))
+                }
+            }
+        })
+    }
+
+    pub(crate) async fn role_grants(&self, role: &str) -> Result<crate::ResultSet> {
+        let rows = self
+            .side_rows(
+                "SELECT table_schema::text, table_name::text, \
+                 string_agg(privilege_type::text, ', ' ORDER BY privilege_type) \
+                 FROM information_schema.role_table_grants WHERE grantee = $1 \
+                 GROUP BY 1, 2 ORDER BY 1, 2",
+                &[role],
+            )
+            .await?;
+        Ok(crate::text_result(&["schema", "table", "privileges"], rows))
+    }
+
     pub(crate) async fn kill(&self, pid: u64, connection: bool) -> Result<()> {
         let pid = i32::try_from(pid)
             .map_err(|_| Error::Invalid(format!("no process {pid}")))?

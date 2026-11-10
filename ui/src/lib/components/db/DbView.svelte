@@ -1015,7 +1015,7 @@
           </div>
         {/each}
         {#if serverView && tabId}
-          <DbServer id={tabId} {prod} />
+          <DbServer id={tabId} {prod} dialect={info?.kind ?? "mysql"} {namespaces} />
         {:else if editing}
           <DbStructureEdit
             bind:def={editing.def}

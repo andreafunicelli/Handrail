@@ -54,6 +54,7 @@ import type {
   DbRowsPage,
   DbTableStructure,
   DbServerInfo,
+  DbAccountChange,
   DbResultSet,
   DbColumnInfo,
   DbRowEdit,
@@ -193,6 +194,12 @@ export interface Api {
   dbTableRows(id: string, namespace: string, table: string, page?: DbRowsPage): Promise<DbQueryOutput>;
   /** The server panel: processes, variables, status or users, as rows of text. */
   dbServerInfo(id: string, what: DbServerInfo): Promise<DbResultSet>;
+  /** The statements an account change would run, password masked. */
+  dbAccountPreview(id: string, change: DbAccountChange): Promise<string[]>;
+  /** Create, change or drop an account, or grant or revoke privileges. */
+  dbAccount(id: string, change: DbAccountChange): Promise<void>;
+  /** An account's privileges. */
+  dbGrants(id: string, user: string, host: string | null): Promise<DbResultSet>;
   /** Stop a server process's statement (`connection`: close its connection). */
   dbKill(id: string, pid: number, connection: boolean): Promise<void>;
   /** A table's columns, indexes and foreign keys. */
