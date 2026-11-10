@@ -96,7 +96,9 @@ function mysqlColumn(c: ColDef): string {
   s += c.nullable ? " NULL" : " NOT NULL";
   if (c.default !== null && c.default.trim() !== "") s += ` DEFAULT ${c.default.trim()}`;
   if (c.extra && /auto_increment/i.test(c.extra)) s += " AUTO_INCREMENT";
-  if (c.extra && /on update current_timestamp/i.test(c.extra)) s += " ON UPDATE CURRENT_TIMESTAMP";
+  // Keep the reported clause whole: CURRENT_TIMESTAMP(3) must match the column's precision.
+  const onUpdate = c.extra?.match(/on update (current_timestamp(?:\(\d*\))?)/i)?.[1];
+  if (onUpdate) s += ` ON UPDATE ${onUpdate.toUpperCase()}`;
   if (c.comment) s += ` COMMENT ${lit("mysql", c.comment)}`;
   return s;
 }
@@ -180,6 +182,8 @@ export function alterTableSql(d: SqlDialect, ns: string, table: string, before: 
       if (d === "postgres" && c.comment) out.push(`COMMENT ON COLUMN ${target}.${quoteIdent(d, c.name)} IS ${lit(d, c.comment)};`);
       continue;
     }
+    // A generated column's expression is not part of the definition here: never restate it.
+    if (isGenerated(was)) continue;
     const same = (a: string | null, b: string | null) => (a ?? "").trim() === (b ?? "").trim();
     const changed = c.name !== was.name || !same(c.type, was.type) || c.nullable !== was.nullable || !same(c.default, was.default) || !same(c.comment, was.comment);
     if (!changed) continue;
@@ -189,9 +193,16 @@ export function alterTableSql(d: SqlDialect, ns: string, table: string, before: 
     }
     const col = quoteIdent(d, c.name);
     if (c.name !== was.name) out.push(`ALTER TABLE ${target} RENAME COLUMN ${quoteIdent(d, was.name)} TO ${col};`);
-    if (!same(c.type, was.type)) out.push(`ALTER TABLE ${target} ALTER COLUMN ${col} TYPE ${c.type.trim()} USING ${col}::${c.type.trim()};`);
+    const retyped = !same(c.type, was.type);
+    // The old default is not converted by USING: drop it first, set the new one after.
+    if (retyped && was.default?.trim()) out.push(`ALTER TABLE ${target} ALTER COLUMN ${col} DROP DEFAULT;`);
+    if (retyped) out.push(`ALTER TABLE ${target} ALTER COLUMN ${col} TYPE ${c.type.trim()} USING ${col}::${c.type.trim()};`);
     if (c.nullable !== was.nullable) out.push(`ALTER TABLE ${target} ALTER COLUMN ${col} ${c.nullable ? "DROP" : "SET"} NOT NULL;`);
-    if (!same(c.default, was.default)) out.push(c.default?.trim() ? `ALTER TABLE ${target} ALTER COLUMN ${col} SET DEFAULT ${c.default.trim()};` : `ALTER TABLE ${target} ALTER COLUMN ${col} DROP DEFAULT;`);
+    if (retyped) {
+      if (c.default?.trim()) out.push(`ALTER TABLE ${target} ALTER COLUMN ${col} SET DEFAULT ${c.default.trim()};`);
+    } else if (!same(c.default, was.default)) {
+      out.push(c.default?.trim() ? `ALTER TABLE ${target} ALTER COLUMN ${col} SET DEFAULT ${c.default.trim()};` : `ALTER TABLE ${target} ALTER COLUMN ${col} DROP DEFAULT;`);
+    }
     if (!same(c.comment, was.comment)) out.push(`COMMENT ON COLUMN ${target}.${col} IS ${c.comment?.trim() ? lit(d, c.comment.trim()) : "NULL"};`);
   }
   // New indexes and foreign keys.

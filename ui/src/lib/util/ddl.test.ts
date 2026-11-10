@@ -76,6 +76,19 @@ describe("structure SQL", () => {
     coll.columns[1] = { ...coll.columns[1], collation: "utf8mb4_bin" };
     const coll2 = structuredClone(coll);
     coll2.columns[1].type = "varchar(60)";
+    // ON UPDATE keeps its precision; generated columns are never restated.
+    const ts = base();
+    ts.columns.push(col("at", "timestamp(3)", { nullable: false, default: "CURRENT_TIMESTAMP(3)", extra: "DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)" }));
+    const ts2 = structuredClone(ts);
+    ts2.columns[3].comment = "changed";
+    expect(alterTableSql("mysql", "s", "t", ts, ts2)).toEqual([
+      "ALTER TABLE `s`.`t` CHANGE COLUMN `at` `at` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'changed';",
+    ]);
+    const g = base();
+    g.columns.push(col("total", "int", { extra: "STORED GENERATED" }));
+    const g2 = structuredClone(g);
+    g2.columns[3].name = "sum";
+    expect(alterTableSql("mysql", "s", "t", g, g2)).toEqual([]);
     expect(alterTableSql("mysql", "s", "t", coll, coll2)).toEqual(["ALTER TABLE `s`.`t` CHANGE COLUMN `name` `name` varchar(60) COLLATE utf8mb4_bin NULL DEFAULT 'x';"]);
   });
 
@@ -87,11 +100,28 @@ describe("structure SQL", () => {
     expect(alterTableSql("postgres", "s", "t", base(), after)).toEqual([
       'ALTER TABLE "s"."t" DROP CONSTRAINT "PRIMARY";',
       'ALTER TABLE "s"."t" RENAME COLUMN "name" TO "title";',
+      'ALTER TABLE "s"."t" ALTER COLUMN "title" DROP DEFAULT;',
       'ALTER TABLE "s"."t" ALTER COLUMN "title" TYPE text USING "title"::text;',
       'ALTER TABLE "s"."t" ALTER COLUMN "title" SET NOT NULL;',
-      'ALTER TABLE "s"."t" ALTER COLUMN "title" DROP DEFAULT;',
       `COMMENT ON COLUMN "s"."t"."title" IS 'c';`,
       'ALTER TABLE "s"."t" ADD CONSTRAINT "fk_b" FOREIGN KEY ("title") REFERENCES "s"."q" ("t") ON UPDATE CASCADE ON DELETE SET NULL;',
+    ]);
+  });
+
+  it("drops a PostgreSQL default before changing the type", () => {
+    const before: TableDef = { columns: [col("n", "text", { default: "'0'::text" })], indexes: [], fks: [] };
+    const after = structuredClone(before);
+    after.columns[0].type = "integer";
+    after.columns[0].default = "0";
+    expect(alterTableSql("postgres", "s", "t", before, after)).toEqual([
+      'ALTER TABLE "s"."t" ALTER COLUMN "n" DROP DEFAULT;',
+      'ALTER TABLE "s"."t" ALTER COLUMN "n" TYPE integer USING "n"::integer;',
+      'ALTER TABLE "s"."t" ALTER COLUMN "n" SET DEFAULT 0;',
+    ]);
+    after.columns[0].default = null;
+    expect(alterTableSql("postgres", "s", "t", before, after)).toEqual([
+      'ALTER TABLE "s"."t" ALTER COLUMN "n" DROP DEFAULT;',
+      'ALTER TABLE "s"."t" ALTER COLUMN "n" TYPE integer USING "n"::integer;',
     ]);
   });
 

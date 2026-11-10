@@ -156,11 +156,13 @@
   const views: Record<string, View> = {};
   const persistTabs = () => store && saveTabs(store, connKey, $state.snapshot(qtabs) as QueryTabDoc[], qcur);
 
-  function switchTab(i: number) {
-    if (i === qcur || running || blocked()) return;
+  /** Whether the tab is now `i` (switching is refused while something would be lost). */
+  function switchTab(i: number): boolean {
+    if (i === qcur) return true;
+    if (running || blocked()) return false;
     if (editing && editStatements.length) {
       toasts.info(t("db.st.unsavedEdit"));
-      return;
+      return false;
     }
     // A table's columns still loading for this tab must not make the next tab's rows editable.
     runs++;
@@ -183,6 +185,7 @@
     editor?.setText(qtabs[i].sql);
     persistTabs();
     editor?.focus();
+    return true;
   }
 
   function newTab() {
@@ -193,10 +196,7 @@
 
   function closeTab(i: number) {
     if (qtabs.length < 2 || running) return;
-    if (i === qcur) {
-      if (blocked()) return;
-      switchTab(i > 0 ? i - 1 : 1);
-    }
+    if (i === qcur && !switchTab(i > 0 ? i - 1 : 1)) return;
     delete views[qtabs[i].key];
     qtabs.splice(i, 1);
     if (qcur > i) qcur--;

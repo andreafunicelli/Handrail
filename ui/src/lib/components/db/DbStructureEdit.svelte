@@ -70,7 +70,7 @@
         {#each def.columns as c, i (i)}
           {@const locked = isGenerated(c)}
           <tr class:new={c.orig === null}>
-            <td><input class="input mono" bind:value={c.name} aria-label={t("db.st.name")} spellcheck="false" /></td>
+            <td><input class="input mono" bind:value={c.name} aria-label={t("db.st.name")} spellcheck="false" disabled={locked} /></td>
             <td><input class="input mono" bind:value={c.type} aria-label={t("db.st.type")} spellcheck="false" disabled={locked} /></td>
             <td class="c"><input type="checkbox" bind:checked={c.nullable} aria-label={t("db.st.null")} disabled={locked} /></td>
             <td>
@@ -90,6 +90,7 @@
                 value={c.comment ?? ""}
                 oninput={(e) => (c.comment = e.currentTarget.value === "" ? null : e.currentTarget.value)}
                 aria-label={t("db.st.comment")}
+                disabled={locked}
               />
             </td>
             <td class="mono faint small" title={locked ? t("db.st.generatedLocked") : undefined}>{c.extra ?? ""}</td>
