@@ -225,6 +225,12 @@ describe("mock api", () => {
     await expect(api.openUrl("http://github.com/login/device")).rejects.toThrow();
   });
 
+  it("offers a nightly build with an installer from this repository's releases", async () => {
+    const b = await createMockApi().nightlyBuild();
+    expect(b?.version).toMatch(/^\d+\.\d+\.\d+-\d+$/);
+    expect(b?.download?.url).toMatch(/^https:\/\/github\.com\/andreafunicelli\/Handrail\/releases\/download\/nightly-/);
+  });
+
   it("reports the version and installs an update with progress", async () => {
     const api = createMockApi();
     expect(await api.appVersion()).toMatch(/^\d+\.\d+\.\d+$/);

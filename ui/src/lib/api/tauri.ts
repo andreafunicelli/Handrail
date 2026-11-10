@@ -197,6 +197,7 @@ export function createTauriApi(): Api {
     },
     restartApp: () => invoke("restart_app"),
     openUrl: (url) => invoke("open_url", { url }),
+    nightlyBuild: () => invoke("nightly_build"),
     syncSetAuto: (enabled) => invoke("sync_set_auto", { enabled }),
     syncDisconnect: () => invoke("sync_disconnect"),
     syncFolderPresets: () => invoke("sync_folder_presets"),
