@@ -1,5 +1,6 @@
 import { api } from "../api";
 import type { FileEntry, FileStamp, Place, TextFile } from "../api/types";
+import { copyKindOk } from "./fileOps";
 
 /** A real folder, not a link to one (deleting a link removes only the link). */
 export const isFolder = (e: FileEntry) => e.kind === "dir" && !e.link;
@@ -46,8 +47,7 @@ export interface FileBackend {
  * between a server and S3 (files). Not between S3 accounts.
  */
 export function canCopy(from: FileBackend, entry: FileEntry, to: FileBackend): boolean {
-  if (from.kind === "s3" && to.kind === "s3") return false;
-  return from.kind === "sftp" && to.kind === "sftp" ? true : entry.kind === "file";
+  return copyKindOk(from.kind, to.kind, entry.kind);
 }
 
 /** Copy `path` into `dir` of `dest`; resolves with the new path, rejects with `exists` (see `alreadyExists`). */
@@ -114,6 +114,9 @@ export const changedOnServer = (e: unknown) =>
 
 /** Files that are never text: double-click downloads them instead of opening the editor. */
 const BINARY = /\.(gz|tgz|bz2|xz|zst|zip|7z|rar|tar|iso|img|qcow2|deb|rpm|apk|jar|war|so|o|a|bin|exe|dll|class|pyc|png|jpe?g|gif|webp|ico|bmp|tiff?|pdf|mp[34]|mkv|mov|avi|wav|flac|ogg|woff2?|ttf|otf|sqlite|db)$/i;
+
+/** A name that is never a text file (archives, images, binaries…). */
+export const looksBinary = (name: string) => BINARY.test(name);
 
 /** Whether double-clicking `e` should open the editor. */
 export function editable(fs: FileBackend, e: FileEntry): boolean {
