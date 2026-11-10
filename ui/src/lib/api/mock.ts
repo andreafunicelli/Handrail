@@ -301,6 +301,8 @@ export function createMockApi(): Api {
     default_mode: "confirm_all",
     deny_list: ["shutdown", "reboot"],
   };
+  /** Generic vault settings (get_setting / set_setting). */
+  const settingStore = new Map<string, unknown>();
   let sync: SyncStatus = { config: null, last_sync_ms: null, last_report: null, can_join: false, auto: true, syncing: false, last_error: null };
   const hour = 3_600_000;
   const snapName = (ms: number) => `${String(ms).padStart(15, "0")}-${Math.random().toString(16).slice(2, 10)}.snap`;
@@ -993,6 +995,16 @@ export function createMockApi(): Api {
     },
     async saveApprovalSettings(s) {
       approvalSettings = structuredClone(s);
+    },
+    async getSetting(key) {
+      if (vault.locked) throw fail("locked", "The vault is locked.");
+      if (key.startsWith("sync.")) throw fail("denied", `setting ${key} is not accessible`);
+      return settingStore.has(key) ? structuredClone(settingStore.get(key)) : null;
+    },
+    async setSetting(key, value) {
+      if (vault.locked) throw fail("locked", "The vault is locked.");
+      if (key.startsWith("sync.")) throw fail("denied", `setting ${key} is not accessible`);
+      settingStore.set(key, structuredClone(value));
     },
 
     async sftpSudo(session_id, password) {
