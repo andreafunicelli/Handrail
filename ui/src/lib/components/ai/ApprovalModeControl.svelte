@@ -68,7 +68,7 @@
   }
   h2 {
     margin: 0 0 6px;
-    font-size: 15px;
+    font-size: var(--fs-title);
     font-weight: 600;
     color: var(--danger);
   }

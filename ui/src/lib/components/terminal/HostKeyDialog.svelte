@@ -79,7 +79,7 @@
   }
   h2 {
     margin: 0 0 6px;
-    font-size: 15px;
+    font-size: var(--fs-title);
     font-weight: 600;
   }
   .danger-text {
@@ -99,7 +99,7 @@
     margin-bottom: 8px;
   }
   .fp code {
-    font-size: 12px;
+    font-size: var(--fs-meta);
     overflow-wrap: anywhere;
     color: var(--text);
   }

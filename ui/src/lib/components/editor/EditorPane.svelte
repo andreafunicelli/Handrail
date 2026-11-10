@@ -388,7 +388,7 @@
   }
   .dirty {
     color: var(--accent);
-    font-size: 10px;
+    font-size: var(--fs-tiny);
   }
   .grow {
     flex: 1;
@@ -475,7 +475,7 @@
     border-top: 1px solid var(--border);
     background: var(--panel);
     color: var(--muted);
-    font-size: 11px;
+    font-size: var(--fs-small);
     white-space: nowrap;
     overflow: hidden;
   }

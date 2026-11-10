@@ -582,7 +582,7 @@
   .path {
     width: 100%;
     height: 28px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .crumbs {
     display: flex;
@@ -662,7 +662,7 @@
     text-align: right;
   }
   .perm {
-    font-size: 11px;
+    font-size: var(--fs-small);
   }
   /* Narrow panes: the name matters most, then size, then age. */
   @container (max-width: 560px) {
@@ -735,7 +735,7 @@
   }
   .dialog h2 {
     margin: 0;
-    font-size: 15px;
+    font-size: var(--fs-title);
     font-weight: 600;
   }
   .where {

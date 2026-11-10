@@ -534,7 +534,7 @@
   }
   h2 {
     margin: 0;
-    font-size: 14px;
+    font-size: var(--fs-heading);
     font-weight: 600;
   }
   .body {
@@ -607,7 +607,7 @@
     color: var(--accent-text);
   }
   .ord {
-    font-size: 10px;
+    font-size: var(--fs-tiny);
     font-weight: 600;
   }
   .row-actions {
@@ -640,7 +640,7 @@
   }
   .tunnel .sm {
     height: 26px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .tunnel .host {
     flex: 1;

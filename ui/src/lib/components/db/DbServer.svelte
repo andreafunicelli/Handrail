@@ -159,7 +159,7 @@
     padding: 5px 8px;
     border-bottom: 1px solid var(--border);
     flex-wrap: wrap;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .seg {
     display: flex;
@@ -182,7 +182,7 @@
   .bar .input {
     width: 200px;
     height: 26px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .auto {
     display: flex;
@@ -202,7 +202,7 @@
     padding: 8px 10px;
     color: var(--danger);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .hint {
     color: var(--muted);

@@ -123,7 +123,7 @@
     border-top: 1px solid var(--border);
     background: var(--panel);
     color: var(--muted);
-    font-size: 11px;
+    font-size: var(--fs-small);
     white-space: nowrap;
     overflow: hidden;
   }
@@ -175,7 +175,7 @@
     color: var(--text-2);
     font: inherit;
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: var(--fs-small);
   }
   .tun::before {
     content: "";

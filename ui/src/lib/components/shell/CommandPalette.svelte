@@ -221,7 +221,7 @@
     border: 0;
     outline: 0;
     background: none;
-    font-size: 14px;
+    font-size: var(--fs-heading);
     color: var(--text);
   }
   .q input::placeholder {

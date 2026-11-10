@@ -171,7 +171,7 @@
     border-radius: var(--r);
     background: var(--bg);
     border: 1px solid var(--border);
-    font-size: 12.5px;
+    font-size: var(--fs-meta);
     color: var(--text);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -179,7 +179,7 @@
   .edit {
     margin-top: 9px;
     min-height: 0;
-    font-size: 12.5px;
+    font-size: var(--fs-meta);
   }
   .reason {
     margin: 8px 0 0;
@@ -199,7 +199,7 @@
   }
   .k {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: var(--fs-tiny);
     opacity: 0.6;
   }
   .resolved {

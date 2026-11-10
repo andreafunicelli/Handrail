@@ -282,7 +282,7 @@
     text-overflow: ellipsis;
   }
   .path {
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

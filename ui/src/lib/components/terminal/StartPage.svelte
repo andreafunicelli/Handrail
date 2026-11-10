@@ -147,7 +147,7 @@
     color: var(--text);
   }
   .chost {
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
     color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;

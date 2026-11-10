@@ -200,7 +200,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     color: var(--muted);
   }
   .tname .input {
@@ -208,7 +208,7 @@
   }
   h3 {
     margin: 0 0 6px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -217,7 +217,7 @@
   table {
     border-collapse: collapse;
     width: 100%;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     margin-bottom: 6px;
   }
   th {
@@ -235,7 +235,7 @@
   td .select {
     width: 100%;
     height: 26px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   tr.new td:first-child {
     box-shadow: inset 2px 0 0 var(--accent);
@@ -251,7 +251,7 @@
     color: var(--faint);
   }
   .small {
-    font-size: 11px;
+    font-size: var(--fs-small);
     max-width: 160px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -266,7 +266,7 @@
     padding: 8px 0;
     background: var(--bg);
     border-top: 1px solid var(--border);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .problem {
     color: var(--warn);

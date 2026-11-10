@@ -260,7 +260,7 @@
     border-radius: 8px;
     background: var(--warn-soft);
     color: var(--warn);
-    font-size: 10px;
+    font-size: var(--fs-tiny);
     font-weight: 600;
     letter-spacing: 0.02em;
   }
@@ -282,7 +282,7 @@
     border-radius: 9px;
     border: 1px solid var(--border);
     color: var(--muted);
-    font-size: 11px;
+    font-size: var(--fs-small);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

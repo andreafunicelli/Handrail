@@ -733,7 +733,7 @@
     border: 0;
     outline: 0;
     background: none;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     color: var(--text);
   }
   .quick input::placeholder {

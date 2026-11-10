@@ -241,7 +241,7 @@
     min-width: 96px;
   }
   .ver {
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
     color: var(--text-2);
   }
   .path {
@@ -250,7 +250,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
     color: var(--faint);
   }
   .grow {

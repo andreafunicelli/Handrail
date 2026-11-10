@@ -142,7 +142,7 @@
   }
   .pat {
     flex: 1;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     overflow-wrap: anywhere;
   }
   .add {

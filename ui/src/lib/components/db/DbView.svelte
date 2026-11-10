@@ -1229,7 +1229,7 @@
   .tree {
     overflow: auto;
     padding: 4px 0;
-    font-size: 12.5px;
+    font-size: var(--fs-meta);
   }
   .tree ul {
     padding-left: 14px;
@@ -1286,7 +1286,7 @@
     padding: 0 8px 0 22px;
     color: var(--muted);
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
   }
   .col .cname {
     color: var(--text);
@@ -1305,7 +1305,7 @@
   .hint {
     color: var(--muted);
     padding: 3px 10px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .main {
     display: grid;
@@ -1326,14 +1326,14 @@
     align-items: center;
     gap: 6px;
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .spacer {
     flex: 1;
   }
   .ver {
     color: var(--faint);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1354,7 +1354,7 @@
     gap: 10px;
     padding: 5px 8px;
     border-bottom: 1px solid var(--border);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     color: var(--muted);
     flex-wrap: wrap;
   }
@@ -1383,7 +1383,7 @@
     padding: 0 6px;
     border-bottom: 1px solid var(--border);
     overflow-x: auto;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .qtab {
     display: flex;
@@ -1447,7 +1447,7 @@
     background: none;
     color: var(--muted);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     padding: 3px 8px;
     cursor: pointer;
   }
@@ -1457,24 +1457,24 @@
   }
   .browse .where {
     color: var(--faint);
-    font-size: 11px;
+    font-size: var(--fs-small);
   }
   .browse .input {
     flex: 1;
     min-width: 160px;
     height: 26px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .pager {
     display: flex;
     align-items: center;
     gap: 2px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     color: var(--muted);
   }
   .stats {
     color: var(--faint);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     white-space: nowrap;
   }
   .ddl {
@@ -1498,7 +1498,7 @@
     margin: 0;
     padding: 10px;
     overflow: auto;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     white-space: pre;
   }
   .share.on,
@@ -1529,19 +1529,19 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
-    font-size: 12.5px;
+    font-size: var(--fs-meta);
   }
   .ask .pill {
     padding: 0 6px;
     border-radius: 4px;
     border: 1px solid currentColor;
-    font-size: 11px;
+    font-size: var(--fs-small);
     text-transform: uppercase;
   }
   .ask .note,
   .ask .why {
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     margin: 0;
   }
   .ask .sql {
@@ -1552,7 +1552,7 @@
     border-radius: 6px;
     background: var(--bg);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
@@ -1596,7 +1596,7 @@
     color: var(--danger);
     background: var(--danger-soft);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }

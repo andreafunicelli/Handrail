@@ -336,7 +336,7 @@
     color: var(--accent);
   }
   .spark {
-    font-size: 15px;
+    font-size: var(--fs-title);
   }
   .empty strong {
     color: var(--text);
@@ -499,7 +499,7 @@
   }
   .tpls .mono {
     color: var(--accent-text);
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
     min-width: 72px;
   }
   .usage {

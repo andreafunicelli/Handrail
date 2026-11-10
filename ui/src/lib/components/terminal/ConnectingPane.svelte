@@ -91,7 +91,7 @@
     height: 100%;
     padding: 10px 14px;
     font-family: var(--font-mono);
-    font-size: 13px;
+    font-size: var(--fs);
     line-height: 1.5;
     overflow: auto;
     cursor: text;
@@ -128,7 +128,7 @@
   .hint {
     margin-top: 6px;
     opacity: 0.45;
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
   }
   .actions {
     display: flex;

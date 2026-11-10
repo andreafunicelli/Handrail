@@ -150,7 +150,7 @@
 <style>
   .bcast {
     color: var(--warn);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .bar {
     display: flex;

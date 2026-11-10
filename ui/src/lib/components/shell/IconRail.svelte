@@ -43,7 +43,7 @@
     height: 28px;
     margin-bottom: 10px;
     color: var(--text);
-    font-size: 13px;
+    font-size: var(--fs);
   }
   .item {
     position: relative;
