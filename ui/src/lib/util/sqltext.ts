@@ -38,13 +38,25 @@ export function splitStatements(sql: string, dialect: SqlDialect): StatementSpan
       continue;
     }
     if (c === "/" && next === "*") {
-      const end = sql.indexOf("*/", i + 2);
-      i = end < 0 ? sql.length : end + 2;
+      // PostgreSQL nests block comments; MySQL ends one at the first */.
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql[i] === "*" && sql[i + 1] === "/") {
+          depth--;
+          i += 2;
+        } else if (!mysql && sql[i] === "/" && sql[i + 1] === "*") {
+          depth++;
+          i += 2;
+        } else i++;
+      }
       continue;
     }
     if (c === "'" || c === '"' || (mysql && c === "`")) {
       code = true;
-      const escapes = mysql && c !== "`";
+      // PostgreSQL E'...' strings take backslash escapes whatever the server setting.
+      const escapeString = !mysql && c === "'" && i > 0 && /[eE]/.test(sql[i - 1]) && (i < 2 || !/[\w$]/.test(sql[i - 2]));
+      const escapes = (mysql && c !== "`") || escapeString;
       i++;
       while (i < sql.length) {
         if (escapes && sql[i] === "\\") {

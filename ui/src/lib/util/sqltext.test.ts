@@ -16,6 +16,17 @@ describe("sql text", () => {
     // MySQL: backslash escapes the quote; -- needs a blank after it.
     expect(splitStatements("SELECT 'it\\'s;'; SELECT 1--1;", "mysql").map((s) => s.text)).toEqual(["SELECT 'it\\'s;'", "SELECT 1--1"]);
     expect(splitStatements("-- only a comment\n", "postgres")).toEqual([]);
+    // PostgreSQL: E'' strings take escapes; block comments nest. Nothing inside them is a statement.
+    expect(splitStatements("SELECT E'\\'; DROP TABLE t; -- '; SELECT 2", "postgres").map((s) => s.text)).toEqual([
+      "SELECT E'\\'; DROP TABLE t; -- '",
+      "SELECT 2",
+    ]);
+    expect(splitStatements("SELECT '\\'; SELECT 2", "postgres").map((s) => s.text)).toEqual(["SELECT '\\'", "SELECT 2"]);
+    const nested = "/* outer /* inner */ SELECT 1; DROP TABLE t; */ SELECT 2;";
+    expect(splitStatements(nested, "postgres").map((s) => s.text)).toEqual([nested.slice(0, -1)]);
+    expect(statementAt(nested, nested.indexOf("DROP"), "postgres")?.text).not.toBe("DROP TABLE t");
+    // MySQL does not nest: the first */ ends the comment.
+    expect(splitStatements("/* a /* b */ SELECT 1; SELECT 2", "mysql").map((s) => s.text)).toEqual(["/* a /* b */ SELECT 1", "SELECT 2"]);
   });
 
   it("finds the statement under the cursor", () => {

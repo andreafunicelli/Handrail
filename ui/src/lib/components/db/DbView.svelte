@@ -112,6 +112,8 @@
 
   function switchTab(i: number) {
     if (i === qcur || running || blocked()) return;
+    // A table's columns still loading for this tab must not make the next tab's rows editable.
+    runs++;
     views[qtabs[qcur].key] = { output, active, ranLabel, browse, filterText, editTarget };
     qcur = i;
     const v = views[qtabs[i].key];
