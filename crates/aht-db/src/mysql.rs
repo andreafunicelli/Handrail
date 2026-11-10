@@ -231,9 +231,96 @@ impl Client {
                     } else {
                         crate::non_empty(r.get(5).and_then(|v| v.as_ref()))
                     },
+                    materialized: false,
                 }
             })
             .collect())
+    }
+
+    pub(crate) async fn structure(&self, db: &str, table: &str) -> Result<crate::TableStructure> {
+        let at = |r: &Vec<Option<String>>, i: usize| r.get(i).cloned().flatten();
+        let columns = self
+            .side_rows(
+                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, \
+                 IF(COLUMN_KEY = 'PRI', 'YES', 'NO'), EXTRA, COLUMN_COMMENT \
+                 FROM information_schema.COLUMNS \
+                 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+                &[db, table],
+            )
+            .await?
+            .iter()
+            .map(|r| crate::ColumnDetail {
+                name: text_at(r, 0),
+                data_type: text_at(r, 1),
+                nullable: text_at(r, 2) == "YES",
+                default: at(r, 3),
+                primary_key: text_at(r, 4) == "YES",
+                extra: crate::non_empty(at(r, 5).as_ref()),
+                comment: crate::non_empty(at(r, 6).as_ref()),
+            })
+            .collect();
+        let rows = self
+            .side_rows(
+                "SELECT INDEX_NAME, CAST(NON_UNIQUE AS CHAR), \
+                 COALESCE(COLUMN_NAME, '(expression)'), INDEX_TYPE \
+                 FROM information_schema.STATISTICS \
+                 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME = 'PRIMARY' DESC, \
+                 INDEX_NAME, SEQ_IN_INDEX",
+                &[db, table],
+            )
+            .await?;
+        let mut indexes: Vec<crate::IndexInfo> = Vec::new();
+        for r in &rows {
+            let name = text_at(r, 0);
+            let column = text_at(r, 2);
+            match indexes.last_mut() {
+                Some(i) if i.name == name => i.columns.push(column),
+                _ => indexes.push(crate::IndexInfo {
+                    primary: name == "PRIMARY",
+                    unique: text_at(r, 1) == "0",
+                    kind: text_at(r, 3),
+                    columns: vec![column],
+                    name,
+                }),
+            }
+        }
+        let rows = self
+            .side_rows(
+                "SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, \
+                 k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.UPDATE_RULE, r.DELETE_RULE \
+                 FROM information_schema.KEY_COLUMN_USAGE k \
+                 JOIN information_schema.REFERENTIAL_CONSTRAINTS r \
+                   ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME \
+                   AND r.TABLE_NAME = k.TABLE_NAME \
+                 WHERE k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL \
+                 ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION",
+                &[db, table],
+            )
+            .await?;
+        let mut foreign_keys: Vec<crate::ForeignKeyInfo> = Vec::new();
+        for r in &rows {
+            let name = text_at(r, 0);
+            match foreign_keys.last_mut() {
+                Some(f) if f.name == name => {
+                    f.columns.push(text_at(r, 1));
+                    f.ref_columns.push(text_at(r, 4));
+                }
+                _ => foreign_keys.push(crate::ForeignKeyInfo {
+                    name,
+                    columns: vec![text_at(r, 1)],
+                    ref_namespace: text_at(r, 2),
+                    ref_table: text_at(r, 3),
+                    ref_columns: vec![text_at(r, 4)],
+                    on_update: text_at(r, 5),
+                    on_delete: text_at(r, 6),
+                }),
+            }
+        }
+        Ok(crate::TableStructure {
+            columns,
+            indexes,
+            foreign_keys,
+        })
     }
 
     pub(crate) async fn ddl(&self, db: &str, table: &str) -> Result<String> {

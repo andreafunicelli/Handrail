@@ -89,6 +89,7 @@ export function createTauriApi(): Api {
         filter: page.filter?.trim() || null,
       }),
     dbTableDdl: (id, namespace, table) => invoke("db_table_ddl", { id, namespace, table }),
+    dbTableStructure: (id, namespace, table) => invoke("db_table_structure", { id, namespace, table }),
     dbExportFile: (file_name, contents) => invoke("db_export_file", { file_name, contents }),
     dbCancel: (id) => invoke("db_cancel", { id }),
     dbApplyEdits: (id, namespace, table, edits) => invoke("db_apply_edits", { id, namespace, table, edits }),

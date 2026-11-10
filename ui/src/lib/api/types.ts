@@ -561,6 +561,8 @@ export interface DbQueryOutput {
 export interface DbTableInfo {
   name: string;
   view: boolean;
+  /** A PostgreSQL materialized view (also `view`). */
+  materialized?: boolean;
   /** The server's estimate (statistics, not a count); null for views and unanalysed tables. */
   rows: number | null;
   /** Data and indexes, in bytes. */
@@ -612,4 +614,40 @@ export interface DbApprovalRequest {
   risk: DbSqlRisk;
   statements: number;
   policy_note: string;
+}
+
+/** A column as the structure tab shows it. */
+export interface DbColumnDetail {
+  name: string;
+  data_type: string;
+  nullable: boolean;
+  default: string | null;
+  primary_key: boolean;
+  /** AUTO_INCREMENT, identity or generated expression. */
+  extra: string | null;
+  comment: string | null;
+}
+
+export interface DbIndexInfo {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  primary: boolean;
+  kind: string;
+}
+
+export interface DbForeignKeyInfo {
+  name: string;
+  columns: string[];
+  ref_namespace: string;
+  ref_table: string;
+  ref_columns: string[];
+  on_update: string;
+  on_delete: string;
+}
+
+export interface DbTableStructure {
+  columns: DbColumnDetail[];
+  indexes: DbIndexInfo[];
+  foreign_keys: DbForeignKeyInfo[];
 }
