@@ -626,6 +626,8 @@ export interface DbColumnDetail {
   /** AUTO_INCREMENT, identity or generated expression. */
   extra: string | null;
   comment: string | null;
+  /** MySQL column collation. */
+  collation: string | null;
 }
 
 export interface DbIndexInfo {

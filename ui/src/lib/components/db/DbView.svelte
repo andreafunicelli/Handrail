@@ -5,6 +5,7 @@
   import DbGrid from "./DbGrid.svelte";
   import DbStructure from "./DbStructure.svelte";
   import DbDdlDialog from "./DbDdlDialog.svelte";
+  import DbStructureEdit from "./DbStructureEdit.svelte";
   import { api } from "../../api";
   import type { DbColumnInfo, DbOpened, DbQueryOutput, DbTableInfo, DbTableStructure } from "../../api/types";
   import { errorMessage, isIpcError } from "../../api/errors";
@@ -17,7 +18,20 @@
   import { buildEdits, editCount, noEdits, primaryResult, resultSummary, tableOverview, tableStats, toCsv, toInserts, toJson, type GridEdits } from "../../util/db";
   import { addHistory, clearHistory, loadHistory, loadTabs, nextTabName, saveTabs, type HistoryEntry, type QueryTabDoc } from "../../util/dbtabs";
   import { statementAt } from "../../util/sqltext";
-  import { createNamespaceSql, dropNamespaceSql, dropTableSql, relKind, renameTableSql, truncateTableSql, validName } from "../../util/ddl";
+  import {
+    alterTableSql,
+    createNamespaceSql,
+    createTableSql,
+    defaultAsSql,
+    defProblem,
+    dropNamespaceSql,
+    dropTableSql,
+    relKind,
+    renameTableSql,
+    truncateTableSql,
+    validName,
+    type TableDef,
+  } from "../../util/ddl";
   import { relativeTime } from "../../util/time";
 
   /** A database in a pane: schema on the left, SQL editor over the results on the right. */
@@ -82,6 +96,20 @@
     danger?: boolean;
     after: (value: string) => void;
   } | null>(null);
+  /** A table's structure being edited (`table` null: a new table). */
+  let editing = $state<{ ns: string; table: string | null; name: string; before: TableDef; def: TableDef } | null>(null);
+  const editProblem = $derived.by(() => {
+    if (!editing) return null;
+    if (editing.table === null && (!validName(editing.name) || tableInfo(editing.ns, editing.name.trim()))) return "tableName";
+    return defProblem(editing.def);
+  });
+  const editStatements = $derived.by((): string[] => {
+    if (!editing || editProblem) return [];
+    const d = info?.kind ?? "mysql";
+    return editing.table === null
+      ? [createTableSql(d, editing.ns, editing.name.trim(), editing.def)]
+      : alterTableSql(d, editing.ns, editing.table, editing.before, editing.def);
+  });
   /** A table's CREATE statement, shown over the results. */
   let ddl = $state<{ title: string; text: string } | null>(null);
   const tableInfo = (ns: string, table: string) => (Array.isArray(tables[ns]) ? (tables[ns] as DbTableInfo[]).find((x) => x.name === table) : undefined);
@@ -130,6 +158,10 @@
 
   function switchTab(i: number) {
     if (i === qcur || running || blocked()) return;
+    if (editing && editStatements.length) {
+      toasts.info(t("db.st.unsavedEdit"));
+      return;
+    }
     // A table's columns still loading for this tab must not make the next tab's rows editable.
     runs++;
     views[qtabs[qcur].key] = { output, active, ranLabel, browse, filterText, editTarget, tableView, structure };
@@ -144,6 +176,8 @@
     edits = editTarget ? noEdits() : null;
     tableView = v?.tableView ?? "data";
     structure = v?.structure ?? null;
+    // An unsaved structure edit belongs to the tab it was started in: it is dropped.
+    editing = null;
     ddl = null;
     selected = null;
     editor?.setText(qtabs[i].sql);
@@ -299,6 +333,7 @@
     edits = null;
     browse = null;
     ddl = null;
+    editing = null;
     ranLabel = sql.length > 80 ? `${sql.slice(0, 80)}…` : sql;
     await execute(() => api.dbQuery(id!, sql, maxRows));
     if (store && !closed) history = addHistory(store, connKey, { sql, at: Date.now(), ms: output?.elapsed_ms ?? 0, ok: !output?.error });
@@ -312,6 +347,7 @@
       filterText = "";
       tableView = "data";
       structure = null;
+      editing = null;
     }
     const b = browse!;
     b.limit = maxRows;
@@ -497,6 +533,85 @@
     };
   }
 
+  /** The structure as the editor works on it (defaults as SQL, names kept to spot changes). */
+  function toDef(s: DbTableStructure): TableDef {
+    const d = dialect();
+    const mariadb = /mariadb/i.test(info?.version ?? "");
+    return {
+      columns: s.columns.map((c) => ({
+        orig: c.name,
+        name: c.name,
+        type: c.data_type,
+        nullable: c.nullable,
+        default: defaultAsSql(d, mariadb, c.default, c.extra, c.data_type),
+        comment: c.comment,
+        extra: c.extra,
+        collation: c.collation,
+      })),
+      indexes: s.indexes.map((i) => ({ orig: i.name, name: i.name, columns: i.columns, unique: i.unique, primary: i.primary })),
+      fks: s.foreign_keys.map((f) => ({
+        orig: f.name,
+        name: f.name,
+        columns: f.columns,
+        refNs: f.ref_namespace,
+        refTable: f.ref_table,
+        refColumns: f.ref_columns,
+        onUpdate: f.on_update,
+        onDelete: f.on_delete,
+      })),
+    };
+  }
+
+  function editStructure() {
+    if (!browse || !structure || blocked()) return;
+    const before = toDef($state.snapshot(structure) as DbTableStructure);
+    editing = { ns: browse.ns, table: browse.table, name: browse.table, before, def: structuredClone(before) };
+  }
+
+  function newTable(ns: string) {
+    if (blocked()) return;
+    const d = dialect();
+    const id: TableDef["columns"][number] =
+      d === "mysql"
+        ? { orig: null, name: "id", type: "int", nullable: false, default: null, comment: null, extra: "auto_increment" }
+        : { orig: null, name: "id", type: "integer", nullable: false, default: null, comment: null, extra: "GENERATED BY DEFAULT AS IDENTITY" };
+    browse = null;
+    output = null;
+    editTarget = null;
+    edits = null;
+    ddl = null;
+    editing = {
+      ns,
+      table: null,
+      name: "",
+      before: { columns: [], indexes: [], fks: [] },
+      def: { columns: [id], indexes: [{ orig: null, name: "", columns: ["id"], unique: true, primary: true }], fks: [] },
+    };
+  }
+
+  /** Show the SQL the edits make; type changes, drops and production need the name typed. */
+  function reviewEdit() {
+    const e = editing;
+    if (!e || editProblem || !editStatements.length) return;
+    const statements = editStatements;
+    const name = e.table ?? e.name.trim();
+    const destructive = statements.some((s) => /\bDROP\b|\bTYPE\b|CHANGE COLUMN/.test(s));
+    ddlDialog = {
+      title: e.table ? t("db.st.alterTitle", { name: `${e.ns}.${name}` }) : t("db.st.createTitle", { name: `${e.ns}.${name}` }),
+      body: dialect() === "mysql" && statements.length > 1 ? t("db.st.mysqlPartial") : undefined,
+      sql: () => statements.join("\n"),
+      confirmName: destructive || prod ? name : null,
+      danger: destructive,
+      after: () => {
+        editing = null;
+        delete columns[`${e.ns}.${name}`];
+        void reloadTables(e.ns);
+        if (e.table) void showStructure(e.ns, e.table);
+        else void openTable(e.ns, name);
+      },
+    };
+  }
+
   function nsMenu(e: MouseEvent, ns: string) {
     e.preventDefault();
     if (blocked()) return;
@@ -506,6 +621,7 @@
       y: e.clientY,
       items: [
         { label: t("db.overview"), icon: "info", action: () => void overview(ns) },
+        { label: t("db.st.newTable"), icon: "plus", action: () => newTable(ns) },
         { label: t("db.refresh"), icon: "refresh", action: () => void reloadTables(ns) },
         "sep",
         {
@@ -827,7 +943,7 @@
           {@const shown = output?.results[0]?.rows.length ?? 0}
           <form class="browse" onsubmit={(e) => (e.preventDefault(), applyFilter())}>
             <div class="seg" role="group" aria-label={t("db.tableView")}>
-              <button type="button" aria-pressed={tableView === "data"} onclick={() => (tableView = "data")}>{t("db.data")}</button>
+              <button type="button" aria-pressed={tableView === "data"} onclick={() => ((tableView = "data"), (editing = null))}>{t("db.data")}</button>
               <button type="button" aria-pressed={tableView === "structure"} onclick={() => showStructure(browse!.ns, browse!.table)}>{t("db.structure")}</button>
             </div>
             {#if tableView === "data"}
@@ -849,6 +965,9 @@
             </span>
             {:else}
               <span class="spacer"></span>
+              {#if structure && !editing && !tableInfo(browse.ns, browse.table)?.view}
+                <button type="button" class="btn sm" onclick={editStructure}><Icon name="edit" size={12} />{t("db.st.edit")}</button>
+              {/if}
             {/if}
             {#if info && tableStats(info)}<span class="stats" title={info.comment ?? undefined}>{tableStats(info)}</span>{/if}
             <button type="button" class="btn sm ghost" onclick={() => showDdl(browse!.ns, browse!.table)}><Icon name="file" size={12} />{t("db.ddl")}</button>
@@ -885,7 +1004,20 @@
             </div>
           </div>
         {/each}
-        {#if browse && tableView === "structure"}
+        {#if editing}
+          <DbStructureEdit
+            bind:def={editing.def}
+            bind:name={editing.name}
+            creating={editing.table === null}
+            dialect={info?.kind ?? "mysql"}
+            namespace={editing.ns}
+            tables={Array.isArray(tables[editing.ns]) ? (tables[editing.ns] as DbTableInfo[]).filter((x) => !x.view).map((x) => x.name) : []}
+            problem={editProblem}
+            statements={editStatements.length}
+            onreview={reviewEdit}
+            oncancel={() => (editing = null)}
+          />
+        {:else if browse && tableView === "structure"}
           {#if structure}<DbStructure {structure} />{:else}<p class="hint center">{t("db.loading")}</p>{/if}
         {:else if running}
           <div class="status"><span class="spinner"></span>{t("db.running")}</div>

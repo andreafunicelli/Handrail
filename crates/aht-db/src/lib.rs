@@ -253,6 +253,9 @@ pub struct ColumnDetail {
     /// column's expression: shown as is.
     pub extra: Option<String>,
     pub comment: Option<String>,
+    /// The column's collation (MySQL; restated when the column is changed, so a change does
+    /// not reset it to the table's default).
+    pub collation: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]

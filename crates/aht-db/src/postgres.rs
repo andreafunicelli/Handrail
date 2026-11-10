@@ -269,6 +269,7 @@ impl Client {
                 primary_key: text_at(r, 4) == "YES",
                 extra: crate::non_empty(at(r, 5).as_ref()),
                 comment: crate::non_empty(at(r, 6).as_ref()),
+                collation: None,
             })
             .collect();
         let indexes = self
