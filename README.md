@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  An SSH workspace for macOS and Windows that brings your servers, files, and AI agents together.<br />
+  An SSH workspace for macOS, Windows and Linux that brings your servers, files, and AI agents together.<br />
   Watch agents work in your live terminal, review commands, and take over whenever you need to.
 </p>
 
@@ -22,6 +22,19 @@
 </p>
 
 ![Handrail Terminal showing an AI agent checking server disk usage in a live SSH session](docs/images/agent.png)
+
+## What's new in 1.1
+
+Handrail 1.1.0, the *Workspace Experience Update*, reworks the interface around the work in front of you. Full list in the [changelog](CHANGELOG.md); compatibility and known limitations in the [release notes](docs/release-notes-1.1.0.md).
+
+- **Home** resumes your last workspace and lists favorites, recent connections and quick actions.
+- **Sidebar filters** (`env:prod`, `type:ssh`, `tag:web`, `is:active`, `-env:dev`) and an **Active sessions** section.
+- **Production is labelled**, not only coloured, in tabs, panes, the sidebar, the AI panel and approval cards.
+- **The AI sidebar** has Summary, Activity and Chat views. An encrypted **operations history** records agent operations, with the command text redacted and no terminal output.
+- **Dual-pane file manager**, a **transfer panel**, and a **comparison before anything is overwritten**.
+- **Test connection** from the editor, without saving, and an editor in sections.
+- **Interface density** (Comfortable or Compact) and an **Italian** translation.
+- **SQL backups** can be browsed without a server, and databases can be exported and imported.
 
 ## Your servers. Your tools. Your call.
 
@@ -78,12 +91,13 @@ Claude Code and Codex run as their official, unmodified CLIs. You sign in throug
 
 ### Connections and terminals
 
-- **Organize your servers:** nested groups, search, environment colors, and SSH jump hosts through ProxyJump.
-- **Build your workspace:** tabs, split panes, saved workspaces, and a command palette with **Ctrl/⌘ K**.
+- **Organize your servers:** nested groups, environment colors and labels, and SSH jump hosts through ProxyJump. Search combines fuzzy text with filters: `env:`, `type:`, `tag:`, `host:`, `user:`, `group:`, `is:active`, `is:fav`; prefix `-` to exclude, separate values with commas (`env:prod,staging`). Favorites, recent connections and open sessions have their own sidebar sections.
+- **Build your workspace:** tabs, split panes, saved workspaces resumed from the home screen, and a command palette with **Ctrl/⌘ K** grouped into sessions, connections, workspaces, AI, files, databases and settings.
+- **Know where you are:** the bar under SSH terminals shows the user, host, jump host and session status, with quick actions (SFTP, new terminal, split, copy host, database through this host). Before a connection is saved, **Test connection** checks the login without opening a shell; unknown host keys are reported, never accepted.
 - **Reuse credentials:** share saved keys and passwords across connections, then rotate them in one place. Identities bundle a user name with its password, key or agent: connections that log in as an identity pick up any change to it.
 - **Save repetitive work:** command snippets with `{{placeholders}}` and suggested read-only diagnostics.
 - **Manage tunnels:** saved local (`-L`), remote (`-R`), and SOCKS5 (`-D`) forwarding, restored after reconnect.
-- **Watch server health:** CPU, memory, disk, load, and uptime beneath Linux SSH terminals, collected over the existing connection.
+- **Watch server health:** CPU, memory, disk, load, and uptime beneath Linux SSH terminals, collected over the existing connection. Readings show when they were taken, and old values are marked stale instead of being shown as live.
 - **Work across servers:** broadcast typing or snippets to selected split panes, with receiving panes visibly outlined.
 
 Import connections from `~/.ssh/config`, PuTTY, MobaXterm, mRemoteNG, WinSCP, SecureCRT, and Tabby.
@@ -95,6 +109,9 @@ Import connections from `~/.ssh/config`, PuTTY, MobaXterm, mRemoteNG, WinSCP, Se
 - **Agent-assisted edits:** ask about a file or selection, then accept or reject the proposed diff.
 - **S3-compatible storage:** work with Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO, and compatible services from the file browser.
 - **Search and select files:** in SFTP and S3 browsers, filter a folder or search its subfolders by name or pattern (`*.log`), and select many files (Ctrl/Cmd-click, Shift-click, Ctrl+A) to download, copy or delete them together.
+- **Dual pane:** open a second pane on another connected server or S3 account. **F5** copies between the panes, **F6** moves within one file system, **Tab** switches pane. Local files go through Upload and Download.
+- **Compare before overwrite:** a copy or upload onto an existing file shows both files' size, time and permissions, and a line diff for text files up to 256 KB.
+- **Transfer panel:** uploads, downloads and copies with their progress and errors, from the icon rail.
 - **Copy between destinations:** stream files and folders between servers, or files between a server and S3, without first saving a local copy. Server-to-server transfers preserve permissions; replacements require confirmation.
 
 ### Remote desktops
@@ -105,9 +122,17 @@ RDP runs in a separate `handrail-rdp` helper process built on [IronRDP](https://
 
 ### Databases
 
-Open MySQL/MariaDB and PostgreSQL databases in tabs: browse schemas and tables, write SQL with completion, and page through results in a fast grid with CSV export. Browse a table page by page, sorted by any column and filtered with a `WHERE` condition; see each table's estimated rows, size and engine, a database overview, and the `CREATE` statement of any table or view. The Structure tab shows columns, indexes and foreign keys and lets you change them, or create a table, after reviewing the exact `ALTER`/`CREATE` SQL; rename, empty or drop tables and create or drop databases the same way, with the name typed to confirm anything destructive. The Server panel lists the server's processes (stop a query or close a connection), variables, status counters and accounts; create accounts, change their password, grant or revoke privileges and drop them (the SQL is built by Handrail and shown with the password masked). Keep several query tabs per database, rerun anything from the query history, run just the statement under the cursor (Ctrl/⌘+Shift+Enter), and save results as CSV, JSON or SQL `INSERT` statements. Tables with a primary key can be edited in the grid; changes are saved together in one transaction. Reach a database through an SSH tunnel: pick the SSH server(s) to go through and set the host as seen from the last one, usually `localhost` (an SSH server’s menu has *New database on this server* to set this up). TLS is optional.
+Open MySQL/MariaDB and PostgreSQL databases in tabs: browse schemas and tables, write SQL with completion, and page through results in a fast grid with CSV export. Browse a table page by page, sorted by any column and filtered with a `WHERE` condition; see each table's estimated rows, size and engine, a database overview, and the `CREATE` statement of any table or view. The Structure tab shows columns, indexes and foreign keys and lets you change them, or create a table, after reviewing the exact `ALTER`/`CREATE` SQL; rename, empty or drop tables and create or drop databases the same way, with the name typed to confirm anything destructive. The Server panel lists the server's processes (stop a query or close a connection), variables, status counters and accounts; create accounts, change their password, grant or revoke privileges and drop them (the SQL is built by Handrail and shown with the password masked). Keep several query tabs per database, rerun anything from the query history, run just the statement under the cursor (Ctrl/⌘+Shift+Enter), and save results as CSV, JSON or SQL `INSERT` statements. Export a database or schema to SQL, import SQL files (including `pg_dump`'s `COPY` blocks) or CSV into a table, and open a `.sql` or `.sql.gz` backup without a server to browse its tables and save one as CSV, JSON or SQL. **Focus SQL** hides the schema panel and gives the editor most of the tab; the splitter between editor and results is dragged or moved with the arrow keys and remembered on each device. Tables with a primary key can be edited in the grid; changes are saved together in one transaction. Reach a database through an SSH tunnel: pick the SSH server(s) to go through and set the host as seen from the last one, usually `localhost` (an SSH server’s menu has *New database on this server* to set this up). TLS is optional.
 
 Share a database tab with agents to let them read its schema and query it. Reads run in a read-only transaction; writes wait for your approval according to your settings (always on production connections), and destructive statements such as `DROP` or a `DELETE` without `WHERE` always do. The request appears in the database tab with the full SQL.
+
+### Agent activity and history
+
+The AI sidebar's **Activity** view lists each step the agent took (command, target, risk, approval, exit code, duration, output), built only from events the terminal reports. **Summary** collects the request, the commands, the errors and the changes without calling the model. Pending approvals stay visible in every view. **Settings › Approvals** keeps an operations history in the vault, encrypted and per device. Known secret patterns in the command are masked, terminal output is never stored, and retention can be configured or the history cleared. External CLIs running in their own window are not covered.
+
+### Appearance and language
+
+Choose **Comfortable** (the default) or **Compact** density and English or Italian in **Settings › Appearance**. The terminal and editor keep their own font sizes.
 
 ## Encrypted vault and sync
 

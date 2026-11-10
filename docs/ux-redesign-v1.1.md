@@ -56,14 +56,21 @@ BE = new backend; X = cross-cutting.
 - [x] FE — Active sessions section (focuses the open pane; numbered duplicates).
 - [x] UX — Favorites and Recent sections in the sidebar (same data as before), collapsible.
 - [x] UX — Connect / more buttons on rows; connect focuses an open session.
-- [ ] UX — Home: Resume last workspace, favorites, recent activity, quick actions, empty state.
-- [ ] UX — Command palette grouping, shortcuts, more actions.
+- [x] UX — Home: Resume last workspace (with a summary of what it holds), other workspaces,
+  favorites, recent connections, quick actions, first-run paths. Restoring skips panes whose
+  connection was deleted (it used to open a local shell in their place).
+- [x] UX — Command palette sections (open sessions, favorites, connections, workspaces, AI, files,
+  databases, settings), shortcut hints, active-session context, more actions.
 
 ### Phase 3 — Terminal
-- [ ] UX — Session context (host, user, env, jump, status, agent) without duplication.
-- [ ] UX — PROD label in tabs, pane headers, AI panel.
-- [ ] UX — Metrics: labels, tooltips, last refresh, stale state, thresholds.
-- [ ] FE — Quick actions (SFTP, new terminal, split, copy host/address, DB via host, details).
+- [x] UX — Session context in the bar under SSH terminals (user@host, via jump host, status,
+  agent); the name stays in the tab and pane header.
+- [x] UX — PROD label in tabs (a tab takes its most sensitive pane), split pane headers, session
+  bar, sidebar, palette, home, AI panel, approval cards and the database toolbar.
+- [x] UX — Metrics: labels, tooltips with units, last refresh, stale/unavailable/disconnected
+  states (no old values shown as live), warn ≥ 80 % and danger ≥ 90 %.
+- [x] FE — Quick actions (SFTP, new terminal, split, copy host/address, DB via host, details)
+  from the bar, the terminal context menu and the tab menu.
 
 ### Phase 4 — AI
 - [x] FE — Summary / Activity / Chat views (activity from real events; summary from real
@@ -80,7 +87,8 @@ BE = new backend; X = cross-cutting.
   own window (their calls never reach this UI). No backend change: written by the UI in batches.
 
 ### Phase 5 — Operational tools
-- [ ] UX — Database: focus SQL mode, resizable split, collapsible schema, status and errors.
+- [x] UX — Database: focus SQL mode, resizable editor/results split (kept per device),
+  collapsible schema, open database and PROD in the toolbar, titled errors with copy.
 - [x] FE — Dual-pane file manager: a second pane on any connected SSH session or S3 account;
   copy between panes (F5) where `copyBetween` supports it (S3 → S3 and folders to/from S3 are
   explained, not offered); move (F6) only inside one file system (a rename); Tab switches pane.
@@ -92,12 +100,19 @@ BE = new backend; X = cross-cutting.
   first, since uploads replace silently) open a comparison of path, size, time, type and
   permissions, with an on-demand line diff for text files up to 256 KB on both sides; local
   files, folders, binary or bigger files get an explicit "no line comparison" reason.
-- [ ] UX — Connection editor sections; BE — real Test Connection.
+- [x] UX — Connection editor sections (General, Authentication, Network, Advanced; the last two
+  open themselves when they hold values or an error).
+- [x] BE — Test connection without saving: SSH login through jump hosts (no shell, no command;
+  unknown host keys are refused and reported with their fingerprint, never recorded), database
+  connect/close through the tunnel, RDP reachability only ("credentials not checked"); 15 s.
 
 ### Phase 6–7 — Polish and release
-- [ ] Onboarding next steps after vault creation.
-- [ ] Translate keys added during 1.1; accessibility, responsive and performance review.
-- [ ] README, CHANGELOG, release notes, release readiness report.
+- [x] Onboarding: a new vault's home screen offers import, add by hand, or set up AI (built-in
+  agent or external CLI), with a privacy note; the tour still runs and can be replayed.
+- [x] Italian for every key (1480), checked by a test (keys and placeholders).
+- [~] Accessibility, responsive and performance review: see the release readiness report.
+- [x] README, CHANGELOG, release notes (`docs/release-notes-1.1.0.md`).
+- [ ] Release readiness: desktop validation on macOS, Windows and Linux (see the report).
 
 ## Decisions
 

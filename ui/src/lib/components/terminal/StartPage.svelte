@@ -186,11 +186,12 @@
     letter-spacing: -0.02em;
   }
   .lede {
-    display: flex;
-    align-items: center;
-    gap: 4px;
     margin: 0 0 32px;
     color: var(--muted);
+    line-height: 1.8;
+  }
+  .lede .kbd {
+    margin: 0 2px;
   }
   .lede .kbd:first-of-type {
     margin-left: 4px;
