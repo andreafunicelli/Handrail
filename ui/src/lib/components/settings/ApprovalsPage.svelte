@@ -2,6 +2,7 @@
   import { segmented } from "../../actions/segmented";
   import { onMount } from "svelte";
   import Icon from "../icons/Icon.svelte";
+  import OpsHistory from "../ai/OpsHistory.svelte";
   import { t } from "../../i18n";
   import { api } from "../../api";
   import type { ApprovalMode, ApprovalSettings } from "../../api/types";
@@ -103,6 +104,8 @@
     <button class="btn" disabled={!pattern.trim()}>{t("appr.denyAdd")}</button>
   </form>
   {#if patternError}<p class="hint err" id="deny-error" role="alert">{patternError}</p>{/if}
+
+  <OpsHistory />
 {:else}
   <p class="hint">{t("common.loading")}</p>
 {/if}
