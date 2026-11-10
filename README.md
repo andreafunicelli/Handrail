@@ -60,6 +60,8 @@ The agent uses the terminal you are looking at. Its commands and their output ap
 
 A guided tour runs after vault creation. Replay it from **Settings › About** or **Take the tour** in the command palette. The app also checks for new releases; install an available update with **Update and restart**.
 
+**Trying unreleased builds?** Every push to the `nightly` branch publishes a *Handrail Nightly* prerelease (`nightly-<version>`, e.g. `nightly-1.1.0-212`) on the [releases page](https://github.com/andreafunicelli/Handrail/releases). It installs beside the stable app with its own data folder, and updates itself from the nightly channel. On Linux, use the nightly AppImage to keep both: the nightly and stable `.deb`/`.rpm` packages conflict. A nightly that opens your synced vault edits the same data your other devices use, so use a test vault or a separate sync folder for testing. Stable installs never receive nightly builds.
+
 **Setting up another device?** Choose **“I already use Handrail on another device”**, select the same sync destination, and enter the Secret Key from your Emergency Kit and your master password.
 
 ## AI assistance with visible commands

@@ -68,6 +68,8 @@ fn external_url(s: &str) -> Result<tauri::Url, String> {
 
 /// App data directory of builds released as "AIHubTerm" (bundle identifier `dev.aihubterm.app`).
 const LEGACY_DATA_DIR_NAME: &str = "dev.aihubterm.app";
+/// The identifier of released builds; nightly builds use another (see release.yml).
+const STABLE_IDENTIFIER: &str = "dev.handrail.desktop";
 
 /// Moves the vault of an AIHubTerm install to Handrail's data directory, once: only when the
 /// new directory does not exist yet. Both live in the same per-user parent directory.
@@ -97,7 +99,11 @@ pub fn run() {
                 Some(d) => std::path::PathBuf::from(d),
                 None => {
                     let dir = app.path().app_data_dir()?;
-                    migrate_legacy_data_dir(&dir);
+                    // Only the stable app takes over an AIHubTerm data directory: a nightly
+                    // build (its own identifier and data directory) must never move it.
+                    if app.config().identifier == STABLE_IDENTIFIER {
+                        migrate_legacy_data_dir(&dir);
+                    }
                     dir
                 }
             };
