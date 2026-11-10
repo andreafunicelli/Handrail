@@ -35,6 +35,7 @@
     type TableDef,
   } from "../../util/ddl";
   import { relativeTime } from "../../util/time";
+  import { load as loadPref, save as savePref } from "../../util/storage";
 
   /** A database in a pane: schema on the left, SQL editor over the results on the right. */
   let { connectionId, focused }: { connectionId: string; focused: boolean } = $props();
@@ -443,6 +444,50 @@
   // ----- changes to the structure: the SQL is shown, and destructive ones need the name typed.
   const dialect = () => info?.kind ?? "mysql";
   const prod = $derived(conn?.env === "prod");
+
+  // ---- layout: schema panel, editor height, focus mode (per device) ----
+  type DbLayout = { schema: boolean; editorPct: number; focus: boolean };
+  let layout = $state<DbLayout>({ schema: true, editorPct: 34, focus: false, ...loadPref<Partial<DbLayout>>("dbLayout", {}) });
+  const keepLayout = () => savePref("dbLayout", $state.snapshot(layout));
+  let mainEl = $state<HTMLElement>();
+  /** Editor height as a share of the work area: the focus mode gives the editor most of it. */
+  const editorPct = $derived(layout.focus ? Math.max(layout.editorPct, 65) : layout.editorPct);
+  const clampPct = (v: number) => Math.min(85, Math.max(12, Math.round(v)));
+  function dragSplit(e: PointerEvent) {
+    if (!mainEl) return;
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const box = mainEl.getBoundingClientRect();
+    const top = (mainEl.querySelector(".editor") as HTMLElement | null)?.getBoundingClientRect().top ?? box.top;
+    const move = (ev: PointerEvent) => {
+      layout.editorPct = clampPct(((ev.clientY - top) / Math.max(1, box.bottom - top)) * 100);
+      layout.focus = false;
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      keepLayout();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  }
+  function splitKey(e: KeyboardEvent) {
+    const step = e.shiftKey ? 10 : 3;
+    if (e.key === "ArrowUp") layout.editorPct = clampPct(editorPct - step);
+    else if (e.key === "ArrowDown") layout.editorPct = clampPct(editorPct + step);
+    else return;
+    e.preventDefault();
+    layout.focus = false;
+    keepLayout();
+  }
+  function toggleFocus() {
+    layout.focus = !layout.focus;
+    keepLayout();
+  }
+  function toggleSchema() {
+    layout.schema = !layout.schema;
+    keepLayout();
+  }
 
   async function runDdl(sql: string): Promise<string | null> {
     if (!id) return t("db.ddl.closed");
@@ -869,9 +914,9 @@
   const current = $derived(output?.results[active] ?? null);
 </script>
 
-<div class="db">
+<div class="db" class:noschema={!layout.schema || layout.focus}>
   {#if phase === "live"}
-    <aside class="schema" aria-label={t("db.schema")}>
+    <aside class="schema" aria-label={t("db.schema")} hidden={!layout.schema || layout.focus}>
       <div class="schema-head">
         <Icon name="database" size={13} />
         <span class="title" title={info?.version}>{info?.database ?? conn?.name ?? ""}</span>
@@ -939,8 +984,22 @@
         {/each}
       </ul>
     </aside>
-    <section class="main">
+    <section class="main" bind:this={mainEl} style:--editor-h="{editorPct}%">
       <div class="toolbar">
+        <button
+          class="icon-btn"
+          class:on={layout.schema && !layout.focus}
+          aria-pressed={layout.schema && !layout.focus}
+          title={t("db.ux.schemaToggle")}
+          aria-label={t("db.ux.schemaToggle")}
+          onclick={toggleSchema}
+          disabled={layout.focus}><Icon name="layout" size={13} /></button
+        >
+        <span class="dbid" title={info?.version}>
+          <Icon name="database" size={12} />
+          <strong>{info?.database ?? conn?.name ?? ""}</strong>
+          {#if prod}<span class="env-prod-badge">PROD</span>{/if}
+        </span>
         <button class="btn primary sm" onclick={run} disabled={running} title={t("db.runHint")}><Icon name="play" size={12} />{t("db.run")}</button>
         <button class="btn sm" onclick={runCurrent} disabled={running} title={t("db.runCurrentHint")}>{t("db.runCurrent")}</button>
         <button class="btn sm ghost" onclick={openHistory} aria-haspopup="menu" title={t("db.history")}><Icon name="clock" size={12} />{t("db.history")}</button>
@@ -958,6 +1017,9 @@
         <button class="btn sm share" class:on={shared} onclick={toggleShare} title={t("db.shareHint")} aria-pressed={shared}
           ><Icon name="sparkle" size={12} />{shared ? t("db.shared") : t("db.share")}</button
         >
+        <button class="btn sm ghost" class:on={layout.focus} aria-pressed={layout.focus} onclick={toggleFocus} title={t("db.ux.focusHint")}
+          ><Icon name={layout.focus ? "minimize" : "maximize"} size={12} />{t("db.ux.focus")}</button
+        >
         <span class="ver" title={info?.version}>{info?.kind === "postgres" ? "PostgreSQL" : "MySQL"} · {conn?.user}@{conn?.host}</span>
       </div>
       <div class="qtabs" role="tablist" aria-label={t("db.queryTabs")}>
@@ -970,6 +1032,20 @@
         <button class="icon-btn" aria-label={t("db.newQuery")} title={t("db.newQuery")} onclick={newTab} disabled={running}><Icon name="plus" size={12} /></button>
       </div>
       <div class="editor" bind:this={editorHost}></div>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+      <div
+        class="splitter"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label={t("db.ux.resize")}
+        aria-valuenow={editorPct}
+        aria-valuemin={12}
+        aria-valuemax={85}
+        tabindex="0"
+        onpointerdown={dragSplit}
+        onkeydown={splitKey}
+        ondblclick={() => ((layout.editorPct = 34), (layout.focus = false), keepLayout())}
+      ></div>
       <div class="results">
         {#if browse}
           {@const info = tableInfo(browse.ns, browse.table)}
@@ -1092,7 +1168,16 @@
             {/if}
             <span class="ran mono" title={ranLabel}>{ranLabel}</span>
           </div>
-          {#if output.error}<p class="error" role="alert">{output.error}</p>{/if}
+          {#if output.error}
+            <div class="error" role="alert">
+              <Icon name="alert" size={13} />
+              <div class="emsg">
+                <strong>{output.results.length ? t("db.ux.errorAfter", { n: output.results.length }) : t("db.ux.errorTitle")}</strong>
+                <pre>{output.error}</pre>
+              </div>
+              <button class="btn sm ghost" onclick={() => copyText(output!.error ?? "")}><Icon name="copy" size={12} />{t("db.ux.copyError")}</button>
+            </div>
+          {/if}
           {#if current && current.columns.length}
             <div class="gridbox">
               {#if edits && active === 0}
@@ -1309,7 +1394,7 @@
   }
   .main {
     display: grid;
-    grid-template-rows: auto auto minmax(90px, 34%) minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(60px, var(--editor-h, 34%)) 6px minmax(0, 1fr);
     grid-template-columns: minmax(0, 1fr);
     min-width: 0;
     min-height: 0;
@@ -1317,7 +1402,8 @@
   .toolbar {
     display: flex;
     align-items: center;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 6px 8px;
     padding: 6px 8px;
     border-bottom: 1px solid var(--border);
   }
@@ -1591,14 +1677,57 @@
     text-align: right;
   }
   .error {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
     margin: 0;
     padding: 8px 10px;
     color: var(--danger);
     background: var(--danger-soft);
-    font-family: var(--font-mono);
+    border-bottom: 1px solid var(--border);
     font-size: var(--fs-meta);
+  }
+  .error .emsg {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .error pre {
+    margin: 0;
+    font-family: var(--font-mono);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+    color: var(--text);
+  }
+  .db.noschema {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .splitter {
+    cursor: row-resize;
+    background: var(--border);
+    border-top: 2px solid var(--bg);
+    border-bottom: 2px solid var(--bg);
+  }
+  .splitter:hover,
+  .splitter:focus-visible {
+    background: var(--accent);
+  }
+  .dbid {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 8px;
+    margin-right: 2px;
+    border-right: 1px solid var(--border);
+    color: var(--text);
+    white-space: nowrap;
+    flex: none;
+    max-width: 240px;
+  }
+  .dbid strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .gridbox {
     flex: 1;
