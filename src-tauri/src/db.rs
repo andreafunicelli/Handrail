@@ -289,6 +289,21 @@ pub async fn db_table_rows(
     s.client.query(&sql, l).await
 }
 
+/// A table's columns, indexes and foreign keys.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_table_structure(
+    state: State<'_, AppState>,
+    id: String,
+    namespace: String,
+    table: String,
+) -> Result<aht_db::TableStructure> {
+    session(&state, &id)
+        .await?
+        .client
+        .structure(&namespace, &table)
+        .await
+}
+
 /// The statement that creates a table or view.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn db_table_ddl(

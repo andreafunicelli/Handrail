@@ -52,6 +52,7 @@ import type {
   DbQueryOutput,
   DbTableInfo,
   DbRowsPage,
+  DbTableStructure,
   DbColumnInfo,
   DbRowEdit,
   DbApprovalRequest,
@@ -188,6 +189,8 @@ export interface Api {
   dbQuery(id: string, sql: string, maxRows?: number): Promise<DbQueryOutput>;
   /** The rows of one table. */
   dbTableRows(id: string, namespace: string, table: string, page?: DbRowsPage): Promise<DbQueryOutput>;
+  /** A table's columns, indexes and foreign keys. */
+  dbTableStructure(id: string, namespace: string, table: string): Promise<DbTableStructure>;
   /** The statement that creates a table or view. */
   dbTableDdl(id: string, namespace: string, table: string): Promise<string>;
   /** Save exported rows to a file the user picks in a save dialog; null when cancelled. */

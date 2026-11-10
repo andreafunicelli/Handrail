@@ -230,6 +230,63 @@ pub struct TableInfo {
     pub comment: Option<String>,
 }
 
+/// A table's columns, indexes and foreign keys (the structure tab).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct TableStructure {
+    pub columns: Vec<ColumnDetail>,
+    pub indexes: Vec<IndexInfo>,
+    pub foreign_keys: Vec<ForeignKeyInfo>,
+}
+
+/// A column with what the structure tab shows beyond [`ColumnInfo`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ColumnDetail {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    /// The default as the server reports it (an expression).
+    pub default: Option<String>,
+    pub primary_key: bool,
+    /// MySQL `AUTO_INCREMENT`, PostgreSQL identity (`ALWAYS` / `BY DEFAULT`), or a generated
+    /// column's expression: shown as is.
+    pub extra: Option<String>,
+    pub comment: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct IndexInfo {
+    pub name: String,
+    /// Columns or expressions, in order.
+    pub columns: Vec<String>,
+    pub unique: bool,
+    pub primary: bool,
+    /// `BTREE`, `HASH`, `FULLTEXT`, `gin`...
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ForeignKeyInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub ref_namespace: String,
+    pub ref_table: String,
+    pub ref_columns: Vec<String>,
+    /// `CASCADE`, `SET NULL`, `RESTRICT`, `NO ACTION`, `SET DEFAULT`.
+    pub on_update: String,
+    pub on_delete: String,
+}
+
+/// A list the server sent joined by the unit separator.
+pub(crate) fn split_list(text: Option<&String>) -> Vec<String> {
+    text.map(|t| {
+        t.split('\u{1f}')
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 /// A number the server sent as text; negative or missing is `None`.
 pub(crate) fn count(text: Option<&String>) -> Option<i64> {
     text.and_then(|t| t.trim().parse::<f64>().ok())
@@ -327,6 +384,14 @@ impl DbClient {
         match &self.inner {
             Inner::Mysql(c) => c.ddl(namespace, table).await,
             Inner::Postgres(c) => c.ddl(namespace, table).await,
+        }
+    }
+
+    /// A table's columns, indexes and foreign keys.
+    pub async fn structure(&self, namespace: &str, table: &str) -> Result<TableStructure> {
+        match &self.inner {
+            Inner::Mysql(c) => c.structure(namespace, table).await,
+            Inner::Postgres(c) => c.structure(namespace, table).await,
         }
     }
 

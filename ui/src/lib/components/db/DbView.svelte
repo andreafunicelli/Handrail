@@ -3,8 +3,10 @@
   import Icon from "../icons/Icon.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
   import DbGrid from "./DbGrid.svelte";
+  import DbStructure from "./DbStructure.svelte";
+  import DbDdlDialog from "./DbDdlDialog.svelte";
   import { api } from "../../api";
-  import type { DbColumnInfo, DbOpened, DbQueryOutput, DbTableInfo } from "../../api/types";
+  import type { DbColumnInfo, DbOpened, DbQueryOutput, DbTableInfo, DbTableStructure } from "../../api/types";
   import { errorMessage, isIpcError } from "../../api/errors";
   import { t } from "../../i18n";
   import { connections } from "../../stores/connections.svelte";
@@ -15,6 +17,7 @@
   import { buildEdits, editCount, noEdits, primaryResult, resultSummary, tableOverview, tableStats, toCsv, toInserts, toJson, type GridEdits } from "../../util/db";
   import { addHistory, clearHistory, loadHistory, loadTabs, nextTabName, saveTabs, type HistoryEntry, type QueryTabDoc } from "../../util/dbtabs";
   import { statementAt } from "../../util/sqltext";
+  import { createNamespaceSql, dropNamespaceSql, dropTableSql, renameTableSql, truncateTableSql, validName } from "../../util/ddl";
   import { relativeTime } from "../../util/time";
 
   /** A database in a pane: schema on the left, SQL editor over the results on the right. */
@@ -66,6 +69,19 @@
     filter: string;
   } | null>(null);
   let filterText = $state("");
+  /** The table shown as rows or as its structure. */
+  let tableView = $state<"data" | "structure">("data");
+  let structure = $state<DbTableStructure | null>(null);
+  /** A structure change waiting for the user (SQL shown first). */
+  let ddlDialog = $state<{
+    title: string;
+    body?: string;
+    input?: { label: string; value: string };
+    sql: (value: string) => string | null;
+    confirmName?: string | null;
+    danger?: boolean;
+    after: (value: string) => void;
+  } | null>(null);
   /** A table's CREATE statement, shown over the results. */
   let ddl = $state<{ title: string; text: string } | null>(null);
   const tableInfo = (ns: string, table: string) => (Array.isArray(tables[ns]) ? (tables[ns] as DbTableInfo[]).find((x) => x.name === table) : undefined);
@@ -290,6 +306,8 @@
     if (!keep || browse?.ns !== ns || browse.table !== table) {
       browse = { ns, table, offset: 0, back: [], limit: maxRows, orderBy: null, desc: false, filter: "" };
       filterText = "";
+      tableView = "data";
+      structure = null;
     }
     const b = browse!;
     b.limit = maxRows;
@@ -357,6 +375,166 @@
       b.offset = 0;
       b.back = [];
     });
+
+  /** A table's columns, indexes and foreign keys (its rows load too, for the Data side). */
+  async function showStructure(ns: string, table: string) {
+    if (!id) return;
+    if (browse?.ns !== ns || browse.table !== table) await openTable(ns, table);
+    if (browse?.ns !== ns || browse.table !== table) return;
+    tableView = "structure";
+    structure = null;
+    try {
+      const s = await api.dbTableStructure(id, ns, table);
+      if (browse?.ns === ns && browse.table === table) structure = s;
+    } catch (e) {
+      toasts.error(e);
+      tableView = "data";
+    }
+  }
+
+  // ----- changes to the structure: the SQL is shown, and destructive ones need the name typed.
+  const dialect = () => info?.kind ?? "mysql";
+  const prod = $derived(conn?.env === "prod");
+
+  async function runDdl(sql: string): Promise<string | null> {
+    if (!id) return t("db.ddl.closed");
+    try {
+      const out = await api.dbQuery(id, sql, 1);
+      return out.error;
+    } catch (e) {
+      return errorMessage(e);
+    }
+  }
+
+  /** The table shown is gone (dropped or renamed): clear it. */
+  function forget(ns: string, table: string) {
+    if (browse?.ns !== ns || browse.table !== table) return;
+    browse = null;
+    output = null;
+    editTarget = null;
+    edits = null;
+    structure = null;
+    ddl = null;
+  }
+
+  async function reloadTables(ns: string) {
+    delete tables[ns];
+    for (const k of Object.keys(columns)) if (k.startsWith(`${ns}.`)) delete columns[k];
+    await toggleNs(ns, true);
+  }
+
+  function reloadNamespaces() {
+    tables = {};
+    columns = {};
+    void loadNamespaces();
+  }
+
+  function tableMenu(e: MouseEvent, ns: string, tb: DbTableInfo) {
+    e.preventDefault();
+    if (blocked()) return;
+    const d = dialect();
+    const name = `${ns}.${tb.name}`;
+    menu = {
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { label: t("db.openTable"), icon: "layout", action: () => void openTable(ns, tb.name) },
+        { label: t("db.structure"), icon: "key", action: () => void showStructure(ns, tb.name) },
+        { label: t("db.ddl"), icon: "file", action: () => void showDdl(ns, tb.name) },
+        "sep",
+        {
+          label: t("db.renameTable"),
+          icon: "edit",
+          action: () =>
+            (ddlDialog = {
+              title: t("db.renameTitle", { name }),
+              input: { label: t("db.newName"), value: tb.name },
+              sql: (v) => (validName(v) && v.trim() !== tb.name ? renameTableSql(d, ns, tb.name, v.trim(), tb.view) : null),
+              confirmName: prod ? tb.name : null,
+              after: () => (forget(ns, tb.name), void reloadTables(ns)),
+            }),
+        },
+        ...(tb.view
+          ? []
+          : [
+              {
+                label: t("db.truncate"),
+                icon: "trash" as const,
+                danger: true,
+                action: () =>
+                  (ddlDialog = {
+                    title: t("db.truncateTitle", { name }),
+                    body: t("db.truncateBody"),
+                    sql: () => truncateTableSql(d, ns, tb.name),
+                    confirmName: tb.name,
+                    danger: true,
+                    after: () => {
+                      void reloadTables(ns);
+                      if (browse?.ns === ns && browse.table === tb.name) void openTable(ns, tb.name, true);
+                    },
+                  }),
+              },
+            ]),
+        {
+          label: t(tb.view ? "db.dropView" : "db.dropTable"),
+          icon: "trash",
+          danger: true,
+          action: () =>
+            (ddlDialog = {
+              title: t(tb.view ? "db.dropViewTitle" : "db.dropTableTitle", { name }),
+              body: t("db.dropBody"),
+              sql: () => dropTableSql(d, ns, tb.name, tb.view),
+              confirmName: tb.name,
+              danger: true,
+              after: () => (forget(ns, tb.name), void reloadTables(ns)),
+            }),
+        },
+      ],
+    };
+  }
+
+  function nsMenu(e: MouseEvent, ns: string) {
+    e.preventDefault();
+    if (blocked()) return;
+    const d = dialect();
+    menu = {
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { label: t("db.overview"), icon: "info", action: () => void overview(ns) },
+        { label: t("db.refresh"), icon: "refresh", action: () => void reloadTables(ns) },
+        "sep",
+        {
+          label: t(d === "mysql" ? "db.dropDatabase" : "db.dropSchema"),
+          icon: "trash",
+          danger: true,
+          action: () =>
+            (ddlDialog = {
+              title: t(d === "mysql" ? "db.dropDatabaseTitle" : "db.dropSchemaTitle", { name: ns }),
+              body: t("db.dropNsBody"),
+              sql: () => dropNamespaceSql(d, ns),
+              confirmName: ns,
+              danger: true,
+              after: () => {
+                if (browse?.ns === ns) forget(ns, browse.table);
+                reloadNamespaces();
+              },
+            }),
+        },
+      ],
+    };
+  }
+
+  function newNamespace() {
+    if (blocked()) return;
+    const d = dialect();
+    ddlDialog = {
+      title: t(d === "mysql" ? "db.newDatabase" : "db.newSchema"),
+      input: { label: t("db.newName"), value: "" },
+      sql: (v) => (validName(v) && !namespaces.includes(v.trim()) ? createNamespaceSql(d, v.trim()) : null),
+      after: () => reloadNamespaces(),
+    };
+  }
 
   async function showDdl(ns: string, table: string) {
     if (!id) return;
@@ -547,6 +725,9 @@
       <div class="schema-head">
         <Icon name="database" size={13} />
         <span class="title" title={info?.version}>{info?.database ?? conn?.name ?? ""}</span>
+        <button class="icon-btn" title={t(info?.kind === "postgres" ? "db.newSchema" : "db.newDatabase")} aria-label={t(info?.kind === "postgres" ? "db.newSchema" : "db.newDatabase")} onclick={newNamespace}
+          ><Icon name="plus" size={12} /></button
+        >
         <button class="icon-btn" title={t("db.refresh")} aria-label={t("db.refresh")} onclick={() => ((tables = {}), (columns = {}), void loadNamespaces())}
           ><Icon name="refresh" size={12} /></button
         >
@@ -555,7 +736,7 @@
         {#each namespaces as ns (ns)}
           <li>
             <div class="nsrow">
-              <button class="node ns" onclick={() => toggleNs(ns)} aria-expanded={!!openNs[ns]}>
+              <button class="node ns" onclick={() => toggleNs(ns)} oncontextmenu={(e) => nsMenu(e, ns)} aria-expanded={!!openNs[ns]}>
                 <Icon name={openNs[ns] ? "chevronDown" : "chevronRight"} size={11} /><Icon name="folder" size={12} />{ns}
               </button>
               <button class="icon-btn over" title={t("db.overview")} aria-label={t("db.overviewOf", { ns })} onclick={() => overview(ns)}><Icon name="info" size={12} /></button>
@@ -577,6 +758,7 @@
                         >
                         <button
                           class="tbname"
+                          oncontextmenu={(e) => tableMenu(e, ns, tb)}
                           title={[t("db.openTable"), tableStats(tb), tb.comment].filter(Boolean).join("\n")}
                           onclick={() => openTable(ns, tb.name)}
                           ondblclick={() => openTable(ns, tb.name)}
@@ -640,6 +822,11 @@
           {@const info = tableInfo(browse.ns, browse.table)}
           {@const shown = output?.results[0]?.rows.length ?? 0}
           <form class="browse" onsubmit={(e) => (e.preventDefault(), applyFilter())}>
+            <div class="seg" role="group" aria-label={t("db.tableView")}>
+              <button type="button" aria-pressed={tableView === "data"} onclick={() => (tableView = "data")}>{t("db.data")}</button>
+              <button type="button" aria-pressed={tableView === "structure"} onclick={() => showStructure(browse!.ns, browse!.table)}>{t("db.structure")}</button>
+            </div>
+            {#if tableView === "data"}
             <span class="where mono">WHERE</span>
             <input
               class="input mono"
@@ -656,6 +843,9 @@
               <span class="mono">{shown ? `${(browse.offset + 1).toLocaleString()}–${(browse.offset + shown).toLocaleString()}` : "0"}</span>
               <button type="button" class="icon-btn" disabled={running || !hasMore} title={t("db.pageNext")} aria-label={t("db.pageNext")} onclick={() => page(1)}>›</button>
             </span>
+            {:else}
+              <span class="spacer"></span>
+            {/if}
             {#if info && tableStats(info)}<span class="stats" title={info.comment ?? undefined}>{tableStats(info)}</span>{/if}
             <button type="button" class="btn sm ghost" onclick={() => showDdl(browse!.ns, browse!.table)}><Icon name="file" size={12} />{t("db.ddl")}</button>
           </form>
@@ -691,7 +881,9 @@
             </div>
           </div>
         {/each}
-        {#if running}
+        {#if browse && tableView === "structure"}
+          {#if structure}<DbStructure {structure} />{:else}<p class="hint center">{t("db.loading")}</p>{/if}
+        {:else if running}
           <div class="status"><span class="spinner"></span>{t("db.running")}</div>
         {:else if output}
           <div class="status" class:err={!!output.error}>
@@ -787,6 +979,26 @@
 </div>
 
 {#if menu}<ContextMenu {...menu} onclose={() => (menu = null)} />{/if}
+{#if ddlDialog}
+  {@const d = ddlDialog}
+  <DbDdlDialog
+    title={d.title}
+    body={d.body}
+    input={d.input}
+    sql={d.sql}
+    confirmName={d.confirmName}
+    danger={d.danger}
+    run={async (sql) => {
+      const err = await runDdl(sql);
+      if (!err) {
+        toasts.success(t("db.ddl.done"));
+        d.after(sql);
+      }
+      return err;
+    }}
+    onclose={() => (ddlDialog = null)}
+  />
+{/if}
 
 <style>
   .db {
@@ -1034,6 +1246,25 @@
     padding: 5px 8px;
     border-bottom: 1px solid var(--border);
     flex-wrap: wrap;
+  }
+  .browse .seg {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .browse .seg button {
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  .browse .seg button[aria-pressed="true"] {
+    background: var(--accent-soft);
+    color: var(--text);
   }
   .browse .where {
     color: var(--faint);
