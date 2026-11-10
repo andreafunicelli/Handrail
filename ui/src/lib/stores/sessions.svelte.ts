@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { AuthPromptEvent, HostKeyEvent, SessionInfo, TunnelStatus } from "../api/types";
+import type { AuthPromptEvent, HostKeyEvent, SessionInfo, SessionState, TunnelStatus } from "../api/types";
 import { errorMessage } from "../api/errors";
 import { b64ToBytes } from "../util/b64";
 import { uuid } from "../util/id";
@@ -43,6 +43,19 @@ export interface Workspace {
 
 const COLS = 120;
 const ROWS = 32;
+
+/** A pane connected to a saved connection (a terminal, a remote desktop, a database, or one
+ *  still logging in), for the "Active sessions" list. */
+export interface OpenPane {
+  tabId: string;
+  leafId: string;
+  leafSession: string;
+  connectionId: string;
+  /** Live state of a terminal; null for other panes. */
+  state: SessionState | null;
+  /** Still logging in. */
+  pending: boolean;
+}
 
 /** A dropped SSH session logging in again in the background, keyed by the old session id. */
 export interface Reconnect {
@@ -129,6 +142,33 @@ export class Sessions {
     return id && isTerminal(id) ? id : null;
   });
   activeSession = $derived(this.activeSessionId ? (this.infos[this.activeSessionId] ?? null) : null);
+
+  /** Every pane on a saved connection, tab by tab. */
+  openPanes = $derived.by((): OpenPane[] => {
+    const out: OpenPane[] = [];
+    for (const tab of this.tabs) {
+      for (const l of leaves(tab.layout)) {
+        const id = l.sessionId;
+        let connectionId: string | null = null;
+        let state: SessionState | null = null;
+        let pending = false;
+        if (isView(id)) connectionId = viewConnectionOf(id);
+        else if (isPending(id)) {
+          connectionId = this.pending[pendingRef(id)]?.connectionId ?? null;
+          pending = true;
+        } else if (isTerminal(id)) {
+          const info = this.infos[id];
+          connectionId = info?.connection_id ?? null;
+          state = info?.state ?? null;
+        }
+        if (connectionId && connectionId !== "local") out.push({ tabId: tab.id, leafId: l.id, leafSession: id, connectionId, state, pending });
+      }
+    }
+    return out;
+  });
+
+  /** Connections with at least one open pane. */
+  activeConnections = $derived(new Set(this.openPanes.map((p) => p.connectionId)));
   /** The SSH session the focused pane works on: its terminal, file browser or file editor. */
   contextSession = $derived.by(() => {
     const tab = this.activeTab;

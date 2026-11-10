@@ -14,6 +14,9 @@
   import type { Connection, S3Account, SessionState } from "../../api/types";
   import { blankS3Account, s3 } from "../../stores/s3.svelte";
   import { s3Where } from "../../util/s3";
+  import { filterConnections, parseQuery, removeToken, type QueryContext } from "../../util/connQuery";
+  import { load, save } from "../../util/storage";
+  import type { OpenPane } from "../../stores/sessions.svelte";
 
   let query = $state("");
   let quick = $state("");
@@ -78,11 +81,93 @@
     if (ok) await s3.remove(a.id).catch(toasts.error);
   }
 
-  const results = $derived(
-    query.trim()
-      ? fuzzyFilter(connections.list.filter(inTab), query, (c) => [c.name, c.host, `${c.user}@${c.host}`, ...c.tags, groupPath(connections.groups, c.group_id)])
-      : null,
+  /** The search: filter words (`env:prod type:ssh tag:web host:10.200 group:x is:active`)
+   *  plus free text, matched fuzzily. */
+  const parsed = $derived(parseQuery(query));
+  const queryCtx = $derived<QueryContext>({
+    groupPath: (c) => groupPath(connections.groups, c.group_id),
+    active: sessions.activeConnections,
+    pinned: new Set(connections.pinned),
+  });
+  /** A type filter looks in both tabs (`type:mysql` from Servers). */
+  const pool = $derived(parsed.tokens.some((t) => t.key === "type") ? connections.list : connections.list.filter(inTab));
+  /** Free text: a flat list, best match first. */
+  const results = $derived(parsed.text ? filterConnections(pool, parsed, queryCtx) : null);
+  /** Filters only: the folder tree, holding just what matches. */
+  const filteredTree = $derived.by(() => {
+    if (parsed.text || !parsed.tokens.length) return null;
+    const keep = filterConnections(pool, parsed, queryCtx);
+    const tree = buildTree(connections.groups, keep, connections.order);
+    const prune = (fs: FolderNode[]): FolderNode[] => fs.filter((f) => f.count > 0).map((f) => ({ ...f, folders: prune(f.folders) }));
+    return { folders: prune(tree.folders), root: tree.root, total: keep.length };
+  });
+  /** Filter menu entries: a word added to the search. */
+  const QUICK_FILTERS: { label: () => string; token: string }[] = [
+    { label: () => t("filter.prod"), token: "env:prod" },
+    { label: () => t("filter.staging"), token: "env:staging" },
+    { label: () => t("filter.dev"), token: "env:dev" },
+    { label: () => "SSH", token: "type:ssh" },
+    { label: () => "RDP", token: "type:rdp" },
+    { label: () => t("filter.databases"), token: "type:db" },
+    { label: () => t("filter.active"), token: "is:active" },
+    { label: () => t("filter.favorites"), token: "is:fav" },
+  ];
+  function addFilter(token: string) {
+    if (!query.split(/\s+/).includes(token)) query = `${query.trim()} ${token}`.trim();
+  }
+  function filterMenu(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    menu = {
+      x: r.left,
+      y: r.bottom + 4,
+      items: [
+        ...QUICK_FILTERS.map((f) => ({ label: f.label(), icon: "search" as const, action: () => addFilter(f.token) })),
+        "sep" as const,
+        { label: t("filter.syntax"), icon: "info" as const, action: () => toasts.info(t("filter.syntaxHelp")) },
+      ],
+    };
+  }
+
+  // ---- active sessions, favorites, recent ----
+  type Sections = { active: boolean; fav: boolean; recent: boolean };
+  let sections = $state<Sections>({ active: true, fav: true, recent: true, ...load<Partial<Sections>>("sidebarSections", {}) });
+  function toggleSection(k: keyof Sections) {
+    sections[k] = !sections[k];
+    save("sidebarSections", $state.snapshot(sections));
+  }
+  const byId = $derived(new Map(connections.list.map((c) => [c.id, c])));
+  const favorites = $derived(connections.pinned.map((id) => byId.get(id)).filter((c): c is Connection => !!c && inTab(c)));
+  const recents = $derived(
+    connections.recent
+      .filter((id) => !connections.pinned.includes(id))
+      .map((id) => byId.get(id))
+      .filter((c): c is Connection => !!c && inTab(c))
+      .slice(0, 5),
   );
+  /** Open panes with their connection, numbered when one connection is open more than once. */
+  const activePanes = $derived.by(() => {
+    const seen = new Map<string, number>();
+    const out: { pane: OpenPane; c: Connection; n: number }[] = [];
+    for (const pane of sessions.openPanes) {
+      const c = byId.get(pane.connectionId);
+      if (!c) continue;
+      const n = (seen.get(c.id) ?? 0) + 1;
+      seen.set(c.id, n);
+      out.push({ pane, c, n });
+    }
+    return out;
+  });
+  const openCount = $derived(new Map(activePanes.map((a) => [a.c.id, activePanes.filter((x) => x.c.id === a.c.id).length])));
+
+  /** Connect, or focus the pane already open on it (the most recent when several are). */
+  function openOrFocus(c: Connection) {
+    const panes = sessions.openPanes.filter((p) => p.connectionId === c.id);
+    const last = panes[panes.length - 1];
+    if (last) {
+      ui.sidebarDrawer = false;
+      sessions.focus(last.tabId, last.leafId);
+    } else void connect(c);
+  }
 
   /** Most relevant live state per connection (for the status dot). */
   const liveState = $derived.by(() => {
@@ -235,7 +320,7 @@
   }
 
   function rowKey(e: KeyboardEvent, c: Connection) {
-    if (e.key === "Enter") connect(c);
+    if (e.key === "Enter") openOrFocus(c);
     if (e.key === "F2" || (e.key === "e" && (e.metaKey || e.ctrlKey))) ui.edit(c);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -263,8 +348,8 @@
     draggable={!showPath}
     style:--depth={depth}
     title="{c.user}@{c.host}:{c.port}"
-    ondblclick={() => connect(c)}
-    onclick={() => ui.narrow && connect(c)}
+    ondblclick={() => openOrFocus(c)}
+    onclick={() => ui.narrow && openOrFocus(c)}
     onkeydown={(e) => rowKey(e, c)}
     oncontextmenu={(e) => connMenu(e, c)}
     ondragstart={(e) => dragStart(e, "c", c.id)}
@@ -283,6 +368,58 @@
       <span class="meta">{c.host}</span>
     {/if}
     {#if st}<span class="dot {st}" title={t(`state.${st}`)}></span>{/if}
+    <span class="acts">
+      <button
+        class="act"
+        tabindex="-1"
+        title={sessions.activeConnections.has(c.id) ? t("sidebar.focusOpen") : t("ctx.connect")}
+        aria-label={sessions.activeConnections.has(c.id) ? t("sidebar.focusOpen") : t("ctx.connect")}
+        onclick={(e) => (e.stopPropagation(), openOrFocus(c))}
+        ondblclick={(e) => e.stopPropagation()}><Icon name={sessions.activeConnections.has(c.id) ? "jump" : "play"} size={11} /></button>
+      <button
+        class="act"
+        tabindex="-1"
+        title={t("sidebar.more")}
+        aria-label={t("sidebar.more")}
+        onclick={(e) => (e.stopPropagation(), connMenu(e, c))}
+        ondblclick={(e) => e.stopPropagation()}><Icon name="more" size={11} /></button>
+    </span>
+  </div>
+{/snippet}
+
+{#snippet sectionHead(k: keyof Sections, label: string, count: number)}
+  <button class="shead" aria-expanded={sections[k]} onclick={() => toggleSection(k)}>
+    <Icon name={sections[k] ? "chevronDown" : "chevronRight"} size={11} />
+    <span>{label}</span>
+    <span class="count">{count}</span>
+  </button>
+{/snippet}
+
+{#snippet activeRow(a: { pane: OpenPane; c: Connection; n: number })}
+  {@const st = a.pane.state}
+  <div
+    class="row"
+    class:active={sessions.activeTabId === a.pane.tabId && sessions.activeTab?.activeLeaf === a.pane.leafId}
+    data-row
+    role="treeitem"
+    aria-selected={sessions.activeTabId === a.pane.tabId && sessions.activeTab?.activeLeaf === a.pane.leafId}
+    tabindex="0"
+    style:--depth={0}
+    title={t("sidebar.focusOpen")}
+    onclick={() => ((ui.sidebarDrawer = false), sessions.focus(a.pane.tabId, a.pane.leafId))}
+    onkeydown={(e) => {
+      if (e.key === "Enter") sessions.focus(a.pane.tabId, a.pane.leafId);
+      else rowKey(e, a.c);
+    }}
+    oncontextmenu={(e) => connMenu(e, a.c)}
+  >
+    <span class="env env-{a.c.env}" aria-label={t(`env.${a.c.env}`)}></span>
+    <ConnIcon icon={a.c.icon} />
+    <span class="name">{a.c.name}{(openCount.get(a.c.id) ?? 0) > 1 ? ` #${a.n}` : ""}</span>
+    {#if a.c.env === "prod"}<span class="env-prod-badge">PROD</span>{/if}
+    {#if st === "agent_running"}<span class="agentic" title={t("state.agent_running")}><Icon name="sparkle" size={11} /></span>{/if}
+    <span class="meta">{a.c.kind === "rdp" ? "RDP" : a.c.kind === "mysql" ? "MySQL" : a.c.kind === "postgres" ? "PostgreSQL" : "SSH"}</span>
+    <span class="dot {a.pane.pending ? 'connecting' : (st ?? 'idle')}" title={a.pane.pending ? t("state.connecting") : st ? t(`state.${st}`) : t("sidebar.open")}></span>
   </div>
 {/snippet}
 
@@ -364,7 +501,8 @@
       <Icon name="search" size={14} />
       <input
         type="search"
-        placeholder={t("sidebar.search")}
+        placeholder={t("sidebar.searchFilters")}
+        title={t("sidebar.searchHint")}
         bind:value={query}
         aria-label={t("sidebar.search")}
         onkeydown={(e) => {
@@ -376,11 +514,22 @@
         }}
       />
     </div>
+    <button class="icon-btn" class:on={parsed.tokens.length > 0} aria-label={t("filter.menu")} title={t("filter.menu")} aria-haspopup="menu" onclick={filterMenu}><Icon name="menu" /></button>
     <button class="icon-btn" aria-label={t("sidebar.new")} aria-haspopup="menu" onclick={(e) => {
       const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
       newMenu = { x: r.left, y: r.bottom + 4 };
     }}><Icon name="plus" /></button>
   </div>
+  {#if parsed.tokens.length}
+    <div class="chips" aria-label={t("filter.active")}>
+      {#each parsed.tokens as tk, i (i)}
+        <button class="chip" class:not={tk.not} title={t("filter.remove")} onclick={() => (query = removeToken(query, tk.raw))}>
+          <span>{tk.not ? "−" : ""}{tk.key}:{tk.value}</span><Icon name="x" size={10} />
+        </button>
+      {/each}
+      <span class="sr-only" aria-live="polite">{t("filter.matches", { n: results?.length ?? filteredTree?.total ?? 0 })}</span>
+    </div>
+  {/if}
 
   <div class="kinds" role="tablist" data-tour="kinds" use:segmented>
     <button role="tab" aria-selected={kind === "ssh"} class="kind" class:on={kind === "ssh"} onclick={() => (kind = "ssh")}>{t("sidebar.servers")}</button>
@@ -459,7 +608,24 @@
           </div>
         </div>
       {/if}
+    {:else if filteredTree}
+      {#each filteredTree.folders as f (f.group.id)}{@render folder(f, 0)}{/each}
+      {#each filteredTree.root as c (c.id)}{@render row(c, 0)}{/each}
+      {#if !filteredTree.total}<p class="empty-line">{t("sidebar.noResults", { q: query })}</p>{/if}
     {:else}
+      {#if activePanes.length}
+        {@render sectionHead("active", t("sidebar.activeSessions"), activePanes.length)}
+        {#if sections.active}{#each activePanes as a (a.pane.leafId)}{@render activeRow(a)}{/each}{/if}
+      {/if}
+      {#if favorites.length}
+        {@render sectionHead("fav", t("sidebar.favorites"), favorites.length)}
+        {#if sections.fav}{#each favorites as c (c.id)}{@render row(c, 0)}{/each}{/if}
+      {/if}
+      {#if recents.length}
+        {@render sectionHead("recent", t("sidebar.recent"), recents.length)}
+        {#if sections.recent}{#each recents as c (c.id)}{@render row(c, 0)}{/each}{/if}
+      {/if}
+      {#if activePanes.length || favorites.length || recents.length}<div class="section">{t("sidebar.all")}</div>{/if}
       {#if creatingFolder?.parent === null}{@render folderInput(0)}{/if}
       {#each tabTree.folders as f (f.group.id)}{@render folder(f, 0)}{/each}
       {#if tabTree.root.length}
@@ -606,6 +772,79 @@
   .folder:hover,
   .row:hover {
     background: var(--active);
+  }
+  /* Connect / more, shown on hover or keyboard focus (always on touch layouts). */
+  .acts {
+    display: none;
+    gap: 2px;
+    margin-left: 2px;
+  }
+  .row:hover .acts,
+  .row:focus-visible .acts,
+  .row:focus-within .acts {
+    display: inline-flex;
+  }
+  .row:hover .meta,
+  .row:focus-visible .meta {
+    display: none;
+  }
+  .act {
+    display: inline-grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--r-sm);
+    color: var(--muted);
+  }
+  .act:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .agentic {
+    display: inline-flex;
+    color: var(--accent-text);
+  }
+  .shead {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 8px 4px;
+    color: var(--muted);
+    font-size: var(--fs-small);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .shead:hover {
+    color: var(--text-2);
+  }
+  .shead .count {
+    margin-left: auto;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 0 10px 6px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+    color: var(--accent-text);
+    font-family: var(--font-mono);
+    font-size: var(--fs-tiny);
+  }
+  .chip.not {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    color: var(--danger);
   }
   .folder.drop,
   .row.drop {
