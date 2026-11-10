@@ -378,6 +378,17 @@ export const en = {
   "palette.workspace": "Open workspace: {name}",
   "palette.group.connections": "Connections",
   "palette.group.actions": "Actions",
+  "palette.group.sessions": "Open sessions",
+  "palette.group.favorites": "Favorites",
+  "palette.group.workspaces": "Workspaces",
+  "palette.group.ai": "AI",
+  "palette.group.files": "Files",
+  "palette.group.db": "Databases",
+  "palette.group.settings": "Settings",
+  "palette.goTo": "Go to {name}",
+  "palette.home": "Go to the home screen",
+  "palette.newDatabase": "New database connection",
+  "palette.active": "Active:",
 
   // settings
   "settings.title": "Settings",

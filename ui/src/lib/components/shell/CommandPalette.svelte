@@ -8,7 +8,7 @@
   import { groupPath } from "../../util/tree";
   import { findLeaf, leaves } from "../../util/layout";
   import { needsTypedConfirm } from "../../util/approval";
-  import { connections, blankConnection } from "../../stores/connections.svelte";
+  import { connections, blankConnection, blankDbConnection } from "../../stores/connections.svelte";
   import { snippets } from "../../stores/snippets.svelte";
   import { s3 } from "../../stores/s3.svelte";
   import { s3Where } from "../../util/s3";
@@ -25,9 +25,15 @@
     label: string;
     hint?: string;
     icon: IconName;
-    group: "connections" | "actions";
+    group: Group;
     run: () => unknown;
   }
+
+  /** Sections, in the order they show when nothing is typed. */
+  type Group = "sessions" | "favorites" | "connections" | "workspaces" | "ai" | "files" | "db" | "settings" | "actions";
+  const GROUPS: Group[] = ["sessions", "favorites", "connections", "workspaces", "ai", "files", "db", "actions", "settings"];
+  const isMac = typeof navigator !== "undefined" && /Mac|iP/.test(navigator.platform);
+  const keys = (mac: string, other: string) => (isMac ? mac : other);
 
   let query = $state("");
   let index = $state(0);
@@ -40,23 +46,40 @@
 
   const actions = $derived.by<Action[]>(() => {
     const out: Action[] = [];
+    // Open panes: jump to them.
+    for (const pane of sessions.openPanes) {
+      const c = connections.byId.get(pane.connectionId);
+      if (!c) continue;
+      out.push({
+        id: "p:" + pane.leafId,
+        label: t("palette.goTo", { name: c.name }),
+        hint: `${c.env === "prod" ? "PROD · " : ""}${c.user ? `${c.user}@` : ""}${c.host}`,
+        icon: "jump",
+        group: "sessions",
+        run: () => sessions.focus(pane.tabId, pane.leafId),
+      });
+    }
+    const pinned = new Set(connections.pinned);
     for (const c of connections.list)
       out.push({
         id: "c:" + c.id,
         label: t("palette.connect", { name: c.name }),
-        hint: groupPath(connections.groups, c.group_id) || `${c.user}@${c.host}`,
-        icon: "server",
-        group: "connections",
+        hint: `${c.env === "prod" ? "PROD · " : ""}${groupPath(connections.groups, c.group_id) || `${c.user}@${c.host}`}`,
+        icon: c.kind === "mysql" || c.kind === "postgres" ? "database" : c.kind === "rdp" ? "monitor" : "server",
+        group: pinned.has(c.id) ? "favorites" : "connections",
         run: () => sessions.open(c.id),
       });
     out.push(
-      { id: "local", label: t("palette.newLocal"), icon: "terminal", group: "actions", run: () => sessions.openLocal() },
+      { id: "local", label: t("palette.newLocal"), icon: "terminal", group: "actions", hint: keys("⌘⇧T", "Ctrl+Shift+T"), run: () => sessions.openLocal() },
       { id: "newconn", label: t("palette.newConnection"), icon: "plus", group: "actions", run: () => ui.edit(blankConnection(), true) },
-      { id: "ai", label: t("palette.toggleAi"), icon: "sparkle", group: "actions", hint: "Ctrl+J", run: () => (settings.aiOpen = !settings.aiOpen) },
+      { id: "home", label: t("palette.home"), icon: "home", group: "actions", run: () => (sessions.activeTabId = null) },
+      { id: "ai", label: t("palette.toggleAi"), icon: "sparkle", group: "ai", hint: keys("⌘J", "Ctrl+J"), run: () => (settings.aiOpen = !settings.aiOpen) },
+      { id: "newdb", label: t("palette.newDatabase"), icon: "database", group: "db", run: () => ui.edit(blankDbConnection(null), true) },
+      { id: "backup", label: t("backup.open"), icon: "file", group: "db", run: () => sessions.openBackup() },
     );
     const sid = sessions.activeSessionId;
     for (const o of agent.options)
-      out.push({ id: "b:" + o.key, label: t("palette.brain", { name: o.label }), hint: o.detail, icon: "sparkle", group: "actions", run: () => agent.setBrain(sid, o.key) });
+      out.push({ id: "b:" + o.key, label: t("palette.brain", { name: o.label }), hint: o.detail, icon: "sparkle", group: "ai", run: () => agent.setBrain(sid, o.key) });
     const s = sessions.activeSession;
     if (s)
       for (const m of ["confirm_all", "confirm_writes", "auto"] as ApprovalMode[]) {
@@ -66,7 +89,7 @@
           label: t("palette.mode", { mode: t(`ai.mode.${m}`) }),
           hint: s.title,
           icon: "shield",
-          group: "actions",
+          group: "ai",
           run: async () => {
             await api.setApprovalMode(s.session_id, m);
             sessions.infos[s.session_id] = { ...s, approval_mode: m };
@@ -74,20 +97,29 @@
         });
       }
     if (sid && sessions.activeSession?.connection_id)
-      out.push({ id: "files", label: t("files.open.tooltip"), hint: sessions.activeSession.title, icon: "folder", group: "actions", run: () => sessions.openFiles(sid) });
+      out.push({ id: "files", label: t("files.open.tooltip"), hint: sessions.activeSession.title, icon: "folder", group: "files", run: () => sessions.openFiles(sid) });
     if (sid)
       for (const sn of snippets.sorted)
         out.push({ id: "sn:" + sn.id, label: t("palette.snippet", { name: sn.name }), hint: sn.command, icon: "snippet", group: "actions", run: () => snippets.use(sn, true) });
     for (const a of s3.sorted)
-      out.push({ id: "s3:" + a.id, label: t("palette.s3", { name: a.name }), hint: s3Where(a), icon: "bucket", group: "actions", run: () => sessions.openS3(a.id) });
-    for (const w of sessions.workspaces)
-      out.push({ id: "w:" + w.id, label: t("palette.workspace", { name: w.name }), icon: "layout", group: "actions", run: () => sessions.openWorkspace(w.id) });
+      out.push({ id: "s3:" + a.id, label: t("palette.s3", { name: a.name }), hint: s3Where(a), icon: "bucket", group: "files", run: () => sessions.openS3(a.id) });
+    for (const w of sessions.workspaces) {
+      const sum = sessions.summarize(w);
+      out.push({
+        id: "w:" + w.id,
+        label: t("palette.workspace", { name: w.name }),
+        hint: t("start.ws.tabs", { n: sum.tabs }),
+        icon: "layout",
+        group: "workspaces",
+        run: () => sessions.openWorkspace(w.id),
+      });
+    }
     for (const p of pages)
-      out.push({ id: "s:" + p, label: t("palette.settings", { page: t(`settings.${p}` as MessageKey) }), icon: "settings", group: "actions", run: () => ui.openSettings(p) });
+      out.push({ id: "s:" + p, label: t("palette.settings", { page: t(`settings.${p}` as MessageKey) }), icon: "settings", group: "settings", hint: p === "providers" ? keys("⌘,", "Ctrl+,") : undefined, run: () => ui.openSettings(p) });
     const tab = sessions.activeTab;
     if (tab && tab.layout.type === "split") {
       const zoomed = !!sessions.zoomedLeaf(tab);
-      out.push({ id: "zoom", label: t(zoomed ? "tabs.restorePanes" : "tabs.maximizePane"), hint: /Mac|iP/.test(navigator.platform) ? "⌘⇧↵" : "Ctrl+Shift+Enter", icon: zoomed ? "minimize" : "maximize", group: "actions", run: () => sessions.toggleZoom(tab.id) });
+      out.push({ id: "zoom", label: t(zoomed ? "tabs.restorePanes" : "tabs.maximizePane"), hint: keys("⌘⇧↵", "Ctrl+Shift+Enter"), icon: zoomed ? "minimize" : "maximize", group: "actions", run: () => sessions.toggleZoom(tab.id) });
       out.push({ id: "detach", label: t("tabs.detachPane"), hint: sessions.paneTitle((findLeaf(tab.layout, tab.activeLeaf) ?? leaves(tab.layout)[0]).sessionId), icon: "detach", group: "actions", run: () => sessions.detachPane(tab.id, tab.activeLeaf) });
     }
     if (tab && (sessions.broadcast[tab.id] || sessions.broadcastTargets(tab.id).length > 1))
@@ -103,12 +135,34 @@
     return out;
   });
 
-  const results = $derived(
-    query.trim()
-      ? fuzzyFilter(actions, query, (a) => [a.label, a.hint ?? ""]).slice(0, 50)
-      : [...actions.filter((a) => a.group === "actions").slice(0, 3), ...actions.filter((a) => a.group === "connections").slice(0, 8), ...actions.filter((a) => a.group === "actions").slice(3)],
-  );
-
+  /** With nothing typed: open sessions, favorites, recent connections, workspaces, then the
+   *  other actions. With text: the best matches, grouped by section in order of their best
+   *  match. */
+  const results = $derived.by(() => {
+    if (!query.trim()) {
+      const recent = new Set(connections.recent);
+      const pick = (g: Group, n = 50, f: (a: Action) => boolean = () => true) => actions.filter((a) => a.group === g && f(a)).slice(0, n);
+      const recentConns = actions
+        .filter((a) => a.group === "connections" && recent.has(a.id.slice(2)))
+        .sort((a, b) => connections.recent.indexOf(a.id.slice(2)) - connections.recent.indexOf(b.id.slice(2)))
+        .slice(0, 6);
+      const conns = recentConns.length ? recentConns : pick("connections", 6);
+      return [
+        ...pick("sessions", 8),
+        ...pick("favorites", 8),
+        ...conns,
+        ...pick("workspaces", 5),
+        ...pick("actions", 3),
+        ...pick("ai", 1),
+        ...pick("files", 2),
+        ...pick("db", 2),
+      ];
+    }
+    const ranked = fuzzyFilter(actions, query, (a) => [a.label, a.hint ?? ""]).slice(0, 60);
+    const order: Group[] = [];
+    for (const a of ranked) if (!order.includes(a.group)) order.push(a.group);
+    return order.flatMap((g) => ranked.filter((a) => a.group === g));
+  });
   $effect(() => {
     void query;
     index = 0;
@@ -172,6 +226,14 @@
       />
       <span class="kbd">Esc</span>
     </div>
+    {#if sessions.activeSession}
+      {@const a = sessions.activeSession}
+      <div class="ctx">
+        <span class="faint">{t("palette.active")}</span>
+        <strong>{a.title}</strong>
+        {#if a.env === "prod"}<span class="env-prod-badge">PROD</span>{/if}
+      </div>
+    {/if}
     <div class="list" id="palette-list" role="listbox" aria-label={t("palette.placeholder")} bind:this={list}>
       {#each results as a, i (a.id)}
         {#if i === 0 || results[i - 1].group !== a.group}
@@ -233,7 +295,21 @@
   }
   .grp {
     padding: 8px 8px 4px;
-    font-size: var(--fs-small);
+    font-size: var(--fs-tiny);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .ctx {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: var(--fs-meta);
+  }
+  .faint {
     color: var(--faint);
   }
   button {
@@ -241,7 +317,7 @@
     align-items: center;
     gap: 10px;
     width: 100%;
-    height: 32px;
+    height: var(--ctl-h);
     padding: 0 10px;
     border-radius: var(--r);
     text-align: left;
