@@ -74,9 +74,17 @@ BE = new backend; X = cross-cutting.
 
 ### Phase 5 — Operational tools
 - [ ] UX — Database: focus SQL mode, resizable split, collapsible schema, status and errors.
-- [ ] FE — Dual-pane file manager (SFTP/S3 destinations; no local FS: not supported by backend).
-- [ ] FE — Global transfer panel.
-- [ ] FE — Compare before overwrite.
+- [x] FE — Dual-pane file manager: a second pane on any connected SSH session or S3 account;
+  copy between panes (F5) where `copyBetween` supports it (S3 → S3 and folders to/from S3 are
+  explained, not offered); move (F6) only inside one file system (a rename); Tab switches pane.
+  No local pane (no backend local file access): Upload/Download, and the bar says so. Large
+  folders render rows in steps of 300 (5000 rows: ~1.2 s → ~0.12 s to first paint, mock).
+- [x] FE — Global transfer panel on the icon rail: running badge; source, destination, bytes,
+  percent, done/failed with the error; in memory only; no cancel (the backend cannot stop one).
+- [x] FE — Compare before overwrite: copies (backend `exists`) and uploads (destination listed
+  first, since uploads replace silently) open a comparison of path, size, time, type and
+  permissions, with an on-demand line diff for text files up to 256 KB on both sides; local
+  files, folders, binary or bigger files get an explicit "no line comparison" reason.
 - [ ] UX — Connection editor sections; BE — real Test Connection.
 
 ### Phase 6–7 — Polish and release
