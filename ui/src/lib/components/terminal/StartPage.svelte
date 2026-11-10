@@ -66,12 +66,33 @@
     {#if firstRun}
       <h1>{t("start.first.title")}</h1>
       <p class="lede">{t("start.first.body")}</p>
-      <div class="first">
-        <button class="btn primary lg" onclick={() => ui.openSettings("import")}><Icon name="import" size={14} />{t("sidebar.empty.import")}</button>
-        <button class="btn lg" onclick={() => ui.edit(blankConnection(), true)}><Icon name="plus" size={14} />{t("start.qa.ssh")}</button>
-        <button class="btn lg ghost" onclick={() => sessions.openLocal().catch(toasts.error)}><Icon name="terminal" size={14} />{t("start.local")}</button>
+      <div class="paths">
+        <div class="path">
+          <Icon name="import" size={16} />
+          <strong>{t("start.first.importTitle")}</strong>
+          <p>{t("start.first.importBody")}</p>
+          <button class="btn primary sm" onclick={() => ui.openSettings("import")}>{t("sidebar.empty.import")}</button>
+        </div>
+        <div class="path">
+          <Icon name="server" size={16} />
+          <strong>{t("start.first.addTitle")}</strong>
+          <p>{t("start.first.addBody")}</p>
+          <div class="row">
+            <button class="btn sm" onclick={() => ui.edit(blankConnection(), true)}>{t("start.qa.ssh")}</button>
+            <button class="btn sm ghost" onclick={() => sessions.openLocal().catch(toasts.error)}>{t("start.local")}</button>
+          </div>
+        </div>
+        <div class="path">
+          <Icon name="sparkle" size={16} />
+          <strong>{t("start.first.aiTitle")}</strong>
+          <p>{t("start.first.aiBody")}</p>
+          <div class="row">
+            <button class="btn sm" onclick={() => ui.openSettings("providers")} title={t("start.first.builtinHint")}>{t("start.first.builtin")}</button>
+            <button class="btn sm" onclick={() => ui.openSettings("harnesses")} title={t("start.first.cliHint")}>{t("start.first.cli")}</button>
+          </div>
+          <p class="fine">{t("start.first.privacy")}</p>
+        </div>
       </div>
-      <p class="hint">{t("start.first.ai")} <button class="link" onclick={() => ui.openSettings("providers")}>{t("start.qa.ai")}</button></p>
     {:else}
       <h1>{t("start.title")}</h1>
       <p class="lede">
@@ -323,19 +344,37 @@
     border-color: var(--border-strong);
     color: var(--text);
   }
-  .first {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 14px;
+  .paths {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+    margin-bottom: 32px;
   }
-  .hint {
-    color: var(--muted);
-    margin: 0 0 32px;
+  .path {
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    padding: var(--sp-4);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--panel);
   }
-  .link {
+  .path :global(svg) {
     color: var(--accent-text);
-    text-decoration: underline;
+  }
+  .path p {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--fs-meta);
+  }
+  .path .fine {
+    font-size: var(--fs-small);
+    color: var(--faint);
+  }
+  .row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
   }
   .cname .env-prod-badge {
     margin-left: 6px;
