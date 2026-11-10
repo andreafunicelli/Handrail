@@ -1177,6 +1177,12 @@ export function createMockApi(): Api {
         elapsed_ms: 12,
       };
     },
+    async dbExportFile(fileName, contents) {
+      await sleep(150);
+      // The browser preview keeps the last export for tests instead of writing a file.
+      (globalThis as { __lastExport?: { fileName: string; contents: string } }).__lastExport = { fileName, contents };
+      return `/home/demo/Downloads/${fileName}`;
+    },
     async dbTableDdl(id, namespace, table) {
       const d = mockDb(id);
       const t = MOCK_TABLES[table];

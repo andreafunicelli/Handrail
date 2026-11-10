@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import Icon from "../icons/Icon.svelte";
+  import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
   import DbGrid from "./DbGrid.svelte";
   import { api } from "../../api";
   import type { DbColumnInfo, DbOpened, DbQueryOutput, DbTableInfo } from "../../api/types";
@@ -11,13 +12,15 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { copyText } from "../../util/clipboard";
   import { createSqlEditor, type SqlEditorHandle } from "../../util/codemirror";
-  import { buildEdits, editCount, noEdits, primaryResult, resultSummary, tableOverview, tableStats, toCsv, type GridEdits } from "../../util/db";
+  import { buildEdits, editCount, noEdits, primaryResult, resultSummary, tableOverview, tableStats, toCsv, toInserts, toJson, type GridEdits } from "../../util/db";
+  import { addHistory, clearHistory, loadHistory, loadTabs, nextTabName, saveTabs, type HistoryEntry, type QueryTabDoc } from "../../util/dbtabs";
+  import { statementAt } from "../../util/sqltext";
+  import { relativeTime } from "../../util/time";
 
   /** A database in a pane: schema on the left, SQL editor over the results on the right. */
   let { connectionId, focused }: { connectionId: string; focused: boolean } = $props();
 
   const conn = $derived(connections.byId.get(connectionId));
-  const sqlKey = $derived(`handrail.db.sql.${connectionId}`);
   const ROW_CHOICES = [100, 1000, 10000];
 
   let phase = $state<"connecting" | "password" | "live" | "failed">("connecting");
@@ -82,13 +85,98 @@
     return true;
   }
 
-  const storedSql = () => {
+  // ----- query tabs: each keeps its SQL (saved between sessions) and, while open, its results.
+  const store = (() => {
     try {
-      return localStorage.getItem(sqlKey) ?? "";
+      return localStorage;
     } catch {
-      return "";
+      return null;
     }
+  })();
+  // A view belongs to one connection for its whole life.
+  const connKey = untrack(() => connectionId);
+  const initial = store ? loadTabs(store, connKey, () => crypto.randomUUID()) : { tabs: [{ key: "q1", name: "Query 1", sql: "" }], current: 0 };
+  let qtabs = $state<QueryTabDoc[]>(initial.tabs);
+  let qcur = $state(initial.current);
+  type View = {
+    output: DbQueryOutput | null;
+    active: number;
+    ranLabel: string;
+    browse: typeof browse;
+    filterText: string;
+    editTarget: typeof editTarget;
   };
+  /** What each other tab showed, by tab key. */
+  const views: Record<string, View> = {};
+  const persistTabs = () => store && saveTabs(store, connKey, $state.snapshot(qtabs) as QueryTabDoc[], qcur);
+
+  function switchTab(i: number) {
+    if (i === qcur || running || blocked()) return;
+    // A table's columns still loading for this tab must not make the next tab's rows editable.
+    runs++;
+    views[qtabs[qcur].key] = { output, active, ranLabel, browse, filterText, editTarget };
+    qcur = i;
+    const v = views[qtabs[i].key];
+    output = v?.output ?? null;
+    active = v?.active ?? 0;
+    ranLabel = v?.ranLabel ?? "";
+    browse = v?.browse ?? null;
+    filterText = v?.filterText ?? "";
+    editTarget = v?.editTarget ?? null;
+    edits = editTarget ? noEdits() : null;
+    ddl = null;
+    selected = null;
+    editor?.setText(qtabs[i].sql);
+    persistTabs();
+    editor?.focus();
+  }
+
+  function newTab() {
+    if (running || blocked()) return;
+    qtabs.push({ key: crypto.randomUUID(), name: nextTabName(qtabs), sql: "" });
+    switchTab(qtabs.length - 1);
+  }
+
+  function closeTab(i: number) {
+    if (qtabs.length < 2 || running) return;
+    if (i === qcur) {
+      if (blocked()) return;
+      switchTab(i > 0 ? i - 1 : 1);
+    }
+    delete views[qtabs[i].key];
+    qtabs.splice(i, 1);
+    if (qcur > i) qcur--;
+    persistTabs();
+  }
+
+  // ----- history of what was run.
+  let history = $state<HistoryEntry[]>(store ? loadHistory(store, connKey) : []);
+  let menu = $state<{ x: number; y: number; items: MenuEntry[] } | null>(null);
+  const oneLine = (sql: string) => {
+    const s = sql.replace(/\s+/g, " ").trim();
+    return s.length > 70 ? `${s.slice(0, 70)}…` : s;
+  };
+
+  function openHistory(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const items: MenuEntry[] = history.slice(0, 30).map((h) => ({
+      label: `${h.ok ? "" : "✕ "}${oneLine(h.sql)}`,
+      shortcut: relativeTime(h.at),
+      action: () => editor?.append(h.sql),
+    }));
+    if (!items.length) items.push({ label: t("db.historyEmpty"), disabled: true, action: () => {} });
+    else
+      items.push("sep", {
+        label: t("db.historyClear"),
+        icon: "trash",
+        danger: true,
+        action: () => {
+          if (store) clearHistory(store, connKey);
+          history = [];
+        },
+      });
+    menu = { x: r.left, y: r.bottom + 4, items };
+  }
 
   async function connect(pw?: string) {
     phase = "connecting";
@@ -170,16 +258,30 @@
     editor?.setSchema(schema, defaultNamespace() ?? undefined);
   }
 
+  /** Run the selection, or everything. */
   async function run() {
-    if (!id || running || !editor) return;
-    const sql = editor.runText().trim();
-    if (!sql || blocked()) return;
+    if (!editor) return;
+    await runSql(editor.runText().trim());
+  }
+
+  /** Run the statement the cursor is in (selected while it runs). */
+  async function runCurrent() {
+    if (!editor || running) return;
+    const st = statementAt(editor.text(), editor.cursor(), info?.kind ?? "mysql");
+    if (!st) return;
+    editor.select(st.from, st.to);
+    await runSql(st.text);
+  }
+
+  async function runSql(sql: string) {
+    if (!id || running || !sql || blocked()) return;
     editTarget = null;
     edits = null;
     browse = null;
     ddl = null;
     ranLabel = sql.length > 80 ? `${sql.slice(0, 80)}…` : sql;
     await execute(() => api.dbQuery(id!, sql, maxRows));
+    if (store && !closed) history = addHistory(store, connKey, { sql, at: Date.now(), ms: output?.elapsed_ms ?? 0, ok: !output?.error });
   }
 
   /** Show a table's rows from the first page; `keep` stays on the page, sort and filter shown. */
@@ -373,6 +475,36 @@
     if (await copyText(toCsv(r))) toasts.success(t("db.csvCopied", { rows: r.rows.length }));
   }
 
+  /** Save the rows shown to a file (CSV, JSON or INSERT statements into the table shown). */
+  async function exportAs(format: "csv" | "json" | "sql") {
+    const r = output?.results[active];
+    if (!r) return;
+    const base = (browse ? browse.table : "result").replace(/[^\w.-]+/g, "_");
+    const path = browse ? [browse.ns, browse.table] : ["table_name"];
+    const contents = format === "csv" ? toCsv(r) : format === "json" ? toJson(r) : toInserts(r, path, info?.kind ?? "mysql");
+    try {
+      const saved = await api.dbExportFile(`${base}.${format}`, contents);
+      if (saved) toasts.success(t("db.exported", { rows: r.rows.length, path: saved }));
+    } catch (e) {
+      toasts.error(e);
+    }
+  }
+
+  function openExport(e: MouseEvent) {
+    const b = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    menu = {
+      x: b.left,
+      y: b.bottom + 4,
+      items: [
+        { label: t("db.copyCsv"), icon: "copy", action: () => void copyCsv() },
+        "sep",
+        { label: t("db.saveCsv"), icon: "download", action: () => void exportAs("csv") },
+        { label: t("db.saveJson"), icon: "download", action: () => void exportAs("json") },
+        { label: t("db.saveSql"), icon: "download", action: () => void exportAs("sql") },
+      ],
+    };
+  }
+
   $effect(() => {
     if (focused && phase === "live") editor?.focus();
   });
@@ -380,15 +512,14 @@
   $effect(() => {
     if (phase !== "live" || !editorHost || editor) return;
     editor = createSqlEditor(editorHost, {
-      doc: storedSql(),
+      doc: qtabs[qcur]?.sql ?? "",
       dialect: info?.kind ?? "mysql",
       onRun: () => void run(),
+      onRunCurrent: () => void runCurrent(),
       onChange: (text) => {
-        try {
-          localStorage.setItem(sqlKey, text);
-        } catch {
-          // Not saved between sessions; nothing else depends on it.
-        }
+        if (!qtabs[qcur]) return;
+        qtabs[qcur].sql = text;
+        persistTabs();
       },
     });
     updateCompletion();
@@ -479,6 +610,8 @@
     <section class="main">
       <div class="toolbar">
         <button class="btn primary sm" onclick={run} disabled={running} title={t("db.runHint")}><Icon name="play" size={12} />{t("db.run")}</button>
+        <button class="btn sm" onclick={runCurrent} disabled={running} title={t("db.runCurrentHint")}>{t("db.runCurrent")}</button>
+        <button class="btn sm ghost" onclick={openHistory} aria-haspopup="menu" title={t("db.history")}><Icon name="clock" size={12} />{t("db.history")}</button>
         {#if running}<button class="btn sm" onclick={stop}><Icon name="stop" size={12} />{t("db.stop")}</button>{/if}
         <label class="rows">
           {t("db.maxRows")}
@@ -491,6 +624,15 @@
           ><Icon name="sparkle" size={12} />{shared ? t("db.shared") : t("db.share")}</button
         >
         <span class="ver" title={info?.version}>{info?.kind === "postgres" ? "PostgreSQL" : "MySQL"} · {conn?.user}@{conn?.host}</span>
+      </div>
+      <div class="qtabs" role="tablist" aria-label={t("db.queryTabs")}>
+        {#each qtabs as q, i (q.key)}
+          <div class="qtab" class:on={i === qcur}>
+            <button role="tab" aria-selected={i === qcur} onclick={() => switchTab(i)} disabled={running && i !== qcur}>{q.name}</button>
+            {#if qtabs.length > 1}<button class="x" aria-label={t("db.closeQuery", { name: q.name })} onclick={() => closeTab(i)} disabled={running}><Icon name="x" size={10} /></button>{/if}
+          </div>
+        {/each}
+        <button class="icon-btn" aria-label={t("db.newQuery")} title={t("db.newQuery")} onclick={newTab} disabled={running}><Icon name="plus" size={12} /></button>
       </div>
       <div class="editor" bind:this={editorHost}></div>
       <div class="results">
@@ -583,7 +725,7 @@
                   )}{/if}
                 · {output.elapsed_ms} ms
               </span>
-              {#if s.isQuery && s.rows}<button class="btn sm ghost" onclick={copyCsv}><Icon name="copy" size={12} />{t("db.copyCsv")}</button>{/if}
+              {#if s.isQuery && s.rows}<button class="btn sm ghost" onclick={openExport} aria-haspopup="menu"><Icon name="download" size={12} />{t("db.export")}</button>{/if}
             {/if}
             <span class="ran mono" title={ranLabel}>{ranLabel}</span>
           </div>
@@ -643,6 +785,8 @@
     </div>
   {/if}
 </div>
+
+{#if menu}<ContextMenu {...menu} onclose={() => (menu = null)} />{/if}
 
 <style>
   .db {
@@ -764,7 +908,7 @@
   }
   .main {
     display: grid;
-    grid-template-rows: auto minmax(90px, 34%) minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(90px, 34%) minmax(0, 1fr);
     grid-template-columns: minmax(0, 1fr);
     min-width: 0;
     min-height: 0;
@@ -830,6 +974,42 @@
     color: var(--text);
     border-color: var(--accent);
     background: var(--accent-soft);
+  }
+  .qtabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 6px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    font-size: 12px;
+  }
+  .qtab {
+    display: flex;
+    align-items: center;
+    border-bottom: 2px solid transparent;
+  }
+  .qtab.on {
+    border-bottom-color: var(--accent);
+  }
+  .qtab button {
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    padding: 5px 6px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .qtab.on button {
+    color: var(--text);
+  }
+  .qtab .x {
+    padding: 2px;
+    opacity: 0.6;
+  }
+  .qtab .x:hover {
+    opacity: 1;
   }
   .nsrow {
     display: flex;

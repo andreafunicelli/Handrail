@@ -1,6 +1,6 @@
 // CodeMirror setup for the file editor. Loaded on demand (the editor is a separate chunk).
 import { basicSetup } from "codemirror";
-import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, Transaction, type Extension } from "@codemirror/state";
 import { EditorView, highlightTrailingWhitespace, highlightWhitespace, keymap, lineNumbers } from "@codemirror/view";
 import { indentWithTab, selectLine, toggleComment } from "@codemirror/commands";
 import { HighlightStyle, indentUnit, StreamLanguage, syntaxHighlighting, type StreamParser } from "@codemirror/language";
@@ -460,12 +460,18 @@ export interface SqlEditorHandle {
   focus(): void;
   /** Add text at the end (after a blank line) and select it. */
   append(text: string): void;
+  /** Replace the whole text (another query tab); not undoable. */
+  setText(text: string): void;
+  /** Where the cursor is. */
+  cursor(): number;
+  /** Select a range (the statement just run) without scrolling away from it. */
+  select(from: number, to: number): void;
   destroy(): void;
 }
 
 export function createSqlEditor(
   parent: HTMLElement,
-  o: { doc: string; dialect: "mysql" | "postgres"; onRun: () => void; onChange: (text: string) => void },
+  o: { doc: string; dialect: "mysql" | "postgres"; onRun: () => void; onRunCurrent?: () => void; onChange: (text: string) => void },
 ): SqlEditorHandle {
   const lang = new Compartment();
   const dialect = o.dialect === "mysql" ? MySQL : PostgreSQL;
@@ -475,6 +481,7 @@ export function createSqlEditor(
       doc: o.doc,
       extensions: [
         keymap.of([
+          { key: "Mod-Shift-Enter", preventDefault: true, run: () => (o.onRunCurrent?.(), true) },
           { key: "Mod-Enter", preventDefault: true, run: () => (o.onRun(), true) },
           { key: "Shift-Enter", preventDefault: true, run: () => (o.onRun(), true) },
           indentWithTab,
@@ -509,6 +516,18 @@ export function createSqlEditor(
         scrollIntoView: true,
       });
       view.focus();
+    },
+    setText(text) {
+      // Not undoable: undo must not bring back another tab's text.
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        selection: { anchor: 0 },
+        annotations: Transaction.addToHistory.of(false),
+      });
+    },
+    cursor: () => view.state.selection.main.head,
+    select(from, to) {
+      view.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
     },
     destroy: () => view.destroy(),
   };
