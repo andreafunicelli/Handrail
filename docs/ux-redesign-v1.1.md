@@ -1,0 +1,96 @@
+# Handrail 1.1 — UI/UX redesign: plan and checklist
+
+Branch: `feature/handrail-v1.1-ux` (kept out of `main`: every push to `main` publishes a
+release). The first release containing this work is **v1.1.0**; later fixes are 1.1.x
+(`release.yml` takes `major.minor` from the workspace version and the patch from the tags).
+
+This document is updated as the work lands. `[x]` = implemented and checked, `[~]` = partly,
+`[ ]` = not done (with the reason when it will not be done in 1.1).
+
+## Audit summary (what existed before 1.1)
+
+- **Preferences**: per-device in localStorage (`aht:prefs`, `pinned`, `recent`, `workspaces`,
+  `collapsed`, `conn-order`, `lang`). Only approval settings live in the vault (`approvals`
+  setting). The vault offers a generic encrypted, synced key → JSON store (`get_setting` /
+  `set_setting`).
+- **Connections**: env (prod/staging/dev/none), tags, notes, jump hosts, per-connection approval
+  mode, identities. Pinned and recent were shown only on the start page. Search was fuzzy text.
+- **Sessions/workspaces**: tabs of split layouts whose leaves are typed strings (terminal id,
+  `view:` for RDP/DB, `files:`, `s3:`, `edit:`, `backup:`, `pending:`). Workspaces store layouts
+  of connection ids (localStorage), restored by opening fresh logins.
+- **Terminal context**: tab env stripe, pane headers only when split, SessionBar polls CPU, memory,
+  disk, load, uptime and tunnels every 5 s over its own SSH channel.
+- **AI**: one event stream for the built-in agent and the harnesses in sidebar mode
+  (text, thinking, tool_call, tool_result with `CommandResult` = state, exit code, duration,
+  truncated, output id; approval requested/resolved; usage; error). Harnesses in native or
+  OpenChamber mode run in their own window: no events. Transcripts in memory only.
+- **Approvals**: enforced in Rust (`aht-term` policy: modes, deny list, prod downgrade of Auto,
+  risk classifier); the UI only answers (`approve`, `approve_edited`, `deny`). Edited commands are
+  re-evaluated by the backend. Hold-to-confirm for destructive commands.
+- **No audit/history persistence** anywhere.
+- **Files**: SFTP and S3 backends, cross-host copy (SFTP↔SFTP, S3↔SFTP), overwrite prompt,
+  transfers store without cancel. **No local filesystem backend.**
+- **Connection editor**: one long form; **no connection test**.
+- **i18n**: `t()` over an English catalog (~1100 keys), almost no hardcoded strings.
+- **Tests**: vitest (unit), Rust unit + integration tests (real sshd, MySQL, PostgreSQL, S3 in CI).
+  No browser e2e suite (screens were checked with Playwright scripts against the mock API).
+
+## Classification and checklist
+
+Legend: UX = existing feature, UX change; EXT = existing feature extended; FE = new frontend;
+BE = new backend; X = cross-cutting.
+
+### Phase 1 — Foundation
+- [x] X — Type scale, control heights, spacing, focus and production tokens (`app.css`);
+  components use the scale instead of fixed pixel sizes.
+- [x] FE — Interface density (Comfortable default, Compact) in Settings › Appearance; terminal
+  and editor font sizes unaffected.
+- [x] X — Reactive language with English fallback; Italian catalog; language selector; tests.
+- [x] X — Version 1.1.0 (workspace, crates, npm package).
+- [ ] UI scale preference — not added: density covers text and control size, and a CSS zoom
+  would also scale the terminal, which must keep its own size.
+
+### Phase 2 — Navigation and workspaces
+- [x] EXT — Sidebar filter syntax (`env:`, `type:`, `tag:`, `host:`, `user:`, `group:`,
+  `is:active`, `is:fav`, `-` to exclude, lists), chips, filter menu; filters keep the folder tree.
+- [x] FE — Active sessions section (focuses the open pane; numbered duplicates).
+- [x] UX — Favorites and Recent sections in the sidebar (same data as before), collapsible.
+- [x] UX — Connect / more buttons on rows; connect focuses an open session.
+- [ ] UX — Home: Resume last workspace, favorites, recent activity, quick actions, empty state.
+- [ ] UX — Command palette grouping, shortcuts, more actions.
+
+### Phase 3 — Terminal
+- [ ] UX — Session context (host, user, env, jump, status, agent) without duplication.
+- [ ] UX — PROD label in tabs, pane headers, AI panel.
+- [ ] UX — Metrics: labels, tooltips, last refresh, stale state, thresholds.
+- [ ] FE — Quick actions (SFTP, new terminal, split, copy host/address, DB via host, details).
+
+### Phase 4 — AI
+- [ ] FE — Summary / Activity / Chat views (activity from real events; summary from real
+  metadata, model summary only on request).
+- [ ] UX — Agent status states; approval queue always visible.
+- [ ] UX — Approval card context (host, env, user, agent, risk, reason, policy).
+- [ ] BE/FE — Operations history (see Security decisions).
+
+### Phase 5 — Operational tools
+- [ ] UX — Database: focus SQL mode, resizable split, collapsible schema, status and errors.
+- [ ] FE — Dual-pane file manager (SFTP/S3 destinations; no local FS: not supported by backend).
+- [ ] FE — Global transfer panel.
+- [ ] FE — Compare before overwrite.
+- [ ] UX — Connection editor sections; BE — real Test Connection.
+
+### Phase 6–7 — Polish and release
+- [ ] Onboarding next steps after vault creation.
+- [ ] Translate keys added during 1.1; accessibility, responsive and performance review.
+- [ ] README, CHANGELOG, release notes, release readiness report.
+
+## Decisions
+
+- **Workspaces stay per device** (localStorage) as before; no credentials are stored in them.
+- **Operations history** is kept encrypted in the vault (generic setting store), one record list
+  per device so two devices never overwrite each other. It stores metadata (time, session,
+  connection, agent, decision, outcome, exit code, duration) and the command with known secret
+  patterns redacted; never terminal output. Retention and clearing are configurable; a locked
+  vault cannot be read.
+- **No local filesystem pane**: the backend has no local file access API; the dual pane offers
+  SSH and S3 destinations only, and says so.
