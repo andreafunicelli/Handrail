@@ -13,12 +13,20 @@
     edits = $bindable(null),
     selected = $bindable(null),
     locked = false,
+    sort = null,
+    onsort,
+    firstRow = 0,
   }: {
     result: DbResultSet;
     edits?: GridEdits | null;
     selected?: { r: number; c: number } | null;
     /** Edits are being saved: nothing more can be changed until they are. */
     locked?: boolean;
+    /** The column the rows are sorted by (a table's rows); with `onsort`, headers sort. */
+    sort?: { column: string | null; desc: boolean } | null;
+    onsort?: (column: string) => void;
+    /** Rows before this page (the numbers in the first column go on from there). */
+    firstRow?: number;
   } = $props();
 
   const ROW = 26;
@@ -131,15 +139,27 @@
     <div class="row head" role="row" style:top="0px">
       <span class="num"></span>
       {#each result.columns as c, i (i)}
-        <span class="cell" role="columnheader" style:width="{widths[i]}px" title={`${c.name} · ${c.type_name}`}>
+        {@const sorted = sort?.column === c.name}
+        <span
+          class="cell"
+          class:sortable={!!onsort}
+          role="columnheader"
+          aria-sort={sorted ? (sort?.desc ? "descending" : "ascending") : "none"}
+          style:width="{widths[i]}px"
+          title={onsort ? t("db.sortHint", { name: c.name, type: c.type_name }) : `${c.name} · ${c.type_name}`}
+          onclick={() => onsort?.(c.name)}
+          onkeydown={(e) => e.key === "Enter" && onsort?.(c.name)}
+          tabindex={onsort ? 0 : undefined}
+        >
           <span class="name">{c.name}</span><span class="type">{c.type_name.toLowerCase()}</span>
+          {#if sorted}<span class="arrow" aria-hidden="true">{sort?.desc ? "▼" : "▲"}</span>{/if}
         </span>
       {/each}
     </div>
     {#each visible as r (r)}
       {@const added = r >= result.rows.length}
       <div class="row" role="row" style:top="{(r + 1) * ROW}px" class:deleted={!!edits?.deleted[r]} class:added>
-        <span class="num">{added ? "+" : r + 1}</span>
+        <span class="num">{added ? "+" : firstRow + r + 1}</span>
         {#each result.columns as _, c (c)}
           {@const v = value(r, c)}
           {#if editing?.r === r && editing?.c === c}
@@ -239,6 +259,17 @@
   .head .name {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .head .sortable {
+    cursor: pointer;
+  }
+  .head .sortable:hover {
+    background: var(--hover);
+  }
+  .head .arrow {
+    margin-left: auto;
+    color: var(--accent);
+    font-size: 9px;
   }
   .head .type {
     color: var(--faint);

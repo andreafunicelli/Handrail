@@ -561,6 +561,24 @@ export interface DbQueryOutput {
 export interface DbTableInfo {
   name: string;
   view: boolean;
+  /** The server's estimate (statistics, not a count); null for views and unanalysed tables. */
+  rows: number | null;
+  /** Data and indexes, in bytes. */
+  size: number | null;
+  /** Storage engine (MySQL). */
+  engine: string | null;
+  comment: string | null;
+}
+
+/** Which page of a table's rows to show. */
+export interface DbRowsPage {
+  maxRows?: number;
+  offset?: number;
+  /** A column to sort by. */
+  orderBy?: string | null;
+  desc?: boolean;
+  /** A WHERE condition, as SQL. */
+  filter?: string | null;
 }
 
 export interface DbColumnInfo {

@@ -209,7 +209,10 @@ impl Client {
     pub(crate) async fn tables(&self, schema: &str) -> Result<Vec<TableInfo>> {
         let rows = self
             .side_rows(
-                "SELECT c.relname::text, CASE WHEN c.relkind IN ('v', 'm') THEN 'YES' ELSE 'NO' END \
+                "SELECT c.relname::text, CASE WHEN c.relkind IN ('v', 'm') THEN 'YES' ELSE 'NO' END, \
+                 CASE WHEN c.relkind IN ('r', 'p', 'm') THEN c.reltuples::bigint::text END, \
+                 CASE WHEN c.relkind IN ('r', 'p', 'm') THEN pg_total_relation_size(c.oid)::text END, \
+                 obj_description(c.oid, 'pg_class') \
                  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
                  WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'f') ORDER BY 1",
                 &[schema],
@@ -220,8 +223,94 @@ impl Client {
             .map(|r| TableInfo {
                 name: text_at(r, 0),
                 view: text_at(r, 1) == "YES",
+                // -1: never analysed.
+                rows: crate::count(r.get(2).and_then(|v| v.as_ref())),
+                size: crate::count(r.get(3).and_then(|v| v.as_ref())),
+                engine: None,
+                comment: crate::non_empty(r.get(4).and_then(|v| v.as_ref())),
             })
             .collect())
+    }
+
+    /// PostgreSQL has no `SHOW CREATE TABLE`: views come from `pg_get_viewdef`, tables are
+    /// rebuilt from their columns, constraints and the indexes no constraint owns.
+    pub(crate) async fn ddl(&self, schema: &str, table: &str) -> Result<String> {
+        let name = crate::sql::qualified(crate::DbKind::Postgres, schema, table);
+        let kind = self
+            .side_rows(
+                "SELECT c.relkind::text, \
+                 CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid, true) END FROM pg_class c \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = $1 AND c.relname = $2",
+                &[schema, table],
+            )
+            .await?;
+        let Some(row) = kind.first() else {
+            return Err(Error::NotFound(format!("table {schema}.{table}")));
+        };
+        match text_at(row, 0).as_str() {
+            "v" => {
+                return Ok(format!(
+                    "CREATE VIEW {name} AS\n{}",
+                    text_at(row, 1).trim_end()
+                ))
+            }
+            "m" => {
+                return Ok(format!(
+                    "CREATE MATERIALIZED VIEW {name} AS\n{}",
+                    text_at(row, 1).trim_end()
+                ))
+            }
+            _ => {}
+        }
+        let columns = self.columns(schema, table).await?;
+        let constraints = self
+            .side_rows(
+                "SELECT k.conname::text, pg_get_constraintdef(k.oid, true) FROM pg_constraint k \
+                 JOIN pg_class c ON c.oid = k.conrelid \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = $1 AND c.relname = $2 AND k.contype <> 'n' \
+                 ORDER BY CASE k.contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'f' THEN 2 ELSE 3 END, 1",
+                &[schema, table],
+            )
+            .await?;
+        let indexes = self
+            .side_rows(
+                "SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i \
+                 JOIN pg_class c ON c.oid = i.indrelid \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = $1 AND c.relname = $2 \
+                 AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.indexrelid) \
+                 ORDER BY 1",
+                &[schema, table],
+            )
+            .await?;
+        let q = |n: &str| crate::sql::quote_ident(crate::DbKind::Postgres, n);
+        let mut lines: Vec<String> = columns
+            .iter()
+            .map(|c| {
+                let mut l = format!("    {} {}", q(&c.name), c.data_type);
+                if !c.nullable {
+                    l.push_str(" NOT NULL");
+                }
+                if let Some(d) = &c.default {
+                    l.push_str(&format!(" DEFAULT {d}"));
+                }
+                l
+            })
+            .collect();
+        for k in &constraints {
+            lines.push(format!(
+                "    CONSTRAINT {} {}",
+                q(&text_at(k, 0)),
+                text_at(k, 1)
+            ));
+        }
+        let mut out = format!("CREATE TABLE {name} (\n{}\n);", lines.join(",\n"));
+        for i in &indexes {
+            out.push_str(&format!("\n{};", text_at(i, 0)));
+        }
+        Ok(out)
     }
 
     pub(crate) async fn columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {

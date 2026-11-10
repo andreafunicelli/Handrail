@@ -346,3 +346,54 @@ async fn agent_reads_cannot_write_and_open_transactions_roll_back() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn table_pages_info_and_ddl() {
+    use aht_db::sql::{select_rows, RowsQuery};
+    each_server(async |db, kind| {
+        let limits = QueryLimits::default();
+        let ns = match kind {
+            DbKind::Mysql => db.current_database().await.unwrap().unwrap(),
+            DbKind::Postgres => "public".to_string(),
+        };
+        let setup = db
+            .query(
+                "DROP VIEW IF EXISTS hr_page_v; DROP TABLE IF EXISTS hr_page; \
+                 CREATE TABLE hr_page (id INT PRIMARY KEY, name VARCHAR(20) NOT NULL); \
+                 INSERT INTO hr_page VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e'); \
+                 CREATE VIEW hr_page_v AS SELECT id FROM hr_page",
+                limits,
+            )
+            .await
+            .unwrap();
+        assert_eq!(setup.error, None, "{setup:?}");
+
+        // A filtered, sorted page.
+        let q = RowsQuery {
+            limit: 2,
+            offset: 1,
+            order: Some(("id", true)),
+            filter: Some("id > 1 -- the first row is left out"),
+        };
+        let out = db
+            .query(&select_rows(kind, &ns, "hr_page", &q), limits)
+            .await
+            .unwrap();
+        assert_eq!(out.error, None, "{out:?}");
+        let ids: Vec<&str> = out.results[0].rows.iter().map(|r| text(&r[0])).collect();
+        assert_eq!(ids, ["4", "3"]);
+
+        let tables = db.tables(&ns).await.unwrap();
+        let t = tables.iter().find(|t| t.name == "hr_page").unwrap();
+        assert!(!t.view && t.size.is_some(), "{t:?}");
+        let v = tables.iter().find(|t| t.name == "hr_page_v").unwrap();
+        assert!(v.view && v.size.is_none() && v.rows.is_none(), "{v:?}");
+
+        let ddl = db.ddl(&ns, "hr_page").await.unwrap();
+        assert!(ddl.starts_with("CREATE TABLE"), "{ddl}");
+        assert!(ddl.contains("name") && ddl.contains("PRIMARY KEY"), "{ddl}");
+        let ddl = db.ddl(&ns, "hr_page_v").await.unwrap();
+        assert!(ddl.contains("VIEW"), "{ddl}");
+    })
+    .await;
+}

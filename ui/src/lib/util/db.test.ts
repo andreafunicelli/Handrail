@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DbResultSet } from "../api/types";
-import { buildEdits, cellText, columnWidths, editCount, editedValue, noEdits, primaryResult, toCsv } from "./db";
+import { buildEdits, cellText, tableOverview, tableStats, columnWidths, editCount, editedValue, noEdits, primaryResult, toCsv } from "./db";
 
 const set = (columns: string[], rows: DbResultSet["rows"], extra: Partial<DbResultSet> = {}): DbResultSet => ({
   columns: columns.map((name) => ({ name, type_name: "TEXT" })),
@@ -55,5 +55,18 @@ describe("db helpers", () => {
     const d = noEdits();
     d.deleted[0] = true;
     expect(() => buildEdits(bin, ["id"], d)).toThrow();
+  });
+
+  it("describes tables from their statistics", () => {
+    const t = { name: "orders", view: false, rows: 2500, size: 4300, engine: "InnoDB", comment: "checkouts" };
+    const v = { name: "totals", view: true, rows: null, size: null, engine: null, comment: null };
+    expect(tableStats(t)).toBe(`~${(2500).toLocaleString()} rows · 4.2 KB · InnoDB`);
+    expect(tableStats(v)).toBe("");
+    const o = tableOverview([t, v]);
+    expect(o.columns.map((c) => c.name)).toEqual(["name", "type", "rows (estimate)", "size", "engine", "comment"]);
+    expect(o.rows).toEqual([
+      ["orders", "table", "2500", "4.2 KB", "InnoDB", "checkouts"],
+      ["totals", "view", null, null, null, null],
+    ]);
   });
 });

@@ -216,10 +216,30 @@ impl Collector {
 }
 
 /// A table or view.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct TableInfo {
     pub name: String,
     pub view: bool,
+    /// The server's estimate of the rows (statistics, not a count); `None` for views and
+    /// tables never analysed.
+    pub rows: Option<i64>,
+    /// Data and indexes, in bytes.
+    pub size: Option<i64>,
+    /// The storage engine (MySQL).
+    pub engine: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// A number the server sent as text; negative or missing is `None`.
+pub(crate) fn count(text: Option<&String>) -> Option<i64> {
+    text.and_then(|t| t.trim().parse::<f64>().ok())
+        .filter(|n| *n >= 0.0)
+        .map(|n| n as i64)
+}
+
+/// Text that is empty means none.
+pub(crate) fn non_empty(text: Option<&String>) -> Option<String> {
+    text.filter(|t| !t.trim().is_empty()).cloned()
 }
 
 /// A column of a table.
@@ -298,6 +318,15 @@ impl DbClient {
         match &self.inner {
             Inner::Mysql(c) => c.tables(namespace).await,
             Inner::Postgres(c) => c.tables(namespace).await,
+        }
+    }
+
+    /// The statement that creates a table or view (`SHOW CREATE` on MySQL, rebuilt from the
+    /// catalog on PostgreSQL).
+    pub async fn ddl(&self, namespace: &str, table: &str) -> Result<String> {
+        match &self.inner {
+            Inner::Mysql(c) => c.ddl(namespace, table).await,
+            Inner::Postgres(c) => c.ddl(namespace, table).await,
         }
     }
 
