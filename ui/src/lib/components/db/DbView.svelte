@@ -50,7 +50,18 @@
   let ranLabel = $state("");
 
   /** The table whose rows are shown, and which page of them. */
-  let browse = $state<{ ns: string; table: string; offset: number; orderBy: string | null; desc: boolean; filter: string } | null>(null);
+  let browse = $state<{
+    ns: string;
+    table: string;
+    offset: number;
+    /** Offsets of the pages before this one (Previous goes back to the last). */
+    back: number[];
+    /** The row limit this page was loaded with. */
+    limit: number;
+    orderBy: string | null;
+    desc: boolean;
+    filter: string;
+  } | null>(null);
   let filterText = $state("");
   /** A table's CREATE statement, shown over the results. */
   let ddl = $state<{ title: string; text: string } | null>(null);
@@ -175,10 +186,11 @@
   async function openTable(ns: string, table: string, force = false, keep = false) {
     if (!id || running || (!force && blocked())) return;
     if (!keep || browse?.ns !== ns || browse.table !== table) {
-      browse = { ns, table, offset: 0, orderBy: null, desc: false, filter: "" };
+      browse = { ns, table, offset: 0, back: [], limit: maxRows, orderBy: null, desc: false, filter: "" };
       filterText = "";
     }
     const b = browse!;
+    b.limit = maxRows;
     ranLabel = `${ns}.${table}`;
     editTarget = null;
     edits = null;
@@ -214,7 +226,20 @@
     change(browse);
     void openTable(browse.ns, browse.table, true, true);
   }
-  const page = (dir: 1 | -1) => reshow((b) => (b.offset = Math.max(0, b.offset + dir * maxRows)));
+  /** Next starts after the rows shown (fewer than the limit when the size cap cut the page);
+   *  Previous goes back to where the page before started. */
+  const page = (dir: 1 | -1) =>
+    reshow((b) => {
+      if (dir > 0) {
+        b.back.push(b.offset);
+        b.offset += output?.results[0]?.rows.length ?? 0;
+      } else b.offset = b.back.pop() ?? 0;
+    });
+  /** Whether rows may follow the page shown. */
+  const hasMore = $derived.by(() => {
+    const r = output?.results[0];
+    return !!browse && !!r && r.rows.length > 0 && (r.truncated || r.rows.length >= browse.limit);
+  });
   /** A header click sorts ascending, then descending, then back to the table's order. */
   const sortBy = (col: string) =>
     reshow((b) => {
@@ -222,11 +247,13 @@
       else if (!b.desc) b.desc = true;
       else [b.orderBy, b.desc] = [null, false];
       b.offset = 0;
+      b.back = [];
     });
   const applyFilter = () =>
     reshow((b) => {
       b.filter = filterText.trim();
       b.offset = 0;
+      b.back = [];
     });
 
   async function showDdl(ns: string, table: string) {
@@ -485,7 +512,7 @@
             <span class="pager">
               <button type="button" class="icon-btn" disabled={running || browse.offset === 0} title={t("db.pagePrev")} aria-label={t("db.pagePrev")} onclick={() => page(-1)}>‹</button>
               <span class="mono">{shown ? `${(browse.offset + 1).toLocaleString()}–${(browse.offset + shown).toLocaleString()}` : "0"}</span>
-              <button type="button" class="icon-btn" disabled={running || shown < maxRows} title={t("db.pageNext")} aria-label={t("db.pageNext")} onclick={() => page(1)}>›</button>
+              <button type="button" class="icon-btn" disabled={running || !hasMore} title={t("db.pageNext")} aria-label={t("db.pageNext")} onclick={() => page(1)}>›</button>
             </span>
             {#if info && tableStats(info)}<span class="stats" title={info.comment ?? undefined}>{tableStats(info)}</span>{/if}
             <button type="button" class="btn sm ghost" onclick={() => showDdl(browse!.ns, browse!.table)}><Icon name="file" size={12} />{t("db.ddl")}</button>
