@@ -1327,6 +1327,44 @@ export function createMockApi(): Api {
     async dbTransferCancel(transfer_id) {
       mockStopped.add(transfer_id);
     },
+    async dbBackupOpen(kind, transfer_id) {
+      for (let i = 1; i <= 4; i++) {
+        await sleep(80);
+        emit("db://transfer", { transfer_id, progress: { table: null, tables_done: 0, tables: 0, rows: 0, statements: 0, bytes: i * 1_200_000, errors: 0 } });
+      }
+      return { token: "bk-1", name: "shop-2026-11-09.sql.gz", size: 1_310_000, compressed: true, index: mockBackupIndex(kind ?? "mysql") };
+    },
+    async dbBackupReindex(token, kind) {
+      await sleep(120);
+      return mockBackupIndex(kind);
+    },
+    async dbBackupRows(token, table, from, limit, filter) {
+      await sleep(50);
+      const t = MOCK_BACKUP[table];
+      if (!t) throw fail("not_found", "table of the backup");
+      const f = filter?.toLowerCase() ?? "";
+      const rows: (string | null)[][] = [];
+      const positions: number[] = [];
+      let next: number | null = null;
+      for (let pos = from; pos < t.rows; pos++) {
+        const r = t.row(pos);
+        if (f && !r.some((v) => v?.toLowerCase().includes(f))) continue;
+        if (rows.length === limit) {
+          next = pos;
+          break;
+        }
+        rows.push(r);
+        positions.push(pos);
+      }
+      return { columns: t.columns, rows, positions, next };
+    },
+    async dbBackupExport(token, table, format, filter, transfer_id) {
+      const t = MOCK_BACKUP[table];
+      await sleep(200);
+      emit("db://transfer", { transfer_id, progress: { table: null, tables_done: 0, tables: 0, rows: t.rows, statements: 0, bytes: 0, errors: 0 } });
+      return { path: `/home/demo/Downloads/${t.name}.${format}`, rows: filter ? 3 : t.rows };
+    },
+    async dbBackupClose() {},
     async dbCancel(id) {
       mockDb(id).running?.();
     },
@@ -1821,6 +1859,36 @@ type MockDb = {
   users?: string[][];
 };
 const mockDbs = new Map<string, MockDb>();
+
+/** The demo backup's tables. */
+const MOCK_BACKUP = [
+  {
+    name: "customers",
+    view: false,
+    rows: 1200,
+    columns: ["id", "name", "email"],
+    row: (n: number) => [String(n + 1), ["Ada Lovelace", "Grace Hopper", "Alan Turing", "Edsger Dijkstra"][n % 4], n % 9 === 0 ? null : `user${n + 1}@example.com`],
+    create: "CREATE TABLE `customers` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(80) NOT NULL,\n  `email` varchar(120) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB;",
+  },
+  {
+    name: "orders",
+    view: false,
+    rows: 5400,
+    columns: ["id", "customer_id", "total", "status"],
+    row: (n: number) => [String(n + 1), String((n % 1200) + 1), (10 + (n % 90) + 0.5).toFixed(2), ["paid", "shipped", "refunded"][n % 3]],
+    create: "CREATE TABLE `orders` (\n  `id` bigint NOT NULL,\n  `customer_id` int NOT NULL,\n  `total` decimal(10,2) NOT NULL,\n  `status` varchar(20) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB;",
+  },
+  { name: "order_totals", view: true, rows: 0, columns: [], row: () => [], create: "CREATE VIEW `order_totals` AS select `customer_id`, sum(`total`) AS `total` from `orders` group by `customer_id`;" },
+];
+
+function mockBackupIndex(kind: "mysql" | "postgres") {
+  return {
+    kind,
+    tables: MOCK_BACKUP.map((t) => ({ schema: kind === "mysql" ? "shop" : "public", name: t.name, view: t.view, columns: t.columns, rows: t.rows, create: t.create })),
+    statements: 412,
+    bytes: 4_800_000,
+  };
+}
 
 /** Transfers asked to stop. */
 const mockStopped = new Set<string>();

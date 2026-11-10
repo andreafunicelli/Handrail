@@ -12,6 +12,7 @@
     user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 20.5a7.5 7.5 0 0 1 15 0",
     x: "M18 6 6 18M6 6l12 12",
     chevronRight: "m9 6 6 6-6 6",
+    chevronLeft: "M15 6l-6 6 6 6",
     chevronDown: "m6 9 6 6 6-6",
     more: "M6 12h.01M12 12h.01M18 12h.01",
     folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z",

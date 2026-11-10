@@ -131,7 +131,7 @@ enum State {
     /// In a block comment, nested this deep (PostgreSQL nests them).
     Block(u32),
     /// In a PostgreSQL dollar-quoted string: the whole tag (`$$`, `$body$`).
-    Dollar(String),
+    Dollar(Vec<u8>),
 }
 
 /// A statement cut from a file, with the line it starts on (1-based).
@@ -141,18 +141,31 @@ pub struct Statement {
     pub line: u64,
 }
 
+/// A statement as the file's bytes (a dump may hold bytes that are not UTF-8: `mysqldump`
+/// writes BLOBs raw), with its first line and the byte offset of its first token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawStatement {
+    pub sql: Vec<u8>,
+    pub line: u64,
+    pub offset: u64,
+}
+
 /// Cuts SQL into statements as lines arrive, so a file of any size is read a line at a time.
-/// It knows strings, quoted identifiers, comments, PostgreSQL dollar quotes and the MySQL
-/// client's `DELIMITER` command; what a statement means is left to the server.
+/// It knows strings, quoted identifiers, comments, PostgreSQL dollar quotes, the MySQL
+/// client's `DELIMITER` command and psql's backslash commands (`\connect`, `\restrict`: a
+/// line of their own, skipped); what a statement means is left to the server.
 pub struct Splitter {
     kind: DbKind,
     backslash: bool,
-    delimiter: String,
-    cur: String,
+    delimiter: Vec<u8>,
+    cur: Vec<u8>,
     /// Where the statement's first token starts in `cur` (comments before it are dropped).
     start: Option<usize>,
     start_line: u64,
+    start_offset: u64,
     line: u64,
+    /// Byte offset of the next line in the input.
+    offset: u64,
     state: State,
 }
 
@@ -177,18 +190,50 @@ fn dollar_tag(bytes: &[u8], i: usize) -> Option<usize> {
     (j < bytes.len() && bytes[j] == b'$').then_some(j + 1 - i)
 }
 
+/// A line without its line break.
+pub fn trim_line(b: &[u8]) -> &[u8] {
+    let n = b
+        .iter()
+        .rev()
+        .take_while(|c| matches!(c, b'\r' | b'\n'))
+        .count();
+    &b[..b.len() - n]
+}
+
+fn trim_start(b: &[u8]) -> &[u8] {
+    let n = b.iter().take_while(|c| c.is_ascii_whitespace()).count();
+    &b[n..]
+}
+
+fn trim_end(b: &[u8]) -> &[u8] {
+    let n = b
+        .iter()
+        .rev()
+        .take_while(|c| c.is_ascii_whitespace())
+        .count();
+    &b[..b.len() - n]
+}
+
 impl Splitter {
     /// `backslash_escapes`: MySQL strings treat a backslash as an escape (the server's
     /// `sql_mode` lacks `NO_BACKSLASH_ESCAPES`). PostgreSQL only escapes in `E'...'`.
     pub fn new(kind: DbKind, backslash_escapes: bool) -> Splitter {
+        Splitter::at(kind, backslash_escapes, 0, 0)
+    }
+
+    /// A splitter that starts reading at byte `offset`, on line `line` + 1, between
+    /// statements (to read a part of a file again).
+    pub fn at(kind: DbKind, backslash_escapes: bool, offset: u64, line: u64) -> Splitter {
         Splitter {
             kind,
             backslash: backslash_escapes,
-            delimiter: ";".into(),
-            cur: String::new(),
+            delimiter: b";".to_vec(),
+            cur: Vec::new(),
             start: None,
             start_line: 0,
-            line: 0,
+            start_offset: 0,
+            line,
+            offset,
             state: State::Normal,
         }
     }
@@ -203,25 +248,36 @@ impl Splitter {
         self.line
     }
 
-    /// A line read past the splitter (the rows of a `COPY`), so line numbers stay right.
-    pub fn skip_line(&mut self) {
-        self.line += 1;
+    /// Byte offset of the next line.
+    pub fn offset(&self) -> u64 {
+        self.offset
     }
 
-    fn mark(&mut self, at: usize) {
+    /// A line of `len` bytes read past the splitter (the rows of a `COPY`), so line numbers
+    /// and offsets stay right.
+    pub fn skip_line(&mut self, len: u64) {
+        self.line += 1;
+        self.offset += len;
+    }
+
+    /// Mark the statement's start at byte `i` of the line (`seg`: where the part of the line
+    /// not yet in `cur` begins).
+    fn mark(&mut self, i: usize, seg: usize, line_offset: u64) {
         if self.start.is_none() {
-            self.start = Some(at);
+            self.start = Some(self.cur.len() + i - seg);
             self.start_line = self.line;
+            self.start_offset = line_offset + i as u64;
         }
     }
 
-    fn emit(&mut self, out: &mut Vec<Statement>) {
+    fn emit(&mut self, out: &mut Vec<RawStatement>) {
         if let Some(s) = self.start.take() {
-            let sql = self.cur[s..].trim_end().to_string();
+            let sql = trim_end(&self.cur[s..]).to_vec();
             if !sql.is_empty() {
-                out.push(Statement {
+                out.push(RawStatement {
                     sql,
                     line: self.start_line,
+                    offset: self.start_offset,
                 });
             }
         }
@@ -230,31 +286,55 @@ impl Splitter {
 
     /// Feed one line (with its line break, if it has one); returns the statements it ended.
     pub fn push_line(&mut self, line: &str) -> Vec<Statement> {
+        self.feed(line.as_bytes())
+            .into_iter()
+            .map(|r| Statement {
+                sql: String::from_utf8_lossy(&r.sql).into_owned(),
+                line: r.line,
+            })
+            .collect()
+    }
+
+    /// [`Splitter::push_line`] for a line of bytes.
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<RawStatement> {
         self.line += 1;
+        let line_offset = self.offset;
+        self.offset += bytes.len() as u64;
         let mut out = Vec::new();
         let mysql = self.kind == DbKind::Mysql;
-        if mysql && self.state == State::Normal && self.start.is_none() {
-            let t = line.trim_start();
-            if t.len() > 9
-                && t.as_bytes()[..9].eq_ignore_ascii_case(b"delimiter")
-                && t.as_bytes()[9].is_ascii_whitespace()
+        if self.state == State::Normal && self.start.is_none() {
+            let t = trim_start(bytes);
+            if mysql
+                && t.len() > 9
+                && t[..9].eq_ignore_ascii_case(b"delimiter")
+                && t[9].is_ascii_whitespace()
             {
-                if let Some(d) = t[9..].split_whitespace().next() {
-                    self.delimiter = d.to_string();
+                let d: Vec<u8> = trim_start(&t[9..])
+                    .iter()
+                    .take_while(|c| !c.is_ascii_whitespace())
+                    .copied()
+                    .collect();
+                if !d.is_empty() {
+                    self.delimiter = d;
                 }
                 self.cur.clear();
                 return out;
             }
+            // psql's own commands (`\connect`, `\restrict` in newer pg_dump files) are not
+            // SQL: a line of their own, not sent to the server.
+            if !mysql && t.first() == Some(&b'\\') {
+                self.cur.clear();
+                return out;
+            }
         }
-        let bytes = line.as_bytes();
         let mut seg = 0;
         let mut i = 0;
         while i < bytes.len() {
             let b = bytes[i];
             match self.state.clone() {
                 State::Normal => {
-                    if bytes[i..].starts_with(self.delimiter.as_bytes()) {
-                        self.cur.push_str(&line[seg..i]);
+                    if bytes[i..].starts_with(&self.delimiter) {
+                        self.cur.extend_from_slice(&bytes[seg..i]);
                         self.emit(&mut out);
                         i += self.delimiter.len();
                         seg = i;
@@ -271,15 +351,15 @@ impl Splitter {
                                     && (i < 2 || !ident_byte(bytes[i - 2]))
                             };
                             let at = if esc && !mysql { i - 1 } else { i };
-                            self.mark(self.cur.len() + at - seg);
+                            self.mark(at, seg, line_offset);
                             self.state = State::Quote(b, esc);
                         }
                         b'"' => {
-                            self.mark(self.cur.len() + i - seg);
+                            self.mark(i, seg, line_offset);
                             self.state = State::Quote(b, mysql && self.backslash);
                         }
                         b'`' if mysql => {
-                            self.mark(self.cur.len() + i - seg);
+                            self.mark(i, seg, line_offset);
                             self.state = State::Quote(b, false);
                         }
                         b'-' if next == Some(b'-')
@@ -293,23 +373,22 @@ impl Splitter {
                         b'/' if next == Some(b'*') => {
                             // `/*! ... */` is code MySQL runs.
                             if mysql && bytes.get(i + 2) == Some(&b'!') {
-                                self.mark(self.cur.len() + i - seg);
+                                self.mark(i, seg, line_offset);
                             }
                             self.state = State::Block(1);
                             i += 2;
                             continue;
                         }
                         b'$' if !mysql => {
+                            self.mark(i, seg, line_offset);
                             if let Some(n) = dollar_tag(bytes, i) {
-                                self.mark(self.cur.len() + i - seg);
-                                self.state = State::Dollar(line[i..i + n].to_string());
+                                self.state = State::Dollar(bytes[i..i + n].to_vec());
                                 i += n;
                                 continue;
                             }
-                            self.mark(self.cur.len() + i - seg);
                         }
                         c if c.is_ascii_whitespace() => {}
-                        _ => self.mark(self.cur.len() + i - seg),
+                        _ => self.mark(i, seg, line_offset),
                     }
                     i += 1;
                 }
@@ -343,7 +422,7 @@ impl Splitter {
                     }
                 }
                 State::Dollar(tag) => {
-                    if bytes[i..].starts_with(tag.as_bytes()) {
+                    if bytes[i..].starts_with(&tag) {
                         self.state = State::Normal;
                         i += tag.len();
                     } else {
@@ -353,16 +432,24 @@ impl Splitter {
             }
         }
         // A line comment ends with the line; what came before it is kept.
-        let end = if i < bytes.len() { i } else { bytes.len() };
-        self.cur.push_str(&line[seg..end.max(seg)]);
+        let end = i.min(bytes.len());
+        self.cur.extend_from_slice(&bytes[seg..end.max(seg)]);
         if end < bytes.len() {
-            self.cur.push('\n');
+            self.cur.push(b'\n');
         }
         out
     }
 
     /// The statement left at the end of the file, if it did not end with a delimiter.
     pub fn finish(&mut self) -> Option<Statement> {
+        self.finish_raw().map(|r| Statement {
+            sql: String::from_utf8_lossy(&r.sql).into_owned(),
+            line: r.line,
+        })
+    }
+
+    /// [`Splitter::finish`] as bytes.
+    pub fn finish_raw(&mut self) -> Option<RawStatement> {
         let mut out = Vec::new();
         self.emit(&mut out);
         self.state = State::Normal;
@@ -646,6 +733,19 @@ mod tests {
         assert_eq!(got[0].1, 4);
         assert_eq!(got[4].1, 8);
         assert!(is_copy_from_stdin("COPY public.t (a, b) FROM stdin"));
+        // psql commands are skipped; statements know where they start.
+        let mut sp = Splitter::new(DbKind::Postgres, true);
+        assert!(sp.feed(b"\\restrict abc\n").is_empty());
+        let got = sp.feed(b"SELECT 1;  SELECT\n");
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].offset, got[0].line), (14, 2));
+        let got = sp.feed(b" 2;\n");
+        assert_eq!(got[0].sql, b"SELECT\n 2");
+        assert_eq!((got[0].offset, got[0].line), (25, 2));
+        // Bytes that are not UTF-8 pass through.
+        let mut sp = Splitter::new(DbKind::Mysql, true);
+        let got = sp.feed(b"INSERT INTO t VALUES ('\xff\\'');\n");
+        assert_eq!(got[0].sql, b"INSERT INTO t VALUES ('\xff\\'')");
         assert!(!is_copy_from_stdin("COPY t TO STDOUT"));
         assert!(sets_sql_mode("SET @OLD=@@SQL_MODE, sql_mode='X'"));
     }

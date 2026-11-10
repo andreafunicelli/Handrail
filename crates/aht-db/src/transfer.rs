@@ -930,7 +930,7 @@ async fn copy_in(
         if n == 0 {
             break;
         }
-        sp.skip_line();
+        sp.skip_line(n as u64);
         s.progress.bytes += n as u64;
         if line.trim_end_matches(['\r', '\n']) == "\\." {
             break;

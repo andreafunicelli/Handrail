@@ -6,9 +6,10 @@
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
   import { leaves, type LayoutNode, type SplitDir } from "../../util/layout";
-  import { editDocOf, filesSession, isEdit, isFiles, isPending, isS3, isView, pendingRef, viewConnectionOf, s3AccountOf, sessions } from "../../stores/sessions.svelte";
+  import { editDocOf, filesSession, isBackup, isEdit, isFiles, isPending, isS3, isView, pendingRef, viewConnectionOf, s3AccountOf, sessions } from "../../stores/sessions.svelte";
   import RdpView from "../rdp/RdpView.svelte";
   import DbView from "../db/DbView.svelte";
+  import BackupView from "../db/BackupView.svelte";
   import { connections } from "../../stores/connections.svelte";
   import EditorPane from "../editor/EditorPane.svelte";
   import { s3 } from "../../stores/s3.svelte";
@@ -155,6 +156,8 @@
       {:else if isS3(node.sessionId)}
         {@const id = s3AccountOf(node.sessionId)}
         <FileBrowser fs={s3Backend(id)} label={s3.byId(id)?.name ?? "S3"} />
+      {:else if isBackup(node.sessionId)}
+        <BackupView leaf={node.sessionId} onclose={() => sessions.closePane(tabId, node.id)} />
       {:else if isView(node.sessionId)}
         {@const cid = viewConnectionOf(node.sessionId)}
         {#if connections.byId.get(cid)?.kind === "rdp"}

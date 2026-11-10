@@ -44,6 +44,8 @@ pub struct DbHub {
     picked: std::sync::Mutex<HashMap<String, std::path::PathBuf>>,
     /// Running exports and imports: their tab and the flag that stops them.
     transfers: std::sync::Mutex<HashMap<String, (String, Arc<AtomicBool>)>>,
+    /// SQL backups open for reading (no server), by the token the page holds.
+    pub(crate) backups: std::sync::Mutex<HashMap<String, Arc<crate::db_backup::OpenBackup>>>,
 }
 
 struct DbSession {
@@ -463,14 +465,14 @@ pub async fn db_export_file(
 // ---------- export and import ----------
 
 /// A running transfer: registered so `db_transfer_cancel` (or closing the tab) stops it.
-struct Running<'a> {
+pub(crate) struct Running<'a> {
     hub: &'a DbHub,
     id: String,
-    stop: Arc<AtomicBool>,
+    pub(crate) stop: Arc<AtomicBool>,
 }
 
 impl<'a> Running<'a> {
-    fn new(hub: &'a DbHub, tab: &str, transfer_id: &str) -> Running<'a> {
+    pub(crate) fn new(hub: &'a DbHub, tab: &str, transfer_id: &str) -> Running<'a> {
         let stop = Arc::new(AtomicBool::new(false));
         hub.transfers
             .lock()
@@ -491,7 +493,10 @@ impl Drop for Running<'_> {
 }
 
 /// Progress as `db://transfer` events, at most five a second.
-fn transfer_reporter(app: &AppHandle, transfer_id: &str) -> impl FnMut(&Progress) + Send {
+pub(crate) fn transfer_reporter(
+    app: &AppHandle,
+    transfer_id: &str,
+) -> impl FnMut(&Progress) + Send {
     let app = app.clone();
     let id = transfer_id.to_string();
     let mut last: Option<std::time::Instant> = None;

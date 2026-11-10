@@ -20,6 +20,7 @@ import { terminals } from "../terminal/host";
 import { connections } from "./connections.svelte";
 import { agent } from "./agent.svelte";
 import { editors } from "./editors.svelte";
+import { backups } from "./backups.svelte";
 import { ui } from "./ui.svelte";
 import { RECONNECT_ATTEMPTS, reconnectDelay, retryable, shouldAutoReconnect } from "../util/reconnect";
 import { t } from "../i18n";
@@ -89,12 +90,16 @@ const viewLeaf = (connectionId: string) => `${VIEW}${connectionId}#${uuid()}`;
 /** Connections whose pane connects itself rather than through a login pane. */
 const opensItself = (connectionId: string) => ["rdp", "mysql", "postgres"].includes(connections.byId.get(connectionId)?.kind ?? "");
 
+/** An SQL backup read without a server: `backup:<instance>`. */
+const BACKUP = "backup:";
+export const isBackup = (leafSession: string) => leafSession.startsWith(BACKUP);
+
 const EDIT = "edit:";
 export const isEdit = (leafSession: string) => leafSession.startsWith(EDIT);
 export const editDocOf = (leafSession: string) => leafSession.slice(EDIT.length);
 /** Whether a leaf shows a live terminal (not a connecting pane, file browser or editor). */
 const isTerminal = (leafSession: string) =>
-  !isPending(leafSession) && !isFiles(leafSession) && !isS3(leafSession) && !isEdit(leafSession) && !isView(leafSession);
+  !isPending(leafSession) && !isFiles(leafSession) && !isS3(leafSession) && !isEdit(leafSession) && !isView(leafSession) && !isBackup(leafSession);
 
 export class Sessions {
   infos = $state<Record<string, SessionInfo>>({});
@@ -493,10 +498,15 @@ export class Sessions {
     this.placeLeaf(leafSession, split);
   }
 
+  /** Open an SQL backup to read (the pane asks for the file). */
+  openBackup(split?: SplitDir) {
+    this.placeLeaf(BACKUP + uuid(), split);
+  }
+
   private dropSession(sessionId: string) {
     if (isEdit(sessionId)) return editors.close(editDocOf(sessionId));
     // Remote desktops and databases close with their pane (RdpView, DbView).
-    if (isFiles(sessionId) || isS3(sessionId) || isView(sessionId)) return;
+    if (isFiles(sessionId) || isS3(sessionId) || isView(sessionId) || isBackup(sessionId)) return;
     if (isPending(sessionId)) {
       const ref = pendingRef(sessionId);
       const p = this.pending[ref];
@@ -601,6 +611,7 @@ export class Sessions {
     if (isFiles(leafSession)) return `Files · ${this.infos[filesSession(leafSession)]?.title ?? "…"}`;
     if (isS3(leafSession)) return `S3 · ${s3.byId(s3AccountOf(leafSession))?.name ?? "…"}`;
     if (isView(leafSession)) return connections.byId.get(viewConnectionOf(leafSession))?.name ?? "…";
+    if (isBackup(leafSession)) return `${t("backup.title")} · ${backups.names[leafSession] ?? "…"}`;
     if (isEdit(leafSession)) {
       const id = editDocOf(leafSession);
       return `${editors.docs[id]?.name ?? "…"}${editors.dirty(id) ? " •" : ""}`;
@@ -616,7 +627,7 @@ export class Sessions {
   // ---- workspaces ----
   saveWorkspace(name: string) {
     // File browsers are not saved; a pane still logging in is saved as its connection.
-    const browser = (id: string) => isFiles(id) || isS3(id) || isEdit(id);
+    const browser = (id: string) => isFiles(id) || isS3(id) || isEdit(id) || isBackup(id);
     const connOf = (id: string) =>
       (isView(id) ? viewConnectionOf(id) : isPending(id) ? this.pending[pendingRef(id)]?.connectionId : this.infos[id]?.connection_id) ?? "local";
     const tabs = this.tabs.flatMap((t) => {
