@@ -54,6 +54,8 @@ export function createTauriApi(): Api {
     getApprovalSettings: async () =>
       (await invoke<ApprovalSettings | null>("get_setting", { key: APPROVALS_KEY })) ?? DEFAULT_APPROVALS,
     saveApprovalSettings: (settings) => invoke("set_setting", { key: APPROVALS_KEY, value: settings }),
+    getSetting: async (key) => (await invoke<unknown>("get_setting", { key })) ?? null,
+    setSetting: (key, value) => invoke("set_setting", { key, value }),
 
     sftpSudo: (session_id, password) => invoke("sftp_sudo", { session_id, password }),
     sftpRootOff: (session_id) => invoke("sftp_root_off", { session_id }),

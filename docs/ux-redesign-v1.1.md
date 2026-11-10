@@ -66,11 +66,18 @@ BE = new backend; X = cross-cutting.
 - [ ] FE — Quick actions (SFTP, new terminal, split, copy host/address, DB via host, details).
 
 ### Phase 4 — AI
-- [ ] FE — Summary / Activity / Chat views (activity from real events; summary from real
-  metadata, model summary only on request).
-- [ ] UX — Agent status states; approval queue always visible.
-- [ ] UX — Approval card context (host, env, user, agent, risk, reason, policy).
-- [ ] BE/FE — Operations history (see Security decisions).
+- [x] FE — Summary / Activity / Chat views (activity from real events; summary from real
+  metadata, model summary only on request). Harnesses in native/OpenChamber mode: a note, no
+  invented events.
+- [x] UX — Agent status states; approval queue always visible (tab badge, banner in every view,
+  pending cards pinned in Activity, approvals waiting in other sessions listed). Requests the
+  backend withdraws unanswered (`approval://resolved`) show as expired.
+- [x] UX — Approval card context (host, env, user, agent, risk, reason, policy, technical
+  details; edited commands are re-checked by the backend policy, as the card says).
+- [~] FE — Operations history (see Decisions): vault setting `opslog.<device id>`, settings
+  `opslog.settings`, redaction, retention, cap, clear, filters in Settings › Approvals. Covers
+  agent tool calls seen by the UI; not database query approvals, nor harnesses running in their
+  own window (their calls never reach this UI). No backend change: written by the UI in batches.
 
 ### Phase 5 — Operational tools
 - [ ] UX — Database: focus SQL mode, resizable split, collapsible schema, status and errors.

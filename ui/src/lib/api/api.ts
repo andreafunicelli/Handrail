@@ -11,6 +11,7 @@ import type {
   AgentMarkEvent,
   ApprovalDecision,
   ApprovalMode,
+  ApprovalId,
   ApprovalRequest,
   ApprovalSettings,
   Brain,
@@ -87,6 +88,8 @@ export interface EventMap {
   /** A proposal ended without the user (agent cancelled or timed out): drop its diff. */
   "edit://resolved": string;
   "approval://requested": ApprovalRequest;
+  /** A request ended without an answer from the user (timed out, run cancelled): denied. */
+  "approval://resolved": ApprovalId;
   /** An agent's SQL waits for the user in a database tab. */
   "db://approval": DbApprovalRequest;
   /** An export or import advanced. */
@@ -156,6 +159,11 @@ export interface Api {
   setApprovalMode(sessionId: string, mode: ApprovalMode): Promise<void>;
   getApprovalSettings(): Promise<ApprovalSettings>;
   saveApprovalSettings(settings: ApprovalSettings): Promise<void>;
+
+  // generic vault settings (encrypted, synced; one JSON value per key; `sync.*` is refused)
+  /** The value stored under `key`, or null. Fails while the vault is locked. */
+  getSetting(key: string): Promise<unknown>;
+  setSetting(key: string, value: unknown): Promise<void>;
 
   // providers / harnesses / agent
   // files (SFTP on an SSH session's connection)
