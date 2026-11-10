@@ -478,6 +478,9 @@ async fn table_structure() {
             "{owner:?}"
         );
         assert_eq!(owner.comment.as_deref(), Some("who bought"));
+        if kind == DbKind::Mysql {
+            assert!(owner.collation.is_some(), "{owner:?}");
+        }
 
         let pk = s
             .indexes

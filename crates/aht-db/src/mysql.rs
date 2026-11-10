@@ -242,7 +242,7 @@ impl Client {
         let columns = self
             .side_rows(
                 "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, \
-                 IF(COLUMN_KEY = 'PRI', 'YES', 'NO'), EXTRA, COLUMN_COMMENT \
+                 IF(COLUMN_KEY = 'PRI', 'YES', 'NO'), EXTRA, COLUMN_COMMENT, COLLATION_NAME \
                  FROM information_schema.COLUMNS \
                  WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
                 &[db, table],
@@ -257,6 +257,7 @@ impl Client {
                 primary_key: text_at(r, 4) == "YES",
                 extra: crate::non_empty(at(r, 5).as_ref()),
                 comment: crate::non_empty(at(r, 6).as_ref()),
+                collation: crate::non_empty(at(r, 7).as_ref()),
             })
             .collect();
         let rows = self
