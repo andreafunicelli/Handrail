@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { AuthPromptEvent, HostKeyEvent, SessionInfo, SessionState, TunnelStatus } from "../api/types";
+import type { AuthPromptEvent, Environment, HostKeyEvent, SessionInfo, SessionState, TunnelStatus } from "../api/types";
 import { errorMessage } from "../api/errors";
 import { b64ToBytes } from "../util/b64";
 import { uuid } from "../util/id";
@@ -25,6 +25,7 @@ import { ui } from "./ui.svelte";
 import { RECONNECT_ATTEMPTS, reconnectDelay, retryable, shouldAutoReconnect } from "../util/reconnect";
 import { t } from "../i18n";
 import { s3 } from "./s3.svelte";
+import { mostSensitiveEnv } from "../util/sessionContext";
 
 export interface Tab {
   id: string;
@@ -662,6 +663,30 @@ export class Sessions {
   tabInfo(tab: Tab): SessionInfo | null {
     const l = findLeaf(tab.layout, tab.activeLeaf) ?? leaves(tab.layout)[0];
     return this.infos[l.sessionId] ?? null;
+  }
+
+  /** The saved connection a pane works on (its terminal, file browser, view or login), if any. */
+  leafConnectionId(leafSession: string): string | null {
+    let id: string | null | undefined = null;
+    if (isPending(leafSession)) id = this.pending[pendingRef(leafSession)]?.connectionId;
+    else if (isView(leafSession)) id = viewConnectionOf(leafSession);
+    else if (isFiles(leafSession)) id = this.infos[filesSession(leafSession)]?.connection_id;
+    else if (isTerminal(leafSession)) id = this.infos[leafSession]?.connection_id;
+    return id && id !== "local" ? id : null;
+  }
+
+  /** The environment of a pane: its session's, else its connection's. */
+  leafEnv(leafSession: string): Environment {
+    if (isTerminal(leafSession) && this.infos[leafSession]) return this.infos[leafSession].env;
+    if (isFiles(leafSession) && this.infos[filesSession(leafSession)]) return this.infos[filesSession(leafSession)].env;
+    const cid = this.leafConnectionId(leafSession);
+    return (cid && connections.byId.get(cid)?.env) || "none";
+  }
+
+  /** The most sensitive environment among a tab's panes: a tab holding a production pane is a
+   *  production tab, whichever pane has focus. */
+  tabEnv(tab: Tab): Environment {
+    return mostSensitiveEnv(leaves(tab.layout).map((l) => this.leafEnv(l.sessionId)));
   }
 
   // ---- workspaces ----
