@@ -43,6 +43,7 @@ import type {
   FolderPreset,
   SnapshotInfo,
   UpdateInfo,
+  NightlyBuild,
   SyncReport,
   SyncStatus,
   VaultStatus,
@@ -331,6 +332,8 @@ export interface Api {
   restartApp(): Promise<void>;
   /** Opens an https link in the default browser (the webview ignores target="_blank"). */
   openUrl(url: string): Promise<void>;
+  /** The newest Handrail Nightly prerelease, or null when none is published. */
+  nightlyBuild(): Promise<NightlyBuild | null>;
 
   // misc
 
