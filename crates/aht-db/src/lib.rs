@@ -8,10 +8,12 @@
 //! every value arrives as text, so any column type can be shown without a decoder per type.
 
 pub mod accounts;
+pub mod dump;
 mod mysql;
 mod postgres;
 pub mod risk;
 pub mod sql;
+pub mod transfer;
 
 pub use aht_core::{Error, Result};
 use serde::{Deserialize, Serialize};

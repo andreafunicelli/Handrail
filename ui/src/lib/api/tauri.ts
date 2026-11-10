@@ -96,6 +96,13 @@ export function createTauriApi(): Api {
     dbAccount: (id, change) => invoke("db_account", { id, change }),
     dbGrants: (id, user, host) => invoke("db_grants", { id, user, host }),
     dbExportFile: (file_name, contents) => invoke("db_export_file", { file_name, contents }),
+    dbDump: (id, namespace, options, transfer_id) => invoke("db_dump", { id, namespace, options, transfer_id }),
+    dbPickFile: (kind) => invoke("db_pick_file", { kind }),
+    dbCsvPreview: (token, delimiter) => invoke("db_csv_preview", { token, delimiter }),
+    dbImportSql: (id, token, namespace, stop_on_error, transfer_id) =>
+      invoke("db_import_sql", { id, token, namespace, options: { stop_on_error }, transfer_id }),
+    dbImportCsv: (id, token, namespace, table, options, transfer_id) => invoke("db_import_csv", { id, token, namespace, table, options, transfer_id }),
+    dbTransferCancel: (transfer_id) => invoke("db_transfer_cancel", { transfer_id }),
     dbCancel: (id) => invoke("db_cancel", { id }),
     dbApplyEdits: (id, namespace, table, edits) => invoke("db_apply_edits", { id, namespace, table, edits }),
     dbShare: (id, shared) => invoke("db_share", { id, shared }),

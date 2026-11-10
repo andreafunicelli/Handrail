@@ -642,3 +642,250 @@ async fn accounts_and_privileges() {
         );
     }
 }
+
+/// Rows of a query, every cell as text (NULL as "NULL", bytes as `hex:..`).
+async fn rows_of(db: &DbClient, sql: &str) -> Vec<Vec<String>> {
+    let out = db.query(sql, QueryLimits::default()).await.unwrap();
+    assert_eq!(out.error, None, "{sql}: {out:?}");
+    out.results
+        .last()
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| {
+            r.iter()
+                .map(|v| match v {
+                    Value::Null => "NULL".to_string(),
+                    Value::Text(s) => s.clone(),
+                    Value::Bytes { hex } => format!("hex:{hex}"),
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn dump_and_import_round_trip() {
+    use aht_db::transfer::{self, DumpOptions, ImportOptions};
+    use std::sync::atomic::AtomicBool;
+    for kind in [DbKind::Mysql, DbKind::Postgres] {
+        let Some(p) = params(kind) else { continue };
+        let db = DbClient::connect(&p).await.unwrap();
+        let ns = "hr_dump_ns";
+        let reset = match kind {
+            DbKind::Mysql => format!("DROP DATABASE IF EXISTS {ns}; CREATE DATABASE {ns}"),
+            DbKind::Postgres => format!("DROP SCHEMA IF EXISTS {ns} CASCADE; CREATE SCHEMA {ns}"),
+        };
+        let q = |t: &str| format!("{ns}.{t}");
+        let schema = match kind {
+            DbKind::Mysql => format!(
+                "CREATE TABLE {b} (id INT AUTO_INCREMENT PRIMARY KEY, name TEXT, raw BLOB, \
+                   twice INT GENERATED ALWAYS AS (id * 2) STORED, at TIMESTAMP NULL); \
+                 CREATE TABLE {a} (id INT PRIMARY KEY, parent INT, \
+                   CONSTRAINT a_fk FOREIGN KEY (parent) REFERENCES {b} (id)); \
+                 CREATE VIEW {v1} AS SELECT id, name FROM {b}; \
+                 CREATE VIEW {v0} AS SELECT id FROM {v1}; \
+                 INSERT INTO {b} (name, raw, at) VALUES \
+                   ('it''s a \\\\ back\\nslash; -- not a comment', X'00FF27', '2026-01-02 03:04:05'), \
+                   ('ünïcode', NULL, NULL), (NULL, X'', NULL); \
+                 INSERT INTO {a} VALUES (1, 1), (2, 3)",
+                a = q("a_child"),
+                b = q("b_parent"),
+                v0 = q("a_view"),
+                v1 = q("z_view"),
+            ),
+            DbKind::Postgres => format!(
+                "CREATE TABLE {b} (id SERIAL PRIMARY KEY, name TEXT, raw BYTEA, \
+                   twice INT GENERATED ALWAYS AS (id * 2) STORED, at TIMESTAMPTZ); \
+                 CREATE TABLE {a} (id INT PRIMARY KEY, parent INT, \
+                   CONSTRAINT a_fk FOREIGN KEY (parent) REFERENCES {b} (id)); \
+                 CREATE TABLE {c} (id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, tag TEXT); \
+                 CREATE VIEW {v1} AS SELECT id, name FROM {b}; \
+                 CREATE VIEW {v0} AS SELECT id FROM {v1}; \
+                 INSERT INTO {b} (name, raw, at) VALUES \
+                   (E'it''s a \\\\ back\\nslash; -- not a comment', '\\x00ff27', '2026-01-02 03:04:05+00'), \
+                   ('ünïcode', NULL, NULL), (NULL, '\\x', NULL); \
+                 INSERT INTO {a} VALUES (1, 1), (2, 3); \
+                 INSERT INTO {c} (tag) VALUES ('x'), ('y')",
+                a = q("a_child"),
+                b = q("b_parent"),
+                c = q("c_ident"),
+                v0 = q("a_view"),
+                v1 = q("z_view"),
+            ),
+        };
+        let out = db
+            .query(&format!("{reset}; {schema}"), QueryLimits::default())
+            .await
+            .unwrap();
+        assert_eq!(out.error, None, "{kind:?}: {out:?}");
+        let check = format!(
+            "SELECT id, name, raw, twice, at FROM {} ORDER BY id",
+            q("b_parent")
+        );
+        let before = rows_of(&db, &check).await;
+        assert_eq!(before.len(), 3);
+
+        let stop = AtomicBool::new(false);
+        let mut seen = 0u64;
+        let mut report = |_: &transfer::Progress| seen += 1;
+        let mut file = Vec::new();
+        let opts = DumpOptions {
+            tables: Vec::new(),
+            structure: true,
+            data: true,
+            drop: true,
+        };
+        let sum = transfer::dump(&db, ns, &opts, &mut file, &mut report, &stop)
+            .await
+            .unwrap();
+        assert!(!sum.cancelled);
+        assert!(sum.progress.rows >= 5, "{sum:?}");
+        let text = String::from_utf8(file.clone()).unwrap();
+        assert!(!text.contains("DEFINER="), "{text}");
+
+        // Into an empty namespace, twice (the drops make it repeatable).
+        db.query(&reset, QueryLimits::default()).await.unwrap();
+        for round in 0..2 {
+            let sum = transfer::import_sql(
+                &db,
+                Some(ns),
+                &mut file.as_slice(),
+                &ImportOptions {
+                    stop_on_error: true,
+                },
+                &mut report,
+                &stop,
+            )
+            .await
+            .unwrap();
+            assert!(
+                sum.errors.is_empty() && !sum.rolled_back,
+                "{kind:?} round {round}: {:?}\n{text}",
+                sum.errors
+            );
+            assert_eq!(rows_of(&db, &check).await, before, "{kind:?}\n{text}");
+        }
+        assert_eq!(
+            rows_of(&db, &format!("SELECT id FROM {} ORDER BY id", q("a_view"))).await,
+            vec![vec!["1"], vec!["2"], vec!["3"]]
+        );
+        // The foreign key came back, and so did the counters.
+        let bad = db
+            .query(
+                &format!("INSERT INTO {} VALUES (9, 99)", q("a_child")),
+                QueryLimits::default(),
+            )
+            .await
+            .unwrap();
+        assert!(bad.error.is_some(), "{kind:?}: the foreign key is missing");
+        let next = rows_of(
+            &db,
+            &match kind {
+                DbKind::Mysql => format!(
+                    "INSERT INTO {t} (name) VALUES ('new'); SELECT MAX(id) FROM {t}",
+                    t = q("b_parent")
+                ),
+                DbKind::Postgres => format!(
+                    "INSERT INTO {t} (name) VALUES ('new') RETURNING id",
+                    t = q("b_parent")
+                ),
+            },
+        )
+        .await;
+        assert_eq!(next, vec![vec!["4"]], "{kind:?}");
+        if kind == DbKind::Postgres {
+            let id = rows_of(
+                &db,
+                &format!(
+                    "INSERT INTO {} (tag) VALUES ('z') RETURNING id",
+                    q("c_ident")
+                ),
+            )
+            .await;
+            assert_eq!(id, vec![vec!["3"]]);
+        }
+
+        // A refused statement: the PostgreSQL run is rolled back as a whole.
+        let broken = format!(
+            "CREATE TABLE {t} (id INT);\nINSERT INTO {t} VALUES (1);\nINSERT INTO {t} VALUES ('x');\n",
+            t = q("hr_partial")
+        );
+        let sum = transfer::import_sql(
+            &db,
+            Some(ns),
+            &mut broken.as_bytes(),
+            &ImportOptions {
+                stop_on_error: true,
+            },
+            &mut report,
+            &stop,
+        )
+        .await
+        .unwrap();
+        assert_eq!(sum.errors.len(), 1, "{sum:?}");
+        assert_eq!(sum.errors[0].line, 3);
+        assert_eq!(sum.rolled_back, kind == DbKind::Postgres);
+
+        // CSV: quotes, delimiters inside them, a NULL marker; a bad record keeps nothing.
+        let t = q("hr_csv");
+        db.query(
+            &format!("CREATE TABLE {t} (id INT PRIMARY KEY, name TEXT, note TEXT)"),
+            QueryLimits::default(),
+        )
+        .await
+        .unwrap();
+        let csv = "id;name;note\n1;\"Rossi; Mario\";\\N\n2;\"say \"\"hi\"\"\";a\\b\n";
+        let copts = transfer::CsvOptions {
+            delimiter: ';',
+            header: true,
+            null: Some("\\N".into()),
+            columns: vec![Some("id".into()), Some("name".into()), Some("note".into())],
+            replace: false,
+        };
+        let sum = transfer::import_csv(
+            &db,
+            ns,
+            "hr_csv",
+            &mut csv.as_bytes(),
+            &copts,
+            &mut report,
+            &stop,
+        )
+        .await
+        .unwrap();
+        assert!(sum.errors.is_empty(), "{sum:?}");
+        assert_eq!(sum.progress.rows, 2);
+        assert_eq!(
+            rows_of(&db, &format!("SELECT id, name, note FROM {t} ORDER BY id")).await,
+            vec![
+                vec!["1", "Rossi; Mario", "NULL"],
+                vec!["2", "say \"hi\"", "a\\b"]
+            ]
+        );
+        let bad_csv = "id;name;note\n3;x;y\n4;only two\n";
+        let sum = transfer::import_csv(
+            &db,
+            ns,
+            "hr_csv",
+            &mut bad_csv.as_bytes(),
+            &copts,
+            &mut report,
+            &stop,
+        )
+        .await
+        .unwrap();
+        assert!(sum.rolled_back && sum.errors[0].line == 3, "{sum:?}");
+        assert_eq!(
+            rows_of(&db, &format!("SELECT COUNT(*) FROM {t}")).await,
+            vec![vec!["2"]]
+        );
+        assert!(seen > 0);
+        let drop = match kind {
+            DbKind::Mysql => format!("DROP DATABASE {ns}"),
+            DbKind::Postgres => format!("DROP SCHEMA {ns} CASCADE"),
+        };
+        db.query(&drop, QueryLimits::default()).await.unwrap();
+        db.close().await;
+    }
+}

@@ -77,11 +77,11 @@ fn value(row: &MySqlRow, i: usize) -> Value {
     }
 }
 
-fn values(row: &MySqlRow) -> Vec<Value> {
+pub(crate) fn values(row: &MySqlRow) -> Vec<Value> {
     (0..row.len()).map(|i| value(row, i)).collect()
 }
 
-fn texts(row: &MySqlRow) -> Vec<Option<String>> {
+pub(crate) fn texts(row: &MySqlRow) -> Vec<Option<String>> {
     (0..row.len())
         .map(|i| match value(row, i) {
             Value::Null => None,
@@ -110,7 +110,7 @@ impl Client {
         Ok(client)
     }
 
-    async fn open(&self) -> Result<MySqlConnection> {
+    pub(crate) async fn open(&self) -> Result<MySqlConnection> {
         tokio::time::timeout(self.timeout, MySqlConnection::connect_with(&self.opts))
             .await
             .map_err(|_| Error::Network("timed out connecting to the database".into()))?
@@ -141,7 +141,7 @@ impl Client {
     }
 
     /// Rows of a schema query on the side connection, every value as text.
-    fn side_rows<'a>(
+    pub(crate) fn side_rows<'a>(
         &'a self,
         sql: &'a str,
         binds: &'a [&'a str],
@@ -260,7 +260,7 @@ impl Client {
 
     /// Rows of SQL without parameters, over the text protocol (statements such as SHOW and
     /// KILL that are not all preparable).
-    fn side_text_rows<'a>(
+    pub(crate) fn side_text_rows<'a>(
         &'a self,
         sql: &'a str,
     ) -> BoxFuture<'a, Result<Vec<Vec<Option<String>>>>> {
