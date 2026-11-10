@@ -281,6 +281,43 @@ pub struct ForeignKeyInfo {
     pub on_delete: String,
 }
 
+/// What the server panel shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerInfo {
+    /// Connections and what they run.
+    Processes,
+    /// Settings (global variables / pg_settings).
+    Variables,
+    /// Counters (global status / pg_stat_database).
+    Status,
+    /// Accounts (mysql.user / pg_roles).
+    Users,
+}
+
+/// Rows of text as a result set the grid shows.
+pub(crate) fn text_result(columns: &[&str], rows: Vec<Vec<Option<String>>>) -> ResultSet {
+    ResultSet {
+        columns: columns
+            .iter()
+            .map(|c| ResultColumn {
+                name: (*c).to_string(),
+                type_name: "TEXT".into(),
+            })
+            .collect(),
+        rows: rows
+            .into_iter()
+            .map(|r| {
+                r.into_iter()
+                    .map(|v| v.map_or(Value::Null, Value::Text))
+                    .collect()
+            })
+            .collect(),
+        rows_affected: 0,
+        truncated: false,
+    }
+}
+
 /// A list the server sent joined by the unit separator.
 pub(crate) fn split_list(text: Option<&String>) -> Vec<String> {
     text.map(|t| {
@@ -389,6 +426,23 @@ impl DbClient {
         match &self.inner {
             Inner::Mysql(c) => c.ddl(namespace, table).await,
             Inner::Postgres(c) => c.ddl(namespace, table).await,
+        }
+    }
+
+    /// The server panel: processes, settings, counters or accounts (read on the side
+    /// connection, so a long statement in the editor does not block it).
+    pub async fn server_info(&self, what: ServerInfo) -> Result<ResultSet> {
+        match &self.inner {
+            Inner::Mysql(c) => c.server_info(what).await,
+            Inner::Postgres(c) => c.server_info(what).await,
+        }
+    }
+
+    /// Stop what a connection runs (`connection`: close the connection itself).
+    pub async fn kill(&self, pid: u64, connection: bool) -> Result<()> {
+        match &self.inner {
+            Inner::Mysql(c) => c.kill(pid, connection).await,
+            Inner::Postgres(c) => c.kill(pid, connection).await,
         }
     }
 

@@ -508,3 +508,66 @@ async fn table_structure() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn server_panel_and_kill() {
+    use aht_db::ServerInfo;
+    for kind in [DbKind::Mysql, DbKind::Postgres] {
+        let Some(p) = params(kind) else { continue };
+        let db = DbClient::connect(&p).await.unwrap();
+        let other = Arc::new(DbClient::connect(&p).await.unwrap());
+
+        let vars = db.server_info(ServerInfo::Variables).await.unwrap();
+        assert!(
+            vars.rows
+                .iter()
+                .any(|r| r[0] == Value::Text("max_connections".into())),
+            "{kind:?}"
+        );
+        assert!(!db
+            .server_info(ServerInfo::Status)
+            .await
+            .unwrap()
+            .rows
+            .is_empty());
+        assert!(!db
+            .server_info(ServerInfo::Users)
+            .await
+            .unwrap()
+            .rows
+            .is_empty());
+
+        // Stop another connection's statement by its process id.
+        let sleep = match kind {
+            DbKind::Mysql => "SELECT SLEEP(30) AS hr_kill_marker",
+            DbKind::Postgres => "SELECT pg_sleep(30) AS hr_kill_marker",
+        };
+        let started = Instant::now();
+        let runner = {
+            let other = other.clone();
+            tokio::spawn(async move { other.query(sleep, QueryLimits::default()).await })
+        };
+        let mut pid = None;
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let procs = db.server_info(ServerInfo::Processes).await.unwrap();
+            pid = procs.rows.iter().find_map(|r| match (&r[0], r.last()) {
+                (Value::Text(id), Some(Value::Text(q)))
+                    if q.contains("hr_kill_marker")
+                        && !q.contains("PROCESSLIST")
+                        && !q.contains("pg_stat_activity") =>
+                {
+                    id.parse::<u64>().ok()
+                }
+                _ => None,
+            });
+            if pid.is_some() {
+                break;
+            }
+        }
+        let pid = pid.expect("the sleeping statement is listed");
+        db.kill(pid, false).await.unwrap();
+        let _ = runner.await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(20), "{kind:?}");
+    }
+}

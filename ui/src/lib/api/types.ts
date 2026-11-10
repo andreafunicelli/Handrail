@@ -653,3 +653,6 @@ export interface DbTableStructure {
   indexes: DbIndexInfo[];
   foreign_keys: DbForeignKeyInfo[];
 }
+
+/** What the server panel shows. */
+export type DbServerInfo = "processes" | "variables" | "status" | "users";
