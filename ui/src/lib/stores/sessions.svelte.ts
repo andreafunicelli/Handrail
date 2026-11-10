@@ -22,6 +22,7 @@ import { agent } from "./agent.svelte";
 import { editors } from "./editors.svelte";
 import { backups } from "./backups.svelte";
 import { ui } from "./ui.svelte";
+import { toasts } from "./toasts.svelte";
 import { RECONNECT_ATTEMPTS, reconnectDelay, retryable, shouldAutoReconnect } from "../util/reconnect";
 import { t } from "../i18n";
 import { s3 } from "./s3.svelte";
@@ -39,6 +40,20 @@ export interface Workspace {
   id: string;
   name: string;
   tabs: LayoutNode[];
+  /** When it was saved and last opened (ms epoch; absent in workspaces saved before 1.1). */
+  savedAt?: number;
+  openedAt?: number;
+}
+
+/** What a saved workspace holds, for its summary. */
+export interface WorkspaceSummary {
+  tabs: number;
+  ssh: number;
+  rdp: number;
+  db: number;
+  local: number;
+  /** Panes whose connection was deleted since (they are skipped when it opens). */
+  missing: number;
 }
 
 const COLS = 120;
@@ -675,7 +690,7 @@ export class Sessions {
       for (const l of leaves(t.layout)) if (layout && browser(l.sessionId)) layout = removeLeaf(layout, l.id);
       return layout ? [mapLeaves(layout, (l) => ({ ...l, sessionId: connOf(l.sessionId) }))] : [];
     });
-    const ws: Workspace = { id: uuid(), name, tabs: $state.snapshot(tabs) as LayoutNode[] };
+    const ws: Workspace = { id: uuid(), name, tabs: $state.snapshot(tabs) as LayoutNode[], savedAt: Date.now() };
     this.workspaces = [...this.workspaces.filter((w) => w.name !== name), ws];
     save("workspaces", this.workspaces);
     return ws;
@@ -686,17 +701,56 @@ export class Sessions {
     save("workspaces", this.workspaces);
   }
 
+  /** The workspace opened or saved most recently. */
+  get lastWorkspace(): Workspace | null {
+    let best: Workspace | null = null;
+    for (const w of this.workspaces) {
+      const at = Math.max(w.openedAt ?? 0, w.savedAt ?? 0);
+      if (!best || at > Math.max(best.openedAt ?? 0, best.savedAt ?? 0)) best = w;
+    }
+    return best;
+  }
+
+  summarize(ws: Workspace): WorkspaceSummary {
+    const s: WorkspaceSummary = { tabs: ws.tabs.length, ssh: 0, rdp: 0, db: 0, local: 0, missing: 0 };
+    for (const layout of ws.tabs) {
+      for (const l of leaves(layout)) {
+        if (l.sessionId === "local") s.local++;
+        else {
+          const c = connections.byId.get(l.sessionId);
+          if (!c) s.missing++;
+          else if (c.kind === "rdp") s.rdp++;
+          else if (c.kind === "mysql" || c.kind === "postgres") s.db++;
+          else s.ssh++;
+        }
+      }
+    }
+    return s;
+  }
+
   async openWorkspace(id: string) {
     const ws = this.workspaces.find((w) => w.id === id);
     if (!ws) return;
-    for (const layout of ws.tabs) {
+    this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, openedAt: Date.now() } : w));
+    save("workspaces", this.workspaces);
+    let skipped = 0;
+    for (const saved of ws.tabs) {
+      // A pane whose connection was deleted since is left out (it used to open a local shell).
+      let layout: LayoutNode | null = saved;
+      for (const l of leaves(saved)) {
+        if (layout && l.sessionId !== "local" && !connections.byId.has(l.sessionId)) {
+          layout = removeLeaf(layout, l.id);
+          skipped++;
+        }
+      }
+      if (!layout) continue;
       const mapping = new Map<string, string>();
       const logins: [string, string][] = [];
       for (const l of leaves(layout)) {
         const conn = l.sessionId;
         if (opensItself(conn)) {
           mapping.set(l.id, viewLeaf(conn));
-        } else if (conn === "local" || !connections.byId.has(conn)) {
+        } else if (conn === "local") {
           const info = await api.openLocalSession(null, COLS, ROWS);
           this.infos[info.session_id] = info;
           mapping.set(l.id, info.session_id);
@@ -713,6 +767,7 @@ export class Sessions {
       // Each pane logs in on its own (and may ask for a password).
       for (const [ref, conn] of logins) void this.connect(ref, conn);
     }
+    if (skipped) toasts.info(t("ws.skipped", { n: skipped }));
   }
 }
 
