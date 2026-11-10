@@ -6,6 +6,7 @@
   import DbStructure from "./DbStructure.svelte";
   import DbDdlDialog from "./DbDdlDialog.svelte";
   import DbStructureEdit from "./DbStructureEdit.svelte";
+  import DbServer from "./DbServer.svelte";
   import { api } from "../../api";
   import type { DbColumnInfo, DbOpened, DbQueryOutput, DbTableInfo, DbTableStructure } from "../../api/types";
   import { errorMessage, isIpcError } from "../../api/errors";
@@ -96,6 +97,8 @@
     danger?: boolean;
     after: (value: string) => void;
   } | null>(null);
+  /** The server panel (processes, variables, status, users) in place of the results. */
+  let serverView = $state(false);
   /** A table's structure being edited (`table` null: a new table). */
   let editing = $state<{ ns: string; table: string | null; name: string; before: TableDef; def: TableDef } | null>(null);
   const editProblem = $derived.by(() => {
@@ -334,6 +337,7 @@
     browse = null;
     ddl = null;
     editing = null;
+    serverView = false;
     ranLabel = sql.length > 80 ? `${sql.slice(0, 80)}…` : sql;
     await execute(() => api.dbQuery(id!, sql, maxRows));
     if (store && !closed) history = addHistory(store, connKey, { sql, at: Date.now(), ms: output?.elapsed_ms ?? 0, ok: !output?.error });
@@ -351,6 +355,7 @@
     }
     const b = browse!;
     b.limit = maxRows;
+    serverView = false;
     ranLabel = `${ns}.${table}`;
     editTarget = null;
     edits = null;
@@ -580,6 +585,7 @@
     editTarget = null;
     edits = null;
     ddl = null;
+    serverView = false;
     editing = {
       ns,
       table: null,
@@ -676,6 +682,7 @@
     edits = null;
     ddl = null;
     ranLabel = ns;
+    serverView = false;
     output = { results: [tableOverview(list)], error: null, elapsed_ms: 0 };
     active = 0;
   }
@@ -922,6 +929,9 @@
           </select>
         </label>
         <span class="spacer"></span>
+        <button class="btn sm ghost" class:on={serverView} aria-pressed={serverView} onclick={() => !blocked() && (serverView = !serverView)} title={t("db.srv.hint")}
+          ><Icon name="cpu" size={12} />{t("db.srv.title")}</button
+        >
         <button class="btn sm share" class:on={shared} onclick={toggleShare} title={t("db.shareHint")} aria-pressed={shared}
           ><Icon name="sparkle" size={12} />{shared ? t("db.shared") : t("db.share")}</button
         >
@@ -1004,7 +1014,9 @@
             </div>
           </div>
         {/each}
-        {#if editing}
+        {#if serverView && tabId}
+          <DbServer id={tabId} {prod} />
+        {:else if editing}
           <DbStructureEdit
             bind:def={editing.def}
             bind:name={editing.name}
@@ -1448,7 +1460,8 @@
     font-size: 12px;
     white-space: pre;
   }
-  .share.on {
+  .share.on,
+  .btn.on {
     color: var(--accent);
     border-color: var(--accent);
     background: var(--accent-soft);

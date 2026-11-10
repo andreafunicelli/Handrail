@@ -233,6 +233,63 @@ impl Client {
             .collect())
     }
 
+    pub(crate) async fn server_info(&self, what: crate::ServerInfo) -> Result<crate::ResultSet> {
+        use crate::ServerInfo::*;
+        let (columns, sql): (&[&str], &str) = match what {
+            Processes => (
+                &[
+                    "pid", "user", "client", "db", "state", "seconds", "wait", "query",
+                ],
+                "SELECT pid::text, usename::text, client_addr::text, datname::text, state, \
+                 floor(extract(epoch FROM now() - query_start))::bigint::text, \
+                 wait_event_type || ':' || wait_event, left(query, 2000) \
+                 FROM pg_stat_activity WHERE backend_type = 'client backend' \
+                 ORDER BY query_start NULLS LAST, pid",
+            ),
+            Variables => (
+                &["name", "value", "unit", "description"],
+                "SELECT name, setting, unit, short_desc FROM pg_settings ORDER BY name",
+            ),
+            Status => (
+                &["name", "value"],
+                "SELECT j.key, j.value FROM pg_stat_database d, \
+                 json_each_text(row_to_json(d)) j WHERE d.datname = current_database()",
+            ),
+            Users => (
+                &[
+                    "role",
+                    "login",
+                    "superuser",
+                    "create role",
+                    "create db",
+                    "replication",
+                    "valid until",
+                ],
+                "SELECT rolname::text, rolcanlogin::text, rolsuper::text, rolcreaterole::text, \
+                 rolcreatedb::text, rolreplication::text, rolvaliduntil::text \
+                 FROM pg_roles WHERE rolname NOT LIKE 'pg\\_%' ORDER BY 1",
+            ),
+        };
+        let rows = self.side_rows(sql, &[]).await?;
+        Ok(crate::text_result(columns, rows))
+    }
+
+    pub(crate) async fn kill(&self, pid: u64, connection: bool) -> Result<()> {
+        let pid = i32::try_from(pid)
+            .map_err(|_| Error::Invalid(format!("no process {pid}")))?
+            .to_string();
+        let sql = if connection {
+            "SELECT pg_terminate_backend($1::int)::text"
+        } else {
+            "SELECT pg_cancel_backend($1::int)::text"
+        };
+        let rows = self.side_rows(sql, &[&pid]).await?;
+        if rows.first().map(|r| text_at(r, 0)).as_deref() != Some("true") {
+            return Err(Error::NotFound(format!("process {pid}")));
+        }
+        Ok(())
+    }
+
     pub(crate) async fn structure(
         &self,
         schema: &str,

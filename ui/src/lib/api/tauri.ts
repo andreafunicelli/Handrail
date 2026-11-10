@@ -90,6 +90,8 @@ export function createTauriApi(): Api {
       }),
     dbTableDdl: (id, namespace, table) => invoke("db_table_ddl", { id, namespace, table }),
     dbTableStructure: (id, namespace, table) => invoke("db_table_structure", { id, namespace, table }),
+    dbServerInfo: (id, what) => invoke("db_server_info", { id, what }),
+    dbKill: (id, pid, connection) => invoke("db_kill", { id, pid, connection }),
     dbExportFile: (file_name, contents) => invoke("db_export_file", { file_name, contents }),
     dbCancel: (id) => invoke("db_cancel", { id }),
     dbApplyEdits: (id, namespace, table, edits) => invoke("db_apply_edits", { id, namespace, table, edits }),

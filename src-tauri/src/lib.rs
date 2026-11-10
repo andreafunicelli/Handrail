@@ -188,6 +188,8 @@ pub fn run() {
             db::db_table_rows,
             db::db_table_ddl,
             db::db_table_structure,
+            db::db_server_info,
+            db::db_kill,
             db::db_export_file,
             db::db_cancel,
             db::db_share,

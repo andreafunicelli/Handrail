@@ -237,6 +237,57 @@ impl Client {
             .collect())
     }
 
+    pub(crate) async fn server_info(&self, what: crate::ServerInfo) -> Result<crate::ResultSet> {
+        use crate::ServerInfo::*;
+        let (columns, sql): (&[&str], &str) = match what {
+            Processes => (
+                &[
+                    "id", "user", "host", "db", "command", "seconds", "state", "query",
+                ],
+                "SELECT CAST(ID AS CHAR), USER, HOST, DB, COMMAND, CAST(TIME AS CHAR), STATE, \
+                 LEFT(INFO, 2000) FROM information_schema.PROCESSLIST ORDER BY TIME DESC, ID",
+            ),
+            Variables => (&["name", "value"], "SHOW GLOBAL VARIABLES"),
+            Status => (&["name", "value"], "SHOW GLOBAL STATUS"),
+            Users => (
+                &["user", "host"],
+                "SELECT User, Host FROM mysql.user ORDER BY User, Host",
+            ),
+        };
+        let rows = self.side_text_rows(sql).await?;
+        Ok(crate::text_result(columns, rows))
+    }
+
+    /// Rows of SQL without parameters, over the text protocol (statements such as SHOW and
+    /// KILL that are not all preparable).
+    fn side_text_rows<'a>(
+        &'a self,
+        sql: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<Vec<Option<String>>>>> {
+        Box::pin(async move {
+            let mut slot = self.side.lock().await;
+            if slot.is_none() {
+                *slot = Some(self.open().await?);
+            }
+            let conn = slot.as_mut().expect("connected above");
+            match (&mut *conn).fetch_all(sqlx::raw_sql(sql)).await {
+                Ok(rows) => Ok(rows.iter().map(texts).collect()),
+                Err(e) => {
+                    if broken(&e) {
+                        *slot = None;
+                    }
+                    Err(map_err(e))
+                }
+            }
+        })
+    }
+
+    pub(crate) async fn kill(&self, pid: u64, connection: bool) -> Result<()> {
+        // A number, so nothing but the id reaches the statement.
+        let sql = format!("KILL {}{pid}", if connection { "" } else { "QUERY " });
+        self.side_text_rows(&sql).await.map(|_| ())
+    }
+
     pub(crate) async fn structure(&self, db: &str, table: &str) -> Result<crate::TableStructure> {
         let at = |r: &Vec<Option<String>>, i: usize| r.get(i).cloned().flatten();
         let columns = self

@@ -1183,6 +1183,33 @@ export function createMockApi(): Api {
       (globalThis as { __lastExport?: { fileName: string; contents: string } }).__lastExport = { fileName, contents };
       return `/home/demo/Downloads/${fileName}`;
     },
+    async dbServerInfo(id, what) {
+      const d = mockDb(id);
+      await sleep(60);
+      const set = (columns: string[], rows: (string | null)[][]) => ({
+        columns: columns.map((name) => ({ name, type_name: "TEXT" })),
+        rows,
+        rows_affected: 0,
+        truncated: false,
+      });
+      const killed = (d.killed ??= new Set());
+      if (what === "processes") {
+        const procs = [
+          ["11", "app", "10.0.1.11:52114", "shop", "Query", "0", "executing", "SELECT * FROM orders WHERE status = 'paid'"],
+          ["12", "app", "10.0.1.12:40022", "shop", "Sleep", "120", "", null],
+          ["17", "report", "10.0.4.2:61201", "shop", "Query", "843", "Sending data", "SELECT customer_id, sum(total) FROM orders GROUP BY customer_id"],
+        ].filter((p) => !killed.has(p[0] as string));
+        return d.kind === "mysql" ? set(["id", "user", "host", "db", "command", "seconds", "state", "query"], procs) : set(["pid", "user", "client", "db", "state", "seconds", "wait", "query"], procs);
+      }
+      if (what === "variables") return set(["name", "value"], [["max_connections", "151"], ["innodb_buffer_pool_size", "134217728"], ["sql_mode", "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES"], ["time_zone", "SYSTEM"], ["version", "8.4.0"]]);
+      if (what === "status") return set(["name", "value"], [["Threads_connected", "3"], ["Questions", "184220"], ["Slow_queries", "4"], ["Uptime", "864000"]]);
+      return set(["user", "host"], [["app", "%"], ["report", "10.0.4.%"], ["root", "localhost"]]);
+    },
+    async dbKill(id, pid) {
+      const d = mockDb(id);
+      await sleep(80);
+      (d.killed ??= new Set()).add(String(pid));
+    },
     async dbTableStructure(id, namespace, table) {
       const d = mockDb(id);
       const t = MOCK_TABLES[table];
@@ -1709,6 +1736,7 @@ type MockDb = {
   pending?: string;
   extraNs?: string[];
   dropped?: Set<string>;
+  killed?: Set<string>;
 };
 const mockDbs = new Map<string, MockDb>();
 

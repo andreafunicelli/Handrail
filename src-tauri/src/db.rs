@@ -289,6 +289,31 @@ pub async fn db_table_rows(
     s.client.query(&sql, l).await
 }
 
+/// The server panel: processes, variables, status or users.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_server_info(
+    state: State<'_, AppState>,
+    id: String,
+    what: aht_db::ServerInfo,
+) -> Result<aht_db::ResultSet> {
+    session(&state, &id).await?.client.server_info(what).await
+}
+
+/// Stop a server process's statement, or close its connection.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_kill(
+    state: State<'_, AppState>,
+    id: String,
+    pid: u64,
+    connection: bool,
+) -> Result<()> {
+    session(&state, &id)
+        .await?
+        .client
+        .kill(pid, connection)
+        .await
+}
+
 /// A table's columns, indexes and foreign keys.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn db_table_structure(

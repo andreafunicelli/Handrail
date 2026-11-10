@@ -53,6 +53,8 @@ import type {
   DbTableInfo,
   DbRowsPage,
   DbTableStructure,
+  DbServerInfo,
+  DbResultSet,
   DbColumnInfo,
   DbRowEdit,
   DbApprovalRequest,
@@ -189,6 +191,10 @@ export interface Api {
   dbQuery(id: string, sql: string, maxRows?: number): Promise<DbQueryOutput>;
   /** The rows of one table. */
   dbTableRows(id: string, namespace: string, table: string, page?: DbRowsPage): Promise<DbQueryOutput>;
+  /** The server panel: processes, variables, status or users, as rows of text. */
+  dbServerInfo(id: string, what: DbServerInfo): Promise<DbResultSet>;
+  /** Stop a server process's statement (`connection`: close its connection). */
+  dbKill(id: string, pid: number, connection: boolean): Promise<void>;
   /** A table's columns, indexes and foreign keys. */
   dbTableStructure(id: string, namespace: string, table: string): Promise<DbTableStructure>;
   /** The statement that creates a table or view. */
