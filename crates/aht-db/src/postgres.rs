@@ -73,11 +73,11 @@ fn value(row: &PgRow, i: usize) -> Value {
     }
 }
 
-fn values(row: &PgRow) -> Vec<Value> {
+pub(crate) fn values(row: &PgRow) -> Vec<Value> {
     (0..row.len()).map(|i| value(row, i)).collect()
 }
 
-fn texts(row: &PgRow) -> Vec<Option<String>> {
+pub(crate) fn texts(row: &PgRow) -> Vec<Option<String>> {
     (0..row.len())
         .map(|i| match value(row, i) {
             Value::Null => None,
@@ -106,7 +106,7 @@ impl Client {
         Ok(client)
     }
 
-    async fn open(&self) -> Result<PgConnection> {
+    pub(crate) async fn open(&self) -> Result<PgConnection> {
         tokio::time::timeout(self.timeout, PgConnection::connect_with(&self.opts))
             .await
             .map_err(|_| Error::Network("timed out connecting to the database".into()))?
@@ -137,7 +137,7 @@ impl Client {
     }
 
     /// Rows of a schema query on the side connection, every value as text.
-    fn side_rows<'a>(
+    pub(crate) fn side_rows<'a>(
         &'a self,
         sql: &'a str,
         binds: &'a [&'a str],
@@ -435,6 +435,17 @@ impl Client {
     /// PostgreSQL has no `SHOW CREATE TABLE`: views come from `pg_get_viewdef`, tables are
     /// rebuilt from their columns, constraints and the indexes no constraint owns.
     pub(crate) async fn ddl(&self, schema: &str, table: &str) -> Result<String> {
+        Ok(self.ddl_parts(schema, table, false).await?.0)
+    }
+
+    /// The `CREATE` statement and, with `split_fks`, the foreign keys apart as
+    /// `ALTER TABLE ... ADD CONSTRAINT` (a dump adds them once every table holds its rows).
+    pub(crate) async fn ddl_parts(
+        &self,
+        schema: &str,
+        table: &str,
+        split_fks: bool,
+    ) -> Result<(String, Vec<String>)> {
         let name = crate::sql::qualified(crate::DbKind::Postgres, schema, table);
         let kind = self
             .side_rows(
@@ -450,15 +461,18 @@ impl Client {
         };
         match text_at(row, 0).as_str() {
             "v" => {
-                return Ok(format!(
-                    "CREATE VIEW {name} AS\n{}",
-                    text_at(row, 1).trim_end()
+                return Ok((
+                    format!("CREATE VIEW {name} AS\n{}", text_at(row, 1).trim_end()),
+                    Vec::new(),
                 ))
             }
             "m" => {
-                return Ok(format!(
-                    "CREATE MATERIALIZED VIEW {name} AS\n{}",
-                    text_at(row, 1).trim_end()
+                return Ok((
+                    format!(
+                        "CREATE MATERIALIZED VIEW {name} AS\n{}",
+                        text_at(row, 1).trim_end()
+                    ),
+                    Vec::new(),
                 ))
             }
             _ => {}
@@ -480,7 +494,8 @@ impl Client {
             .collect();
         let constraints = self
             .side_rows(
-                "SELECT k.conname::text, pg_get_constraintdef(k.oid, true) FROM pg_constraint k \
+                "SELECT k.conname::text, pg_get_constraintdef(k.oid, true), k.contype::text \
+                 FROM pg_constraint k \
                  JOIN pg_class c ON c.oid = k.conrelid \
                  JOIN pg_namespace n ON n.oid = c.relnamespace \
                  WHERE n.nspname = $1 AND c.relname = $2 AND k.contype <> 'n' \
@@ -522,7 +537,16 @@ impl Client {
                 l
             })
             .collect();
+        let mut fks = Vec::new();
         for k in &constraints {
+            if split_fks && text_at(k, 2) == "f" {
+                fks.push(format!(
+                    "ALTER TABLE {name} ADD CONSTRAINT {} {};",
+                    q(&text_at(k, 0)),
+                    text_at(k, 1)
+                ));
+                continue;
+            }
             lines.push(format!(
                 "    CONSTRAINT {} {}",
                 q(&text_at(k, 0)),
@@ -533,7 +557,7 @@ impl Client {
         for i in &indexes {
             out.push_str(&format!("\n{};", text_at(i, 0)));
         }
-        Ok(out)
+        Ok((out, fks))
     }
 
     pub(crate) async fn columns(&self, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {

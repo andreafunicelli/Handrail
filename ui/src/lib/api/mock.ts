@@ -1269,6 +1269,64 @@ export function createMockApi(): Api {
       if (pk.length) cols.push(`  PRIMARY KEY (${pk.join(", ")})`);
       return `CREATE TABLE ${q(table)} (\n${cols.join(",\n")}\n)${d.kind === "mysql" ? " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" : ""};`;
     },
+    async dbDump(id, namespace, options, transfer_id) {
+      mockDb(id);
+      const names = Object.entries(MOCK_TABLES)
+        .filter(([n, t]) => (t.ns === "*" || t.ns === namespace) && (!options.tables.length || options.tables.includes(n)))
+        .map(([n]) => n);
+      const progress = { table: null as string | null, tables_done: 0, tables: names.length, rows: 0, statements: 0, bytes: 0, errors: 0 };
+      for (const n of names) {
+        if (mockStopped.delete(transfer_id)) return { path: "", summary: { progress, errors: [], cancelled: true, rolled_back: false } };
+        progress.table = n;
+        await sleep(120);
+        progress.rows += options.data ? 40 : 0;
+        progress.statements += (options.structure ? 1 : 0) + (options.data ? 1 : 0);
+        progress.bytes += 4096;
+        progress.tables_done += 1;
+        emit("db://transfer", { transfer_id, progress: { ...progress } });
+      }
+      progress.table = null;
+      return { path: `/home/demo/Downloads/${namespace}.sql`, summary: { progress, errors: [], cancelled: false, rolled_back: false } };
+    },
+    async dbPickFile(kind) {
+      await sleep(60);
+      return kind === "sql" ? { token: "tok-sql", name: "shop-backup.sql", size: 182_400 } : { token: "tok-csv", name: "customers.csv", size: 2_310 };
+    },
+    async dbCsvPreview(token, delimiter) {
+      await sleep(40);
+      const records = [
+        ["id", "name", "email"],
+        ["101", "Ada Lovelace", "ada@example.com"],
+        ["102", "Hopper; Grace", "\\N"],
+        ["103", "Alan Turing", "alan@example.com"],
+      ];
+      // The demo file is split by semicolons: another delimiter sees one field per line.
+      return delimiter === ";" ? records : records.map((r) => [r.map((f) => (f.includes(";") ? `"${f}"` : f)).join(";")]);
+    },
+    async dbImportSql(id, token, namespace, stopOnError, transfer_id) {
+      const d = mockDb(id);
+      const progress = { table: null, tables_done: 0, tables: 0, rows: 0, statements: 0, bytes: 0, errors: 0 };
+      for (let i = 1; i <= 8; i++) {
+        if (mockStopped.delete(transfer_id)) return { progress, errors: [], cancelled: true, rolled_back: d.kind === "postgres" && stopOnError };
+        await sleep(100);
+        progress.statements = i * 12;
+        progress.rows = i * 300;
+        progress.bytes = Math.round((182_400 * i) / 8);
+        emit("db://transfer", { transfer_id, progress: { ...progress } });
+      }
+      return { progress, errors: [], cancelled: false, rolled_back: false };
+    },
+    async dbImportCsv(id, token, namespace, table, options, transfer_id) {
+      mockDb(id);
+      if (!options.columns.some((c) => c)) throw fail("invalid", "pick at least one column to fill");
+      await sleep(200);
+      const progress = { table, tables_done: 1, tables: 1, rows: options.header ? 3 : 4, statements: 1, bytes: 2_310, errors: 0 };
+      emit("db://transfer", { transfer_id, progress });
+      return { progress, errors: [], cancelled: false, rolled_back: false };
+    },
+    async dbTransferCancel(transfer_id) {
+      mockStopped.add(transfer_id);
+    },
     async dbCancel(id) {
       mockDb(id).running?.();
     },
@@ -1763,6 +1821,9 @@ type MockDb = {
   users?: string[][];
 };
 const mockDbs = new Map<string, MockDb>();
+
+/** Transfers asked to stop. */
+const mockStopped = new Set<string>();
 
 function mockDb(id: string): MockDb {
   const d = mockDbs.get(id);

@@ -663,3 +663,57 @@ export type DbAccountChange =
   | { op: "password"; user: string; host?: string | null; password: string }
   | { op: "drop"; user: string; host?: string | null }
   | { op: "grant" | "revoke"; user: string; host?: string | null; privileges: string[]; namespace?: string | null };
+
+/** How far an export or import got. */
+export interface DbTransferProgress {
+  table: string | null;
+  tables_done: number;
+  tables: number;
+  rows: number;
+  statements: number;
+  /** Written (export) or read (import). */
+  bytes: number;
+  errors: number;
+}
+
+/** A statement the server refused (line 0: not from a file). */
+export interface DbTransferError {
+  line: number;
+  statement: string;
+  message: string;
+}
+
+export interface DbTransferSummary {
+  progress: DbTransferProgress;
+  /** The first errors; `progress.errors` counts them all. */
+  errors: DbTransferError[];
+  cancelled: boolean;
+  /** The import ran in a transaction that was rolled back: nothing was kept. */
+  rolled_back: boolean;
+}
+
+export interface DbDumpOptions {
+  /** Empty: every table and view. */
+  tables: string[];
+  structure: boolean;
+  data: boolean;
+  drop: boolean;
+}
+
+export interface DbCsvOptions {
+  delimiter: string;
+  header: boolean;
+  /** A field holding exactly this is NULL. */
+  null: string | null;
+  /** The column each field goes in (null: skipped). */
+  columns: (string | null)[];
+  /** Delete the table's rows first (same transaction). */
+  replace: boolean;
+}
+
+/** A file picked for an import: the page holds a token, never its path. */
+export interface DbPickedFile {
+  token: string;
+  name: string;
+  size: number;
+}

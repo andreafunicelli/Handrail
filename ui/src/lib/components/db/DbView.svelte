@@ -7,6 +7,7 @@
   import DbDdlDialog from "./DbDdlDialog.svelte";
   import DbStructureEdit from "./DbStructureEdit.svelte";
   import DbServer from "./DbServer.svelte";
+  import DbTransferDialog from "./DbTransferDialog.svelte";
   import { api } from "../../api";
   import type { DbColumnInfo, DbOpened, DbQueryOutput, DbTableInfo, DbTableStructure } from "../../api/types";
   import { errorMessage, isIpcError } from "../../api/errors";
@@ -99,6 +100,8 @@
   } | null>(null);
   /** The server panel (processes, variables, status, users) in place of the results. */
   let serverView = $state(false);
+  /** The export or import dialog. */
+  let transfer = $state<{ mode: "export" | "sql" | "csv"; ns: string; table: string | null; tables: DbTableInfo[] } | null>(null);
   /** A table's structure being edited (`table` null: a new table). */
   let editing = $state<{ ns: string; table: string | null; name: string; before: TableDef; def: TableDef } | null>(null);
   const editProblem = $derived.by(() => {
@@ -474,6 +477,20 @@
     void loadNamespaces();
   }
 
+  async function openTransfer(mode: "export" | "sql" | "csv", ns: string, table: string | null = null) {
+    if (blocked() || !tabId) return;
+    let list = tables[ns];
+    if (!Array.isArray(list)) {
+      try {
+        list = await api.dbTables(tabId, ns);
+      } catch (e) {
+        toasts.error(e);
+        return;
+      }
+    }
+    transfer = { mode, ns, table, tables: list };
+  }
+
   function tableMenu(e: MouseEvent, ns: string, tb: DbTableInfo) {
     e.preventDefault();
     if (blocked()) return;
@@ -486,6 +503,9 @@
         { label: t("db.openTable"), icon: "layout", action: () => void openTable(ns, tb.name) },
         { label: t("db.structure"), icon: "key", action: () => void showStructure(ns, tb.name) },
         { label: t("db.ddl"), icon: "file", action: () => void showDdl(ns, tb.name) },
+        "sep",
+        { label: t("db.xfer.exportTable"), icon: "download", action: () => void openTransfer("export", ns, tb.name) },
+        ...(tb.view ? [] : [{ label: t("db.xfer.importCsv"), icon: "upload" as const, action: () => void openTransfer("csv", ns, tb.name) }]),
         "sep",
         {
           label: t("db.renameTable"),
@@ -629,6 +649,9 @@
         { label: t("db.overview"), icon: "info", action: () => void overview(ns) },
         { label: t("db.st.newTable"), icon: "plus", action: () => newTable(ns) },
         { label: t("db.refresh"), icon: "refresh", action: () => void reloadTables(ns) },
+        "sep",
+        { label: t("db.xfer.exportDb"), icon: "download", action: () => void openTransfer("export", ns) },
+        { label: t("db.xfer.importSql"), icon: "upload", action: () => void openTransfer("sql", ns) },
         "sep",
         {
           label: t(d === "mysql" ? "db.dropDatabase" : "db.dropSchema"),
@@ -1127,6 +1150,24 @@
 </div>
 
 {#if menu}<ContextMenu {...menu} onclose={() => (menu = null)} />{/if}
+{#if transfer && tabId}
+  {@const x = transfer}
+  <DbTransferDialog
+    id={tabId}
+    dialect={info?.kind ?? "mysql"}
+    {prod}
+    mode={x.mode}
+    namespace={x.ns}
+    {namespaces}
+    tables={x.tables}
+    table={x.table}
+    ondone={() => {
+      reloadNamespaces();
+      if (x.table && browse?.ns === x.ns && browse.table === x.table) void openTable(x.ns, x.table, true);
+    }}
+    onclose={() => (transfer = null)}
+  />
+{/if}
 {#if ddlDialog}
   {@const d = ddlDialog}
   <DbDdlDialog

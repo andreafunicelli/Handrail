@@ -59,6 +59,11 @@ import type {
   DbColumnInfo,
   DbRowEdit,
   DbApprovalRequest,
+  DbCsvOptions,
+  DbDumpOptions,
+  DbPickedFile,
+  DbTransferProgress,
+  DbTransferSummary,
 } from "./types";
 
 export type Unlisten = () => void;
@@ -78,6 +83,8 @@ export interface EventMap {
   "approval://requested": ApprovalRequest;
   /** An agent's SQL waits for the user in a database tab. */
   "db://approval": DbApprovalRequest;
+  /** An export or import advanced. */
+  "db://transfer": { transfer_id: string; progress: DbTransferProgress };
   /** Its wait ended (answered, timed out, tab closed): drop the card. */
   "db://approval-resolved": string;
   "agent://event": AgentEventEnvelope;
@@ -208,6 +215,19 @@ export interface Api {
   dbTableDdl(id: string, namespace: string, table: string): Promise<string>;
   /** Save exported rows to a file the user picks in a save dialog; null when cancelled. */
   dbExportFile(fileName: string, contents: string): Promise<string | null>;
+  /** Export a namespace to an SQL file picked in a save dialog (null: cancelled there).
+   *  Progress: "db://transfer". */
+  dbDump(id: string, namespace: string, options: DbDumpOptions, transferId: string): Promise<{ path: string; summary: DbTransferSummary } | null>;
+  /** Pick a file to import (null: cancelled). */
+  dbPickFile(kind: "sql" | "csv"): Promise<DbPickedFile | null>;
+  /** The first records of a picked CSV file. */
+  dbCsvPreview(token: string, delimiter: string): Promise<string[][]>;
+  /** Run a picked SQL file in `namespace`. Progress: "db://transfer". */
+  dbImportSql(id: string, token: string, namespace: string | null, stopOnError: boolean, transferId: string): Promise<DbTransferSummary>;
+  /** Insert a picked CSV file into a table, all of it or nothing. Progress: "db://transfer". */
+  dbImportCsv(id: string, token: string, namespace: string, table: string, options: DbCsvOptions, transferId: string): Promise<DbTransferSummary>;
+  /** Stop an export or import. */
+  dbTransferCancel(transferId: string): Promise<void>;
   /** Stop the statement running in a tab. */
   dbCancel(id: string): Promise<void>;
   /** Save grid edits to one table in one transaction; resolves to the rows changed. */

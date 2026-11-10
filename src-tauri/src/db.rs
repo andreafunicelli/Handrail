@@ -13,6 +13,7 @@ use aht_core::model::{ApprovalMode, Connection, ConnectionKind, Environment, Ssh
 use aht_core::terminal::{Actor, DatabaseSummary, DbQueryRequest, DbSchemaRequest};
 use aht_core::{ConnectionId, Error, Result};
 use aht_db::risk::SqlRisk;
+use aht_db::transfer::{CsvOptions, DumpOptions, ImportOptions, Progress, Summary};
 use aht_db::{ColumnInfo, DbClient, DbKind, DbParams, QueryLimits, QueryOutput, TableInfo};
 use aht_ssh::{Forward, SshConnection};
 use serde::Serialize;
@@ -39,6 +40,10 @@ type PendingApprovals = HashMap<String, (String, oneshot::Sender<ApprovalDecisio
 pub struct DbHub {
     sessions: Mutex<HashMap<String, Arc<DbSession>>>,
     approvals: std::sync::Mutex<PendingApprovals>,
+    /// Files picked for an import, by the token the page holds (it never names a path).
+    picked: std::sync::Mutex<HashMap<String, std::path::PathBuf>>,
+    /// Running exports and imports: their tab and the flag that stops them.
+    transfers: std::sync::Mutex<HashMap<String, (String, Arc<AtomicBool>)>>,
 }
 
 struct DbSession {
@@ -202,6 +207,11 @@ pub async fn db_close(state: State<'_, AppState>, id: String) -> Result<()> {
         .lock()
         .unwrap()
         .retain(|_, (tab, _)| *tab != id);
+    for (tab, stop) in state.db.transfers.lock().unwrap().values() {
+        if *tab == id {
+            stop.store(true, Ordering::Relaxed);
+        }
+    }
     if let Some(s) = removed {
         s.shut().await;
     }
@@ -448,6 +458,263 @@ pub async fn db_export_file(
         .map_err(|e| Error::Other(e.to_string()))?;
     tokio::fs::write(&path, contents).await?;
     Ok(Some(path.display().to_string()))
+}
+
+// ---------- export and import ----------
+
+/// A running transfer: registered so `db_transfer_cancel` (or closing the tab) stops it.
+struct Running<'a> {
+    hub: &'a DbHub,
+    id: String,
+    stop: Arc<AtomicBool>,
+}
+
+impl<'a> Running<'a> {
+    fn new(hub: &'a DbHub, tab: &str, transfer_id: &str) -> Running<'a> {
+        let stop = Arc::new(AtomicBool::new(false));
+        hub.transfers
+            .lock()
+            .unwrap()
+            .insert(transfer_id.to_string(), (tab.to_string(), stop.clone()));
+        Running {
+            hub,
+            id: transfer_id.to_string(),
+            stop,
+        }
+    }
+}
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        self.hub.transfers.lock().unwrap().remove(&self.id);
+    }
+}
+
+/// Progress as `db://transfer` events, at most five a second.
+fn transfer_reporter(app: &AppHandle, transfer_id: &str) -> impl FnMut(&Progress) + Send {
+    let app = app.clone();
+    let id = transfer_id.to_string();
+    let mut last: Option<std::time::Instant> = None;
+    move |p: &Progress| {
+        let now = std::time::Instant::now();
+        if last.is_some_and(|l| now.duration_since(l) < Duration::from_millis(200)) {
+            return;
+        }
+        last = Some(now);
+        let _ = app.emit("db://transfer", json!({ "transfer_id": id, "progress": p }));
+    }
+}
+
+#[derive(Serialize)]
+pub struct DumpDone {
+    pub path: String,
+    pub summary: Summary,
+}
+
+/// Export a namespace to an SQL file the user picks; `None` when they cancel the dialog.
+/// A cancelled or failed export leaves no file behind.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_dump(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    namespace: String,
+    options: DumpOptions,
+    transfer_id: String,
+) -> Result<Option<DumpDone>> {
+    use tauri_plugin_dialog::DialogExt;
+    let s = session(&state, &id).await?;
+    let suggested = format!(
+        "{}.sql",
+        namespace
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            })
+            .collect::<String>()
+    );
+    let (tx, rx) = oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name(&suggested)
+        .add_filter("SQL", &["sql"])
+        .save_file(move |picked| {
+            let _ = tx.send(picked);
+        });
+    let Some(picked) = rx
+        .await
+        .map_err(|_| Error::Other("the save dialog closed".into()))?
+    else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| Error::Other(e.to_string()))?;
+    let running = Running::new(&state.db, &id, &transfer_id);
+    let mut file = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&path)?);
+    let mut report = transfer_reporter(&app, &transfer_id);
+    let done = aht_db::transfer::dump(
+        &s.client,
+        &namespace,
+        &options,
+        &mut file,
+        &mut report,
+        &running.stop,
+    )
+    .await;
+    drop(file);
+    match done {
+        Ok(summary) if !summary.cancelled => Ok(Some(DumpDone {
+            path: path.display().to_string(),
+            summary,
+        })),
+        other => {
+            let _ = std::fs::remove_file(&path);
+            other.map(|summary| {
+                Some(DumpDone {
+                    path: String::new(),
+                    summary,
+                })
+            })
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct PickedFile {
+    pub token: String,
+    pub name: String,
+    pub size: u64,
+}
+
+/// Pick a file to import (`sql` or `csv`). The page gets a token for it, not its path.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_pick_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    kind: String,
+) -> Result<Option<PickedFile>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (label, exts): (&str, &[&str]) = match kind.as_str() {
+        "sql" => ("SQL", &["sql", "txt"]),
+        "csv" => ("CSV", &["csv", "tsv", "txt"]),
+        _ => return Err(Error::Invalid(format!("unknown file kind {kind}"))),
+    };
+    let (tx, rx) = oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter(label, exts)
+        .pick_file(move |picked| {
+            let _ = tx.send(picked);
+        });
+    let Some(picked) = rx
+        .await
+        .map_err(|_| Error::Other("the file dialog closed".into()))?
+    else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| Error::Other(e.to_string()))?;
+    let size = std::fs::metadata(&path)?.len();
+    let name = crate::sftp::picked_name(&path)?;
+    let token = uuid::Uuid::new_v4().to_string();
+    state.db.picked.lock().unwrap().insert(token.clone(), path);
+    Ok(Some(PickedFile { token, name, size }))
+}
+
+fn picked_path(state: &AppState, token: &str) -> Result<std::path::PathBuf> {
+    state
+        .db
+        .picked
+        .lock()
+        .unwrap()
+        .get(token)
+        .cloned()
+        .ok_or_else(|| Error::NotFound("the picked file (pick it again)".into()))
+}
+
+fn open_picked(state: &AppState, token: &str) -> Result<std::io::BufReader<std::fs::File>> {
+    Ok(std::io::BufReader::with_capacity(
+        1 << 20,
+        std::fs::File::open(picked_path(state, token)?)?,
+    ))
+}
+
+/// The first records of a picked CSV file.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_csv_preview(
+    state: State<'_, AppState>,
+    token: String,
+    delimiter: char,
+) -> Result<Vec<Vec<String>>> {
+    aht_db::transfer::csv_preview(open_picked(&state, &token)?, delimiter, 6)
+}
+
+/// Run a picked SQL file in `namespace` (or where the file says).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_import_sql(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    token: String,
+    namespace: Option<String>,
+    options: ImportOptions,
+    transfer_id: String,
+) -> Result<Summary> {
+    let s = session(&state, &id).await?;
+    let mut input = open_picked(&state, &token)?;
+    let running = Running::new(&state.db, &id, &transfer_id);
+    let mut report = transfer_reporter(&app, &transfer_id);
+    aht_db::transfer::import_sql(
+        &s.client,
+        namespace.as_deref(),
+        &mut input,
+        &options,
+        &mut report,
+        &running.stop,
+    )
+    .await
+}
+
+/// Insert a picked CSV file's records into a table.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_import_csv(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    token: String,
+    namespace: String,
+    table: String,
+    options: CsvOptions,
+    transfer_id: String,
+) -> Result<Summary> {
+    let s = session(&state, &id).await?;
+    let mut input = open_picked(&state, &token)?;
+    let running = Running::new(&state.db, &id, &transfer_id);
+    let mut report = transfer_reporter(&app, &transfer_id);
+    aht_db::transfer::import_csv(
+        &s.client,
+        &namespace,
+        &table,
+        &mut input,
+        &options,
+        &mut report,
+        &running.stop,
+    )
+    .await
+}
+
+/// Stop an export or import (between rows or statements).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn db_transfer_cancel(state: State<'_, AppState>, transfer_id: String) -> Result<()> {
+    if let Some((_, stop)) = state.db.transfers.lock().unwrap().get(&transfer_id) {
+        stop.store(true, Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 // ---------- agents ----------
