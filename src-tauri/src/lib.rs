@@ -1,6 +1,7 @@
 mod autosync;
 mod cmd_misc;
 mod cmd_vault;
+mod conn_test;
 mod copy;
 mod db;
 mod db_backup;
@@ -175,6 +176,7 @@ pub fn run() {
             sftp::sftp_download,
             sftp::sftp_upload,
             copy::copy_between,
+            conn_test::connection_test,
             rdp::rdp_open,
             rdp::rdp_input,
             rdp::rdp_resize,
