@@ -436,16 +436,11 @@ pub fn transaction_control(sql: &str) -> Option<bool> {
         "BEGIN" | "COMMIT" | "END" => Some(false),
         "START" if words.next().as_deref() == Some("TRANSACTION") => Some(false),
         "ROLLBACK" | "ABORT" => {
-            let next = words.next();
-            if matches!(next.as_deref(), Some("TO")) {
-                None
-            } else if matches!(next.as_deref(), Some("WORK") | Some("TRANSACTION"))
-                && matches!(words.next().as_deref(), Some("TO"))
-            {
-                None
-            } else {
-                Some(true)
-            }
+            let rest: Vec<String> = words.take(2).collect();
+            let word = |k: usize| rest.get(k).map(String::as_str);
+            let to_savepoint = word(0) == Some("TO")
+                || (matches!(word(0), Some("WORK" | "TRANSACTION")) && word(1) == Some("TO"));
+            (!to_savepoint).then_some(true)
         }
         _ => None,
     }
