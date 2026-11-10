@@ -464,7 +464,9 @@ impl DbClient {
     pub async fn grants(&self, user: &str, host: Option<&str>) -> Result<ResultSet> {
         match &self.inner {
             Inner::Mysql(c) => {
-                let a = accounts::account(DbKind::Mysql, user, host)?;
+                let mode = c.sql_mode().await?;
+                let escapes = !mode.to_uppercase().contains("NO_BACKSLASH_ESCAPES");
+                let a = accounts::account(DbKind::Mysql, user, host, escapes)?;
                 c.side_text(&format!("SHOW GRANTS FOR {a}"), &["grant"])
                     .await
             }

@@ -97,9 +97,11 @@ fn literal(kind: DbKind, s: &str, backslash_escapes: bool) -> Result<String> {
     })
 }
 
+/// The name as given: an existing account's name is used exactly as the server listed it
+/// (trimming `" app"` would name another account). The dialog trims a new one.
 fn name(user: &str) -> Result<&str> {
-    let u = user.trim();
-    if u.is_empty() || u.len() > 63 || u.contains(['\0', '\n', '\r']) {
+    let u = user;
+    if u.trim().is_empty() || u.len() > 63 || u.contains(['\0', '\n', '\r']) {
         return Err(Error::Invalid(
             "give the account a name (one line, at most 63 characters)".into(),
         ));
@@ -107,16 +109,22 @@ fn name(user: &str) -> Result<&str> {
     Ok(u)
 }
 
-/// `'user'@'host'` on MySQL, `"role"` on PostgreSQL.
-pub(crate) fn account(kind: DbKind, user: &str, host: Option<&str>) -> Result<String> {
+/// `'user'@'host'` on MySQL (quoted for the session's escape mode, see [`literal`]),
+/// `"role"` on PostgreSQL.
+pub(crate) fn account(
+    kind: DbKind,
+    user: &str,
+    host: Option<&str>,
+    backslash_escapes: bool,
+) -> Result<String> {
     let user = name(user)?;
     Ok(match kind {
         DbKind::Mysql => {
-            let host = host.map(str::trim).filter(|h| !h.is_empty()).unwrap_or("%");
+            let host = host.filter(|h| !h.trim().is_empty()).unwrap_or("%");
             format!(
                 "{}@{}",
-                literal(kind, user, true)?,
-                literal(kind, host, true)?
+                literal(kind, user, backslash_escapes)?,
+                literal(kind, host, backslash_escapes)?
             )
         }
         DbKind::Postgres => quote_ident(kind, user),
@@ -188,7 +196,7 @@ pub fn account_sql(
             host,
             password,
         } => {
-            let a = account(kind, user, host.as_deref())?;
+            let a = account(kind, user, host.as_deref(), backslash_escapes)?;
             match kind {
                 DbKind::Mysql => vec![format!("CREATE USER {a} IDENTIFIED BY {};", pw(password)?)],
                 DbKind::Postgres => {
@@ -201,14 +209,14 @@ pub fn account_sql(
             host,
             password,
         } => {
-            let a = account(kind, user, host.as_deref())?;
+            let a = account(kind, user, host.as_deref(), backslash_escapes)?;
             match kind {
                 DbKind::Mysql => vec![format!("ALTER USER {a} IDENTIFIED BY {};", pw(password)?)],
                 DbKind::Postgres => vec![format!("ALTER ROLE {a} PASSWORD {};", pw(password)?)],
             }
         }
         AccountChange::Drop { user, host } => {
-            let a = account(kind, user, host.as_deref())?;
+            let a = account(kind, user, host.as_deref(), backslash_escapes)?;
             match kind {
                 DbKind::Mysql => vec![format!("DROP USER {a};")],
                 // Its objects in this database pass to the account doing the drop, then its
@@ -233,20 +241,14 @@ pub fn account_sql(
             namespace,
         } => {
             let grant = matches!(change, AccountChange::Grant { .. });
-            let a = account(kind, user, host.as_deref())?;
+            let a = account(kind, user, host.as_deref(), backslash_escapes)?;
             let p = privileges(kind, p)?;
             let (verb, dir) = if grant {
                 ("GRANT", "TO")
             } else {
                 ("REVOKE", "FROM")
             };
-            match (
-                kind,
-                namespace
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|n| !n.is_empty()),
-            ) {
+            match (kind, namespace.as_deref().filter(|n| !n.trim().is_empty())) {
                 (DbKind::Mysql, None) => vec![format!("{verb} {p} ON *.* {dir} {a};")],
                 (DbKind::Mysql, Some(ns)) => {
                     vec![format!(
@@ -386,5 +388,30 @@ mod tests {
             password: String::new(),
         };
         assert!(account_sql(DbKind::Postgres, &empty, true, false).is_err());
+    }
+
+    #[test]
+    fn names_are_kept_exactly_and_follow_the_escape_mode() {
+        // An existing role named with a space is not another role.
+        let drop = AccountChange::Drop {
+            user: " app".into(),
+            host: None,
+        };
+        assert_eq!(
+            account_sql(DbKind::Postgres, &drop, true, false).unwrap()[2],
+            "DROP ROLE \" app\";"
+        );
+        let d = AccountChange::Drop {
+            user: "a\\b".into(),
+            host: Some("h\\%".into()),
+        };
+        assert_eq!(
+            account_sql(DbKind::Mysql, &d, true, false).unwrap(),
+            ["DROP USER 'a\\\\b'@'h\\\\%';"]
+        );
+        assert_eq!(
+            account_sql(DbKind::Mysql, &d, false, false).unwrap(),
+            ["DROP USER 'a\\b'@'h\\%';"]
+        );
     }
 }

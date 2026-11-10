@@ -54,20 +54,23 @@
   let grants = $state<DbResultSet | null>(null);
 
   const label = $derived(dialect === "mysql" ? `'${user}'@'${host || "%"}'` : user);
+  /** A new account's name is trimmed; an existing one's is used exactly as the server listed
+   *  it (`" app"` is not `app`). */
+  const account = $derived(mode === "create" ? user.trim() : user);
   const change = $derived.by((): DbAccountChange | null => {
-    const h = dialect === "mysql" ? host : null;
+    const h = dialect === "mysql" ? (mode === "create" ? host.trim() : host) : null;
     if (!user.trim()) return null;
     if (mode === "create" || mode === "password") {
       if (!password || password !== again) return null;
-      return { op: mode, user: user.trim(), host: h, password };
+      return { op: mode, user: account, host: h, password };
     }
-    if (mode === "drop") return { op: "drop", user: user.trim(), host: h };
+    if (mode === "drop") return { op: "drop", user: account, host: h };
     if (!privileges.length) return null;
-    return { op: grantOp, user: user.trim(), host: h, privileges, namespace: namespace || null };
+    return { op: grantOp, user: account, host: h, privileges, namespace: namespace || null };
   });
   /** Destructive or production: the account's name has to be typed. */
   const needsName = $derived(mode === "drop" || (mode === "grants" && grantOp === "revoke") || prod);
-  const ready = $derived(!!change && !!preview && !busy && (!needsName || typed === user.trim()));
+  const ready = $derived(!!change && !!preview && !busy && (!needsName || typed === account));
 
   // The preview follows the form (debounced; the password is masked by the backend).
   $effect(() => {
@@ -76,19 +79,25 @@
     previewError = null;
     if (!c) return;
     const snapshot = $state.snapshot(c) as DbAccountChange;
+    // An answer for a form that changed since is dropped: the preview must be what Run runs.
+    let live = true;
     const timer = setTimeout(async () => {
       try {
-        preview = await api.dbAccountPreview(id, snapshot);
+        const p = await api.dbAccountPreview(id, snapshot);
+        if (live) preview = p;
       } catch (e) {
-        previewError = errorMessage(e);
+        if (live) previewError = errorMessage(e);
       }
     }, 150);
-    return () => clearTimeout(timer);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
   });
 
   async function loadGrants() {
     try {
-      grants = await api.dbGrants(id, user.trim(), dialect === "mysql" ? host : null);
+      grants = await api.dbGrants(id, account, dialect === "mysql" ? host : null);
     } catch (e) {
       error = errorMessage(e);
     }
@@ -176,8 +185,8 @@
 
     {#if needsName && change}
       <label class="field">
-        <span class="label">{t("db.ddl.typeToConfirm", { name: user.trim() })}</span>
-        <input class="input mono" bind:value={typed} placeholder={user.trim()} spellcheck="false" />
+        <span class="label">{t("db.ddl.typeToConfirm", { name: account })}</span>
+        <input class="input mono" bind:value={typed} placeholder={account} spellcheck="false" />
       </label>
     {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
