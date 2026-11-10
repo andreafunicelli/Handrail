@@ -16,6 +16,8 @@
   import { groupPath } from "../../util/tree";
   import { uuid } from "../../util/id";
   import { newTunnel, tunnelProblem } from "../../util/tunnels";
+  import ConnectionTest from "./ConnectionTest.svelte";
+  import { initialSections, networkHasError, testLogin, testSignature, type LoginForm } from "./editorForm";
 
   let { connection, isNew }: { connection: Connection; isNew: boolean } = $props();
 
@@ -49,6 +51,13 @@
   let keyText = $state("");
   let passphrase = $state("");
   let tagsText = $state(c.tags.join(", "));
+  /** Network and Advanced start open when they hold something (or an error, see below). */
+  // svelte-ignore state_referenced_locally
+  const opened = initialSections(c, tagsText);
+  let networkOpen = $state(opened.network);
+  let advancedOpen = $state(opened.advanced);
+  /** Typed for a test of a connection that asks for its password; never saved. */
+  let testPassword = $state("");
   let busy = $state(false);
   let sheet: HTMLElement;
   let fileInput = $state<HTMLInputElement>();
@@ -72,6 +81,65 @@
   /** RDP logs in with a saved password only (NLA needs it before the session starts). */
   const rdpPasswordOk = $derived(!rdp || (identityId ? identity?.auth.type === "password" : !!password || !!passwordId));
   const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk && rdpPasswordOk && !emojiBad);
+
+  // A field that keeps the connection from being saved is never hidden in a closed section.
+  $effect(() => {
+    if (networkHasError(c)) networkOpen = true;
+  });
+  $effect(() => {
+    if (emojiBad) advancedOpen = true;
+  });
+
+  /** One line under a closed section's title: what it holds. */
+  const networkSummary = $derived.by(() => {
+    const parts: string[] = [];
+    const names = c.jump.map((id) => connections.list.find((x) => x.id === id)?.name).filter(Boolean);
+    parts.push(names.length ? t("editor.sum.via", { names: names.join(" → ") }) : t("editor.jumpNone"));
+    if (c.kind === "ssh" && c.tunnels.length) parts.push(t("editor.sum.forwards", { n: c.tunnels.length }));
+    if (rdp && c.rdp_admin) parts.push("/admin");
+    if (dbKind) parts.push(t(`editor.dbTls.${c.db_tls ?? "prefer"}`));
+    return parts.join(" · ");
+  });
+  const advancedSummary = $derived.by(() => {
+    const parts: string[] = [];
+    const tags = tagsText.split(",").map((x) => x.trim()).filter(Boolean);
+    if (tags.length) parts.push(tags.join(", "));
+    if (!rdp && c.approval_mode) parts.push(t(`ai.mode.${c.approval_mode}`));
+    if (c.notes.trim()) parts.push(t("editor.notes"));
+    if (c.icon) parts.push(t("editor.icon"));
+    return parts.length ? parts.join(" · ") : t("editor.sum.none");
+  });
+
+  // ---- connection test (of the form as it is; nothing is saved)
+  const login: LoginForm = $derived({
+    authType,
+    identityId,
+    password,
+    passwordId,
+    keyText,
+    keyId,
+    keyPassphraseId: keyId ? (c.auth.type === "key" && c.auth.key === keyId ? keptPassphrase : credentials.passphraseFor(keyId)) : null,
+    passphrase,
+    testPassword,
+  });
+  const testSig = $derived(testSignature(c, login));
+  const testable = $derived(c.host.trim() !== "" && Number.isInteger(c.port) && c.port > 0 && c.port < 65536);
+  /** Logs in with a password asked at connect time: the test needs one typed for it. */
+  const testAsks = $derived(!identityId && !rdp && (authType === "prompt" || (authType === "password" && !password && !passwordId)));
+  function testRequest() {
+    const l = testLogin(login);
+    if (!l) return null;
+    const out = $state.snapshot(c) as Connection;
+    out.host = out.host.trim();
+    out.user = identity ? identity.user : out.user.trim();
+    out.auth = l.auth;
+    out.identity = l.identity;
+    // A test starts no forward (and half-typed ones would not be valid).
+    out.tunnels = [];
+    out.database = dbKind ? out.database?.trim() || null : null;
+    out.db_tls = dbKind ? (out.db_tls ?? null) : null;
+    return { connection: out, secrets: l.secrets };
+  }
 
   const DEFAULT_PORTS: Record<string, number> = { ssh: 22, rdp: 3389, mysql: 3306, postgres: 5432 };
 
@@ -151,7 +219,7 @@
       } else {
         out.auth = { type: authType };
       }
-      password = keyText = passphrase = "";
+      password = keyText = passphrase = testPassword = "";
       const saved = await connections.save(out);
       toasts.success(t("editor.saved", { name: saved.name }));
       close();
@@ -196,251 +264,312 @@
   </header>
 
   <form class="body" onsubmit={(e) => (e.preventDefault(), save())}>
-    <div class="seg kind" role="group" use:segmented aria-label={t("editor.kind")}>
-      <button type="button" aria-pressed={c.kind === "ssh"} onclick={() => setKind("ssh")}><Icon name="terminal" size={13} />SSH</button>
-      {#each [["rdp", "monitor", t("editor.kind.rdp")], ["mysql", "database", "MySQL"], ["postgres", "database", "PostgreSQL"]] as const as [k, icon, label] (k)}
-        <button
-          type="button"
-          aria-pressed={c.kind === k}
-          disabled={c.kind !== k && jumpFor.length > 0}
-          title={c.kind !== k && jumpFor.length ? t("editor.kind.rdpJump", { names: jumpFor.join(", ") }) : undefined}
-          onclick={() => setKind(k)}><Icon name={icon} size={13} />{label}</button
-        >
-      {/each}
-    </div>
-    {#if c.kind === "ssh" && c.port === 3389 && !jumpFor.length}
-      <p class="hint kindnote">
-        <Icon name="monitor" size={13} />{t("editor.kind.rdpPort")}
-        <button type="button" class="btn sm" onclick={() => setKind("rdp")}>{t("editor.kind.toRdp")}</button>
-      </p>
-    {/if}
-    <div class="field">
-      <span class="label" id="conn-name-label">{t("editor.name")}</span>
-      <div class="namerow">
-        <button
-          type="button"
-          class="icon-pick"
-          title={t("editor.icon")}
-          aria-label={t("editor.icon")}
-          aria-expanded={iconOpen}
-          onclick={() => (iconOpen = !iconOpen || emojiBad)}
-        >
-          {#if c.icon}<ConnIcon icon={c.icon} size={15} />{:else}<Icon name="plus" size={13} />{/if}
-        </button>
-        <input class="input" bind:value={c.name} placeholder="web-01" aria-labelledby="conn-name-label" />
-      </div>
-      {#if iconOpen}
-        <div class="icon-grid" role="group" aria-label={t("editor.icon")}>
-          <button type="button" aria-pressed={!c.icon} title={t("editor.iconNone")} aria-label={t("editor.iconNone")} onclick={() => setIcon(null)}>
-            <Icon name="x" size={13} />
-          </button>
-          {#each CONNECTION_ICONS as n (n)}
-            <button type="button" aria-pressed={c.icon === n} title={n} aria-label={n} onclick={() => setIcon(n)}><Icon name={n} size={15} /></button>
-          {/each}
-          <input
-            class="input emoji-in"
-            placeholder={t("editor.iconEmoji")}
-            aria-label={t("editor.iconEmoji")}
-            aria-invalid={emojiBad}
-            aria-describedby={emojiBad ? "emoji-err" : undefined}
-            value={emojiDraft}
-            oninput={(e) => typeEmoji(e.currentTarget.value)}
-          />
-          {#if emojiBad}<span class="err emoji-in" id="emoji-err">{t("editor.iconOne")}</span>{/if}
-        </div>
-      {/if}
-    </div>
-    <div class="grid3">
-      <label class="field host">
-        <span class="label">{t("editor.host")}</span>
-        <input class="input mono" bind:value={c.host} placeholder={dbKind && c.jump.length ? "localhost" : "10.0.1.11"} spellcheck="false" autocapitalize="off" />
-      </label>
-      <label class="field">
-        <span class="label">{t("editor.port")}</span>
-        <input class="input mono" type="number" min="1" max="65535" bind:value={c.port} />
-      </label>
-    </div>
-    {#if identityChoices.length || identityId}
-      <label class="field">
-        <span class="label">{t("editor.loginAs")}</span>
-        <select class="select" bind:value={identityId}>
-          <option value="">{t("editor.ownLogin")}</option>
-          {#each identityChoices as i (i.id)}<option value={i.id}>{i.label} — {i.user}</option>{/each}
-          {#if identityId && !identity}<option value={identityId}>{t("editor.identityMissing")}</option>{/if}
-        </select>
-        {#if identity}<span class="hint">{t("editor.identityNote", { user: identity.user })}</span>{/if}
-        {#if identityId && !identity}<span class="hint">{t("editor.identityMissingHint")}</span>{/if}
-      </label>
-    {/if}
-    {#if !identityId}
-    <label class="field">
-      <span class="label">{t("editor.user")}</span>
-      <input class="input mono" bind:value={c.user} placeholder={rdp ? "DOMAIN\\user" : dbKind ? "app" : "deploy"} spellcheck="false" autocapitalize="off" />
-      {#if rdp}<span class="hint">{t("editor.rdpUser")}</span>{/if}
-    </label>
-    {/if}
-    <label class="field">
-      <span class="label">{t("editor.folder")}</span>
-      <select class="select" bind:value={c.group_id}>
-        <option value={null}>{t("sidebar.ungrouped")}</option>
-        {#each connections.groups as g (g.id)}<option value={g.id}>{groupPath(connections.groups, g.id)}</option>{/each}
-      </select>
-    </label>
-
-    {#if !identityId}
-    <fieldset class="field">
-      <legend class="label">{rdp ? t("editor.auth.password") : t("editor.auth")}</legend>
-      <div class="seg" role="group" hidden={rdp} use:segmented>
-        {#each authKinds as a (a)}
-          <button type="button" aria-pressed={authType === a} onclick={() => (authType = a)}>{t(`editor.auth.${a}`)}</button>
+    <!-- GENERAL: what and where -->
+    <section class="sec" aria-labelledby="sec-general">
+      <h3 class="sec-title" id="sec-general">{t("editor.sec.general")}</h3>
+      <div class="seg kind" role="group" use:segmented aria-label={t("editor.kind")}>
+        <button type="button" aria-pressed={c.kind === "ssh"} onclick={() => setKind("ssh")}><Icon name="terminal" size={13} />SSH</button>
+        {#each [["rdp", "monitor", t("editor.kind.rdp")], ["mysql", "database", "MySQL"], ["postgres", "database", "PostgreSQL"]] as const as [k, icon, label] (k)}
+          <button
+            type="button"
+            aria-pressed={c.kind === k}
+            disabled={c.kind !== k && jumpFor.length > 0}
+            title={c.kind !== k && jumpFor.length ? t("editor.kind.rdpJump", { names: jumpFor.join(", ") }) : undefined}
+            onclick={() => setKind(k)}><Icon name={icon} size={13} />{label}</button
+          >
         {/each}
       </div>
-      {#if authType === "password"}
-        {#if credentials.passwords.length}
-          <select class="select" bind:value={passwordId} aria-label={t("editor.savedPassword")}>
-            <option value="">{t("editor.newPassword")}</option>
-            {#each credentials.passwords as p (p.id)}<option value={p.id}>{p.label}{others(p.id).length ? ` — ${t("editor.usedBy", { names: others(p.id).join(", ") })}` : ""}</option>{/each}
-          </select>
-        {/if}
-        <input class="input" type="password" autocomplete="new-password" bind:value={password} placeholder={passwordId ? t("editor.passwordPlaceholder") : t("editor.auth.password")} />
-        {#if !rdpPasswordOk}<span class="hint">{t("editor.rdpPassword")}</span>{/if}
-      {:else if authType === "key"}
-        {#if credentials.keys.length}
-          <select class="select" bind:value={keyId} aria-label={t("editor.savedKey")}>
-            <option value="">{t("editor.newKey")}</option>
-            {#each credentials.keys as k (k.id)}<option value={k.id}>{k.label}{others(k.id).length ? ` — ${t("editor.usedBy", { names: others(k.id).join(", ") })}` : ""}</option>{/each}
-          </select>
-        {/if}
-        {#if !keyId || keyText}
-          <textarea class="textarea mono" rows="4" bind:value={keyText} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea>
-        {/if}
-        <div class="row-actions">
-          <button type="button" class="btn sm" onclick={() => fileInput?.click()}><Icon name="key" size={13} />{keyId ? t("editor.keyPickOther") : t("editor.keyPick")}</button>
-          <input type="file" class="visually-hidden" bind:this={fileInput} onchange={pickKey} tabindex="-1" />
-        </div>
-        <input class="input" type="password" bind:value={passphrase} placeholder={keyId && !keyText ? t("editor.passphraseKeep") : t("editor.passphrase")} autocomplete="off" />
-      {:else if authType === "agent"}
-        <p class="hint">{t("editor.agentNote")}</p>
-      {:else}
-        <p class="hint">{t("editor.promptNote")}</p>
+      {#if c.kind === "ssh" && c.port === 3389 && !jumpFor.length}
+        <p class="hint kindnote">
+          <Icon name="monitor" size={13} />{t("editor.kind.rdpPort")}
+          <button type="button" class="btn sm" onclick={() => setKind("rdp")}>{t("editor.kind.toRdp")}</button>
+        </p>
       {/if}
-    </fieldset>
-    {/if}
-
-    {#if rdp}
-      <label class="check admin">
-        <input type="checkbox" bind:checked={c.rdp_admin} />
-        <span>{t("editor.rdpAdmin")}<span class="hint">{t("editor.rdpAdminHint")}</span></span>
+      <label class="field">
+        <span class="label">{t("editor.name")}</span>
+        <input class="input" bind:value={c.name} placeholder="web-01" />
       </label>
-    {/if}
-
-    <fieldset class="field">
-      <legend class="label">{t(dbKind ? "editor.dbTunnel" : "editor.jump")}</legend>
-      {#if rdp}<p class="hint">{t("editor.rdpJump")}</p>{/if}
-      {#if dbKind}<p class="hint">{t("editor.dbTunnelHint")}</p>{/if}
-      {#if !jumpCandidates.length}
-        <p class="hint">{t("editor.jumpNone")}</p>
+      <div class="grid3">
+        <label class="field host">
+          <span class="label">{t("editor.host")}</span>
+          <input class="input mono" bind:value={c.host} placeholder={dbKind && c.jump.length ? "localhost" : "10.0.1.11"} spellcheck="false" autocapitalize="off" />
+        </label>
+        <label class="field">
+          <span class="label">{t("editor.port")}</span>
+          <input class="input mono" type="number" min="1" max="65535" bind:value={c.port} />
+        </label>
+      </div>
+      {#if identityId}
+        <label class="field">
+          <span class="label">{t("editor.user")}</span>
+          <input class="input mono" value={identity?.user ?? ""} disabled />
+          <span class="hint">{t("editor.userFromIdentity")}</span>
+        </label>
       {:else}
-        <div class="chips">
-          {#each jumpCandidates as j (j.id)}
-            <button type="button" class="chip" aria-pressed={c.jump.includes(j.id)} onclick={() => toggleJump(j.id)}>
-              {#if c.jump.includes(j.id)}<span class="ord">{c.jump.indexOf(j.id) + 1}</span>{/if}{j.name}
+        <label class="field">
+          <span class="label">{t("editor.user")}</span>
+          <input class="input mono" bind:value={c.user} placeholder={rdp ? "DOMAIN\\user" : dbKind ? "app" : "deploy"} spellcheck="false" autocapitalize="off" />
+          {#if rdp}<span class="hint">{t("editor.rdpUser")}</span>{/if}
+        </label>
+      {/if}
+      {#if dbKind}
+        <label class="field">
+          <span class="label">{t("editor.database")}</span>
+          <input class="input mono" bind:value={c.database} placeholder={c.kind === "postgres" ? "postgres" : t("editor.databaseAny")} spellcheck="false" autocapitalize="off" />
+          {#if c.kind === "postgres"}<span class="hint">{t("editor.databasePg")}</span>{/if}
+        </label>
+      {/if}
+      <label class="field">
+        <span class="label">{t("editor.folder")}</span>
+        <select class="select" bind:value={c.group_id}>
+          <option value={null}>{t("sidebar.ungrouped")}</option>
+          {#each connections.groups as g (g.id)}<option value={g.id}>{groupPath(connections.groups, g.id)}</option>{/each}
+        </select>
+      </label>
+      <fieldset class="field">
+        <legend class="label">{t("editor.env")}</legend>
+        <div class="seg" role="group" use:segmented>
+          {#each envs as e (e)}
+            <button type="button" aria-pressed={c.env === e} onclick={() => (c.env = e)}>
+              <span class="envdot env-{e}"></span>{t(`env.${e}`)}
             </button>
           {/each}
         </div>
-      {/if}
-    </fieldset>
+      </fieldset>
+    </section>
 
-    {#if dbKind}
-      <div class="grid3">
-        <label class="field host">
-          <span class="label">{t("editor.database")}</span>
-          <input class="input mono" bind:value={c.database} placeholder={c.kind === "postgres" ? "postgres" : t("editor.databaseAny")} spellcheck="false" autocapitalize="off" />
-        </label>
+    <!-- AUTHENTICATION: who logs in, and how -->
+    <section class="sec" aria-labelledby="sec-auth">
+      <h3 class="sec-title" id="sec-auth">{t("editor.auth")}</h3>
+      {#if identityChoices.length || identityId}
         <label class="field">
-          <span class="label">{t("editor.dbTls")}</span>
-          <select class="select" bind:value={c.db_tls}>
-            <option value={null}>{t("editor.dbTls.prefer")}</option>
-            <option value="require">{t("editor.dbTls.require")}</option>
-            <option value="verify">{t("editor.dbTls.verify")}</option>
-            <option value="disable">{t("editor.dbTls.disable")}</option>
+          <span class="label">{t("editor.loginAs")}</span>
+          <select class="select" bind:value={identityId}>
+            <option value="">{t("editor.ownLogin")}</option>
+            {#each identityChoices as i (i.id)}<option value={i.id}>{i.label} — {i.user}</option>{/each}
+            {#if identityId && !identity}<option value={identityId}>{t("editor.identityMissing")}</option>{/if}
           </select>
+          {#if identity}<span class="hint">{t("editor.identityNote", { user: identity.user })}</span>{/if}
+          {#if identityId && !identity}<span class="hint">{t("editor.identityMissingHint")}</span>{/if}
         </label>
-      </div>
-      {#if c.kind === "postgres"}<span class="hint">{t("editor.databasePg")}</span>{/if}
-    {/if}
-    <fieldset class="field" hidden={c.kind !== "ssh"}>
-      <legend class="label">{t("editor.tunnels")}</legend>
-      {#each c.tunnels as x, i (i)}
-        {@const problem = tunnelProblem(x)}
-        <div class="tunnel" class:off={!x.enabled}>
-          <div class="trow">
-            <select class="select sm" bind:value={x.kind} aria-label={t("editor.tunnelKind")}>
-              {#each ["local", "remote", "dynamic"] as const as k (k)}<option value={k}>{t(`editor.tunnel.${k}`)}</option>{/each}
-            </select>
-            <label class="on"><input type="checkbox" bind:checked={x.enabled} />{t("editor.tunnelOn")}</label>
-            <span class="grow"></span>
-            <button type="button" class="icon-btn" aria-label={t("editor.tunnelRemove")} title={t("editor.tunnelRemove")} onclick={() => c.tunnels.splice(i, 1)}><Icon name="trash" size={13} /></button>
+      {/if}
+      {#if !identityId}
+        <fieldset class="field">
+          <legend class="label">{rdp ? t("editor.auth.password") : t("editor.auth.method")}</legend>
+          <div class="seg" role="group" hidden={rdp} use:segmented>
+            {#each authKinds as a (a)}
+              <button type="button" aria-pressed={authType === a} onclick={() => (authType = a)}>{t(`editor.auth.${a}`)}</button>
+            {/each}
           </div>
-          <div class="trow">
-            <span class="tl">{t(x.kind === "remote" ? "editor.tunnelListenServer" : "editor.tunnelListenHere")}</span>
-            <input class="input mono sm host" class:bad={problem === "bind"} bind:value={x.bind_host} aria-label={t("editor.tunnelBindHost")} spellcheck="false" />
-            <span class="colon">:</span>
-            <input class="input mono sm num" class:bad={problem === "bind"} type="number" min="0" max="65535" bind:value={x.bind_port} aria-label={t("editor.tunnelBindPort")} />
-          </div>
-          {#if x.kind !== "dynamic"}
-            <div class="trow">
-              <span class="tl">{t(x.kind === "remote" ? "editor.tunnelToHere" : "editor.tunnelToServer")}</span>
-              <input class="input mono sm host" class:bad={problem === "dest"} bind:value={x.dest_host} aria-label={t("editor.tunnelDestHost")} spellcheck="false" />
-              <span class="colon">:</span>
-              <input class="input mono sm num" class:bad={problem === "dest"} type="number" min="1" max="65535" bind:value={x.dest_port} aria-label={t("editor.tunnelDestPort")} />
+          {#if authType === "password"}
+            {#if credentials.passwords.length}
+              <select class="select" bind:value={passwordId} aria-label={t("editor.savedPassword")}>
+                <option value="">{t("editor.newPassword")}</option>
+                {#each credentials.passwords as p (p.id)}<option value={p.id}>{p.label}{others(p.id).length ? ` — ${t("editor.usedBy", { names: others(p.id).join(", ") })}` : ""}</option>{/each}
+              </select>
+            {/if}
+            <input
+              class="input"
+              type="password"
+              autocomplete="new-password"
+              bind:value={password}
+              placeholder={passwordId ? t("editor.passwordPlaceholder") : t("editor.auth.password")}
+              aria-label={t("editor.auth.password")}
+            />
+            {#if !rdpPasswordOk}<span class="hint">{t("editor.rdpPassword")}</span>{/if}
+          {:else if authType === "key"}
+            {#if credentials.keys.length}
+              <select class="select" bind:value={keyId} aria-label={t("editor.savedKey")}>
+                <option value="">{t("editor.newKey")}</option>
+                {#each credentials.keys as k (k.id)}<option value={k.id}>{k.label}{others(k.id).length ? ` — ${t("editor.usedBy", { names: others(k.id).join(", ") })}` : ""}</option>{/each}
+              </select>
+            {/if}
+            {#if !keyId || keyText}
+              <textarea class="textarea mono" rows="4" bind:value={keyText} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false" aria-label={t("editor.auth.key")}></textarea>
+            {/if}
+            <div class="row-actions">
+              <button type="button" class="btn sm" onclick={() => fileInput?.click()}><Icon name="key" size={13} />{keyId ? t("editor.keyPickOther") : t("editor.keyPick")}</button>
+              <input type="file" class="visually-hidden" bind:this={fileInput} onchange={pickKey} tabindex="-1" />
+            </div>
+            <input
+              class="input"
+              type="password"
+              bind:value={passphrase}
+              placeholder={keyId && !keyText ? t("editor.passphraseKeep") : t("editor.passphrase")}
+              aria-label={t("editor.passphrase")}
+              autocomplete="off"
+            />
+          {:else if authType === "agent"}
+            <p class="hint">{t("editor.agentNote")}</p>
+          {:else}
+            <p class="hint">{t("editor.promptNote")}</p>
+          {/if}
+        </fieldset>
+      {/if}
+    </section>
+
+    <!-- NETWORK: how it is reached (collapsible) -->
+    <section class="sec">
+      <h3 class="sec-head">
+        <button type="button" class="sec-toggle" aria-expanded={networkOpen} aria-controls="sec-network" onclick={() => (networkOpen = !networkOpen)}>
+          <Icon name={networkOpen ? "chevronDown" : "chevronRight"} size={12} />
+          <span class="sec-name">{t("editor.sec.network")}</span>
+          {#if !networkOpen}<span class="sec-sum">{networkSummary}</span>{/if}
+        </button>
+      </h3>
+      <div class="sec-body" id="sec-network" hidden={!networkOpen}>
+        <fieldset class="field">
+          <legend class="label">{t(dbKind ? "editor.dbTunnel" : "editor.jump")}</legend>
+          {#if rdp}<p class="hint">{t("editor.rdpJump")}</p>{/if}
+          {#if dbKind}<p class="hint">{t("editor.dbTunnelHint")}</p>{/if}
+          {#if !jumpCandidates.length}
+            <p class="hint">{t("editor.jumpNone")}</p>
+          {:else}
+            <div class="chips">
+              {#each jumpCandidates as j (j.id)}
+                <button type="button" class="chip" aria-pressed={c.jump.includes(j.id)} onclick={() => toggleJump(j.id)}>
+                  {#if c.jump.includes(j.id)}<span class="ord">{c.jump.indexOf(j.id) + 1}</span>{/if}{j.name}
+                </button>
+              {/each}
             </div>
           {/if}
-          <p class="hint">
-            {t(`editor.tunnelHint.${x.kind}`)}
-            {#if x.bind_host.trim() === "0.0.0.0" || x.bind_host.trim() === "::"}<span class="warn">{t("editor.tunnelOpen")}</span>{/if}
-          </p>
+        </fieldset>
+
+        {#if dbKind}
+          <label class="field">
+            <span class="label">{t("editor.dbTls")}</span>
+            <select class="select" bind:value={c.db_tls}>
+              <option value={null}>{t("editor.dbTls.prefer")}</option>
+              <option value="require">{t("editor.dbTls.require")}</option>
+              <option value="verify">{t("editor.dbTls.verify")}</option>
+              <option value="disable">{t("editor.dbTls.disable")}</option>
+            </select>
+          </label>
+        {/if}
+
+        {#if rdp}
+          <label class="check admin">
+            <input type="checkbox" bind:checked={c.rdp_admin} />
+            <span>{t("editor.rdpAdmin")}<span class="hint">{t("editor.rdpAdminHint")}</span></span>
+          </label>
+        {/if}
+
+        <fieldset class="field" hidden={c.kind !== "ssh"}>
+          <legend class="label">{t("editor.tunnels")}</legend>
+          {#each c.tunnels as x, i (i)}
+            {@const problem = tunnelProblem(x)}
+            <div class="tunnel" class:off={!x.enabled}>
+              <div class="trow">
+                <select class="select sm" bind:value={x.kind} aria-label={t("editor.tunnelKind")}>
+                  {#each ["local", "remote", "dynamic"] as const as k (k)}<option value={k}>{t(`editor.tunnel.${k}`)}</option>{/each}
+                </select>
+                <label class="on"><input type="checkbox" bind:checked={x.enabled} />{t("editor.tunnelOn")}</label>
+                <span class="grow"></span>
+                <button type="button" class="icon-btn" aria-label={t("editor.tunnelRemove")} title={t("editor.tunnelRemove")} onclick={() => c.tunnels.splice(i, 1)}><Icon name="trash" size={13} /></button>
+              </div>
+              <div class="trow">
+                <span class="tl">{t(x.kind === "remote" ? "editor.tunnelListenServer" : "editor.tunnelListenHere")}</span>
+                <input class="input mono sm host" class:bad={problem === "bind"} bind:value={x.bind_host} aria-label={t("editor.tunnelBindHost")} aria-invalid={problem === "bind"} spellcheck="false" />
+                <span class="colon">:</span>
+                <input class="input mono sm num" class:bad={problem === "bind"} type="number" min="0" max="65535" bind:value={x.bind_port} aria-label={t("editor.tunnelBindPort")} />
+              </div>
+              {#if x.kind !== "dynamic"}
+                <div class="trow">
+                  <span class="tl">{t(x.kind === "remote" ? "editor.tunnelToHere" : "editor.tunnelToServer")}</span>
+                  <input class="input mono sm host" class:bad={problem === "dest"} bind:value={x.dest_host} aria-label={t("editor.tunnelDestHost")} aria-invalid={problem === "dest"} spellcheck="false" />
+                  <span class="colon">:</span>
+                  <input class="input mono sm num" class:bad={problem === "dest"} type="number" min="1" max="65535" bind:value={x.dest_port} aria-label={t("editor.tunnelDestPort")} />
+                </div>
+              {/if}
+              <p class="hint">
+                {t(`editor.tunnelHint.${x.kind}`)}
+                {#if x.bind_host.trim() === "0.0.0.0" || x.bind_host.trim() === "::"}<span class="warn">{t("editor.tunnelOpen")}</span>{/if}
+              </p>
+            </div>
+          {/each}
+          <div class="row-actions">
+            <button type="button" class="btn sm" onclick={() => c.tunnels.push(newTunnel())}><Icon name="plus" size={13} />{t("editor.tunnelAdd")}</button>
+          </div>
+          {#if c.tunnels.length}<p class="hint">{t("editor.tunnelsNext")}</p>{/if}
+        </fieldset>
+      </div>
+    </section>
+
+    <!-- ADVANCED: labels, agents, notes (collapsible) -->
+    <section class="sec">
+      <h3 class="sec-head">
+        <button type="button" class="sec-toggle" aria-expanded={advancedOpen} aria-controls="sec-advanced" onclick={() => (advancedOpen = !advancedOpen)}>
+          <Icon name={advancedOpen ? "chevronDown" : "chevronRight"} size={12} />
+          <span class="sec-name">{t("editor.sec.advanced")}</span>
+          {#if !advancedOpen}<span class="sec-sum">{advancedSummary}</span>{/if}
+        </button>
+      </h3>
+      <div class="sec-body" id="sec-advanced" hidden={!advancedOpen}>
+        <label class="field">
+          <span class="label">{t("editor.tags")}</span>
+          <input class="input" bind:value={tagsText} placeholder={t("editor.tagsPlaceholder")} />
+        </label>
+
+        <label class="field" hidden={rdp}>
+          <span class="label">{t("editor.approval")}</span>
+          <select class="select" bind:value={c.approval_mode}>
+            <option value={null}>{t("editor.approvalDefault")}</option>
+            {#each ["confirm_all", "confirm_writes", "auto"] as const as m (m)}
+              <option value={m as ApprovalMode} disabled={m === "auto" && c.env === "prod"}>{t(`ai.mode.${m}`)}</option>
+            {/each}
+          </select>
+          {#if c.env === "prod"}<span class="hint">{t("editor.prodAuto")}</span>{/if}
+        </label>
+
+        <div class="field">
+          <span class="label" id="conn-icon-label">{t("editor.icon")}</span>
+          <div class="iconrow">
+            <button
+              type="button"
+              class="icon-pick"
+              title={t("editor.icon")}
+              aria-labelledby="conn-icon-label"
+              aria-expanded={iconOpen}
+              onclick={() => (iconOpen = !iconOpen || emojiBad)}
+            >
+              {#if c.icon}<ConnIcon icon={c.icon} size={15} />{:else}<Icon name="plus" size={13} />{/if}
+            </button>
+            <span class="hint">{c.icon ? (isIconName(c.icon) ? c.icon : t("editor.iconEmojiSet")) : t("editor.iconNone")}</span>
+          </div>
+          {#if iconOpen}
+            <div class="icon-grid" role="group" aria-label={t("editor.icon")}>
+              <button type="button" aria-pressed={!c.icon} title={t("editor.iconNone")} aria-label={t("editor.iconNone")} onclick={() => setIcon(null)}>
+                <Icon name="x" size={13} />
+              </button>
+              {#each CONNECTION_ICONS as n (n)}
+                <button type="button" aria-pressed={c.icon === n} title={n} aria-label={n} onclick={() => setIcon(n)}><Icon name={n} size={15} /></button>
+              {/each}
+              <input
+                class="input emoji-in"
+                placeholder={t("editor.iconEmoji")}
+                aria-label={t("editor.iconEmoji")}
+                aria-invalid={emojiBad}
+                aria-describedby={emojiBad ? "emoji-err" : undefined}
+                value={emojiDraft}
+                oninput={(e) => typeEmoji(e.currentTarget.value)}
+              />
+              {#if emojiBad}<span class="err emoji-in" id="emoji-err">{t("editor.iconOne")}</span>{/if}
+            </div>
+          {/if}
         </div>
-      {/each}
-      <div class="row-actions">
-        <button type="button" class="btn sm" onclick={() => c.tunnels.push(newTunnel())}><Icon name="plus" size={13} />{t("editor.tunnelAdd")}</button>
+
+        <label class="field">
+          <span class="label">{t("editor.notes")}</span>
+          <textarea class="textarea" rows="3" bind:value={c.notes}></textarea>
+        </label>
       </div>
-      {#if c.tunnels.length}<p class="hint">{t("editor.tunnelsNext")}</p>{/if}
-    </fieldset>
-
-    <fieldset class="field">
-      <legend class="label">{t("editor.env")}</legend>
-      <div class="seg" role="group" use:segmented>
-        {#each envs as e (e)}
-          <button type="button" aria-pressed={c.env === e} onclick={() => (c.env = e)}>
-            <span class="envdot env-{e}"></span>{t(`env.${e}`)}
-          </button>
-        {/each}
-      </div>
-    </fieldset>
-
-    <label class="field">
-      <span class="label">{t("editor.tags")}</span>
-      <input class="input" bind:value={tagsText} placeholder={t("editor.tagsPlaceholder")} />
-    </label>
-
-    <label class="field" hidden={rdp}>
-      <span class="label">{t("editor.approval")}</span>
-      <select class="select" bind:value={c.approval_mode}>
-        <option value={null}>{t("editor.approvalDefault")}</option>
-        {#each ["confirm_all", "confirm_writes", "auto"] as const as m (m)}
-          <option value={m as ApprovalMode} disabled={m === "auto" && c.env === "prod"}>{t(`ai.mode.${m}`)}</option>
-        {/each}
-      </select>
-      {#if c.env === "prod"}<span class="hint">{t("editor.prodAuto")}</span>{/if}
-    </label>
-
-    <label class="field">
-      <span class="label">{t("editor.notes")}</span>
-      <textarea class="textarea" rows="3" bind:value={c.notes}></textarea>
-    </label>
+    </section>
     <button type="submit" hidden aria-hidden="true"></button>
   </form>
+
+  <div class="testbar">
+    <ConnectionTest request={testRequest} signature={testSig} askPassword={testAsks} bind:testPassword disabled={!testable || busy} />
+  </div>
 
   <footer>
     <button class="btn ghost" onclick={close}>{t("editor.cancel")}</button>
@@ -451,16 +580,17 @@
 </div>
 
 <style>
-  .namerow {
+  .iconrow {
     display: flex;
-    gap: 6px;
+    align-items: center;
+    gap: var(--sp-2);
   }
   .icon-pick {
     display: inline-grid;
     place-items: center;
     flex: none;
-    width: 30px;
-    height: 30px;
+    width: var(--ctl-h);
+    height: var(--ctl-h);
     border-radius: var(--r);
     border: 1px solid var(--border-strong);
     background: var(--bg);
@@ -516,7 +646,7 @@
     right: 0;
     bottom: 0;
     z-index: 41;
-    width: min(420px, 100vw);
+    width: min(480px, 100vw);
     display: flex;
     flex-direction: column;
     background: var(--panel);
@@ -542,8 +672,73 @@
     overflow: auto;
     display: grid;
     align-content: start;
-    gap: 16px;
-    padding: 18px;
+    gap: var(--sp-4);
+    padding: var(--sp-4) 18px var(--sp-5);
+  }
+  /* Sections: General and Authentication always open; Network and Advanced collapse. */
+  .sec {
+    display: grid;
+    gap: var(--sp-3);
+    min-width: 0;
+  }
+  .sec + .sec {
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--border);
+  }
+  .sec-body {
+    display: grid;
+    gap: var(--sp-3);
+    min-width: 0;
+  }
+  .sec-body[hidden] {
+    display: none;
+  }
+  .sec-title,
+  .sec-head {
+    margin: 0;
+    font-size: var(--fs-small);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .sec-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-height: var(--ctl-h-sm);
+    margin: calc(var(--sp-1) * -1) 0;
+    border-radius: var(--r-sm);
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    text-align: left;
+  }
+  .sec-toggle:hover {
+    color: var(--text-2);
+  }
+  .sec-name {
+    flex: none;
+  }
+  .sec-sum {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    font-size: var(--fs-meta);
+    color: var(--meta);
+  }
+  .testbar {
+    padding: var(--sp-3) 18px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
   }
   fieldset {
     border: 0;
@@ -559,7 +754,7 @@
   .grid3 {
     display: grid;
     grid-template-columns: 1fr 88px;
-    gap: 10px;
+    gap: var(--sp-3);
   }
   .seg {
     flex-wrap: wrap;
@@ -676,8 +871,8 @@
   footer {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 12px 18px;
+    gap: var(--sp-2);
+    padding: var(--sp-3) 18px;
     border-top: 1px solid var(--border);
   }
   .grow {

@@ -15,6 +15,8 @@ import type {
   ApprovalSettings,
   Brain,
   Connection,
+  ConnTestResult,
+  ConnTestSecrets,
   DetectedHarness,
   Group,
   HarnessExtensions,
@@ -113,6 +115,9 @@ export interface Api {
   // connections & groups
   listConnections(): Promise<Connection[]>;
   saveConnection(connection: Connection): Promise<Connection>;
+  /** Log in to `connection` as edited (it need not be saved) and close again; nothing runs on
+   *  the server. Never rejects for a failed login: the result says what happened. */
+  testConnection(connection: Connection, secrets?: ConnTestSecrets): Promise<ConnTestResult>;
   deleteConnection(id: string): Promise<void>;
   listGroups(): Promise<Group[]>;
   saveGroup(group: Group): Promise<Group>;

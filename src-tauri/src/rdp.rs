@@ -9,7 +9,8 @@ use crate::state::{err, AppState};
 use aht_core::model::{Connection, ConnectionKind, SshAuth};
 use aht_core::{ConnectionId, Error, Result};
 use aht_ssh::{
-    Forward, ForwardSpec, JumpHop, KnownHosts, PromptingVerifier, SshConnection, SshParams,
+    Forward, ForwardSpec, HostKeyVerifier, JumpHop, KnownHosts, PromptingVerifier, SshConnection,
+    SshParams,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -118,6 +119,21 @@ pub(crate) async fn tunnel(
     state: &AppState,
     conn: &Connection,
 ) -> Result<(Arc<SshConnection>, Forward)> {
+    let store = KnownHosts::with_user_known_hosts(state.paths.data_dir.join("known_hosts"));
+    let verifier = Arc::new(PromptingVerifier::new(
+        store,
+        crate::terminal::host_key_prompt(app),
+    ));
+    tunnel_with(state, conn, verifier).await
+}
+
+/// [`tunnel`] with the given host key verifier (the connection test refuses unknown keys
+/// instead of asking about them).
+pub(crate) async fn tunnel_with(
+    state: &AppState,
+    conn: &Connection,
+    verifier: Arc<dyn HostKeyVerifier>,
+) -> Result<(Arc<SshConnection>, Forward)> {
     let mut hops = Vec::new();
     for id in &conn.jump {
         let j = crate::terminal::load_connection(state, *id).await?;
@@ -134,11 +150,6 @@ pub(crate) async fn tunnel(
         .ok_or_else(|| Error::Invalid("no jump host".into()))?;
     let mut params = SshParams::new(last.host, last.port, last.user, last.auth);
     params.jump = hops;
-    let store = KnownHosts::with_user_known_hosts(state.paths.data_dir.join("known_hosts"));
-    let verifier = Arc::new(PromptingVerifier::new(
-        store,
-        crate::terminal::host_key_prompt(app),
-    ));
     let ssh = Arc::new(SshConnection::connect(&params, verifier).await?);
     let forward = ssh
         .forward(&ForwardSpec::Local {

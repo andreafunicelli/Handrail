@@ -23,6 +23,8 @@ export function createTauriApi(): Api {
 
     listConnections: () => invoke("list_connections"),
     saveConnection: (connection) => invoke("save_connection", { connection }),
+    testConnection: (connection, secrets = {}) =>
+      invoke("connection_test", { connection, password: secrets.password || null, key: secrets.key || null, passphrase: secrets.passphrase || null }),
     deleteConnection: (id) => invoke("delete_connection", { id }),
     listGroups: () => invoke("list_groups"),
     saveGroup: (group) => invoke("save_group", { group }),
