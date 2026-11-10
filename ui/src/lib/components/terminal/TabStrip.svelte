@@ -7,6 +7,8 @@
   import { toasts } from "../../stores/toasts.svelte";
   import { ui } from "../../stores/ui.svelte";
   import { leaves } from "../../util/layout";
+  import ConnectionDetails from "./ConnectionDetails.svelte";
+  import { quickActions, sshConnectionOf, loginUser } from "./sessionActions.svelte";
 
   const DT_TAB = "application/x-aht-tab";
   let menu = $state<{ x: number; y: number; items: MenuEntry[] } | null>(null);
@@ -17,6 +19,8 @@
   function tabMenu(e: MouseEvent, tab: Tab) {
     e.preventDefault();
     const multi = leaves(tab.layout).length > 1;
+    const sid = sessions.tabInfo(tab)?.session_id;
+    const quick = sid ? quickActions(sid, { split: false }) : [];
     menu = {
       x: e.clientX,
       y: e.clientY,
@@ -27,6 +31,7 @@
         ...(sessions.broadcast[tab.id] || sessions.broadcastTargets(tab.id).length > 1
           ? [{ label: t("tabs.broadcast"), checked: !!sessions.broadcast[tab.id], action: () => sessions.toggleBroadcast(tab.id) }]
           : []),
+        ...(quick.length ? ["sep" as const, ...quick] : []),
         "sep",
         { label: t("tabs.close"), icon: "x", shortcut: `${mod}⇧W`, action: () => sessions.closeTab(tab.id) },
       ],
@@ -76,6 +81,16 @@
     if (e.key === "Delete") sessions.closeTab(tab.id);
   }
 
+  /** Tooltip of a tab: what its focused pane is connected to, and its environment. */
+  function tabTip(tab: Tab): string {
+    const info = sessions.tabInfo(tab);
+    if (!info) return sessions.tabTitle(tab);
+    const c = sshConnectionOf(info.session_id);
+    const who = c ? `${info.user || loginUser(c)}@${c.host}` : `${info.user ?? ""}@${info.host ?? ""}`;
+    const env = sessions.tabEnv(tab);
+    return env === "none" ? `${sessions.tabTitle(tab)}\n${who}` : `${sessions.tabTitle(tab)}\n${who}\n${t(`env.${env}`)}`;
+  }
+
   $effect(() => {
     const id = sessions.activeTabId;
     if (id) strip?.querySelector(`[data-tab="${id}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -89,16 +104,17 @@
   <div class="tabs" role="tablist" bind:this={strip}>
     {#each sessions.tabs as tab, i (tab.id)}
       {@const info = sessions.tabInfo(tab)}
+      {@const env = sessions.tabEnv(tab)}
       {@const active = sessions.activeTabId === tab.id}
       <div
-        class="tab env-{info?.env ?? 'none'}"
+        class="tab env-{env}"
         class:active
         role="tab"
         tabindex={active ? 0 : -1}
         aria-selected={active}
         data-tab={tab.id}
         draggable="true"
-        title={info ? `${info.user ?? ""}@${info.host ?? ""}` : ""}
+        title={tabTip(tab)}
         onclick={() => sessions.focus(tab.id)}
         onauxclick={(e) => e.button === 1 && sessions.closeTab(tab.id)}
         oncontextmenu={(e) => tabMenu(e, tab)}
@@ -110,6 +126,7 @@
       >
         <span class="dot {info?.state ?? ''}"></span>
         <span class="title">{sessions.tabTitle(tab)}</span>
+        {#if env === "prod"}<span class="env-prod-badge" title={t("sess.prodTip")}>{t("sess.prod")}</span>{/if}
         {#if sessions.broadcasting(tab.id)}<span class="bcast" title={t("tabs.broadcastOn")}>⇶</span>{/if}
         <button
           class="close"
@@ -146,6 +163,7 @@
 </div>
 
 {#if menu}<ContextMenu {...menu} onclose={() => (menu = null)} />{/if}
+<ConnectionDetails />
 
 <style>
   .bcast {
@@ -226,14 +244,21 @@
     height: 1px;
     background: var(--bg);
   }
+  .tab .env-prod-badge {
+    flex: none;
+    height: 16px;
+    padding: 0 5px;
+  }
   .title {
-    flex: 1;
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .close {
+    margin-left: auto;
+    flex: none;
     display: grid;
     place-items: center;
     width: 20px;
