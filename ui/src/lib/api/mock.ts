@@ -7,6 +7,7 @@ import type {
   Brain,
   CommandResult,
   Connection,
+  ConnTestResult,
   Group,
   Identity,
   HarnessProfile,
@@ -773,6 +774,25 @@ export function createMockApi(): Api {
       if (i >= 0) db.connections[i] = structuredClone(c);
       else db.connections.push(structuredClone(c));
       return c;
+    },
+    async testConnection(c, secrets = {}) {
+      // Deterministic by host, so the preview shows every result: "edge…" has a new host key
+      // (until accepted in a terminal), "10.0.2.40" a changed one, "…unreach…" / "10.9.…" no
+      // route, "…slow…" a timeout, "…badauth…" or the password "wrong" a refused login.
+      await sleep(c.host.includes("slow") ? 1500 : 450);
+      const r = (status: ConnTestResult["status"], message: string | null = null): ConnTestResult => ({ status, message, host: null, fingerprint: null, elapsed_ms: 450 });
+      const hostPort = `${c.host}:${c.port}`;
+      if (c.host.includes("unreach") || c.host.startsWith("10.9.")) return r("unreachable", `${hostPort}: Connection refused (os error 111)`);
+      if (c.host.includes("slow")) return r("timeout", `${hostPort}: connect timed out`);
+      if (c.kind === "rdp") return r("reachable", "credentials not checked");
+      if (c.host.startsWith("edge") && !trusted.has(hostPort)) {
+        return { ...r("host_key_unknown"), host: hostPort, fingerprint: "SHA256:q3Vx8f2nK0tL9mXcE4pR7bZs1YhUo6WjA5dQiN+gTkc" };
+      }
+      if (c.host === "10.0.2.40") return r("host_key_mismatch", `${hostPort} (recorded SHA256:Hb2K9sPq4Lw7Rt1ZxV0cN8mJfY3aGd6UeO5iS+kQrTo, presented SHA256:q3Vx8f2nK0tL9mXcE4pR7bZs1YhUo6WjA5dQiN+gTkc)`);
+      const prompt = !c.identity && c.auth.type === "prompt";
+      if (prompt && !secrets.password) return r("needs_password");
+      if (c.host.includes("badauth") || secrets.password === "wrong") return r("auth_failed", `password authentication failed for ${c.user}@${hostPort}`);
+      return r("success");
     },
     async deleteConnection(id) {
       db.connections = db.connections.filter((c) => c.id !== id);

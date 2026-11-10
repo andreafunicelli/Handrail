@@ -754,3 +754,35 @@ export interface DbBackupPage {
 }
 
 export type DbBackupFormat = "csv" | "json" | "sql";
+
+/** How a connection test ended (`connection_test`). */
+export type ConnTestStatus =
+  | "success"
+  /** An RDP server answered; the credentials were not checked. */
+  | "reachable"
+  | "auth_failed"
+  | "unreachable"
+  | "timeout"
+  /** A host key never seen before: a test does not accept it (connect once to review it). */
+  | "host_key_unknown"
+  | "host_key_mismatch"
+  /** The connection asks for its password when connecting and none was typed for the test. */
+  | "needs_password"
+  | "error";
+
+export interface ConnTestResult {
+  status: ConnTestStatus;
+  /** Details (never a secret). */
+  message: string | null;
+  /** `host:port` of the unknown host key (the target or a jump host). */
+  host: string | null;
+  fingerprint: string | null;
+  elapsed_ms: number;
+}
+
+/** Secrets typed in the editor, used for the test only (never saved by it). */
+export interface ConnTestSecrets {
+  password?: string;
+  key?: string;
+  passphrase?: string;
+}
