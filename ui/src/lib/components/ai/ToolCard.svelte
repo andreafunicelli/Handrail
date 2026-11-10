@@ -45,7 +45,7 @@
     <div class="meta">
       {#if result.exit_code != null}<span class:bad={result.exit_code !== 0}>{t("tool.exit", { code: result.exit_code })}</span>{/if}
       <span>{fmtMs(result.duration_ms)}</span>
-      {#if result.truncated}<span>truncated</span>{/if}
+      {#if result.truncated}<span title={t("ai.activity.truncated")}>{t("tool.truncated")}</span>{/if}
       <span class="grow"></span>
       {#if outputText}
         <button class="link" onclick={() => (open = !open)} aria-expanded={open}>

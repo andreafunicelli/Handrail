@@ -10,29 +10,56 @@ import type {
 } from "../api/types";
 import { load, save } from "../util/storage";
 import { errorMessage, toasts } from "./toasts.svelte";
+import { opsLog } from "./opsLog.svelte";
 
+/** Every item carries `at`: when it was created (epoch ms), for the Activity timeline. */
 export type ChatItem =
-  | { kind: "user"; id: string; text: string }
-  | { kind: "assistant"; id: string; text: string; thinking: string }
+  | { kind: "user"; id: string; at: number; text: string }
+  | { kind: "assistant"; id: string; at: number; text: string; thinking: string }
   | {
       kind: "tool";
       id: string;
+      at: number;
       callId: string;
       name: string;
       input: Record<string, unknown>;
       output: unknown;
       isError: boolean;
       done: boolean;
+      /** When the result arrived. */
+      doneAt: number | null;
+      /** The run ended before the tool returned a result. */
+      aborted: boolean;
+      /** The brain that made the call (its label when the message was sent). */
+      actor: string | null;
     }
-  | { kind: "approval"; id: string; req: ApprovalRequest; decision: ApprovalDecision | null }
-  | { kind: "error"; id: string; message: string; retryable: boolean }
-  | { kind: "limit"; id: string; steps: number };
+  | {
+      kind: "approval";
+      id: string;
+      at: number;
+      req: ApprovalRequest;
+      decision: ApprovalDecision | null;
+      decidedAt: number | null;
+      /** The run_command call this approval belongs to, when it could be matched. */
+      callId: string | null;
+      /** The backend withdrew the request unanswered (timeout, cancelled run): it denied it. */
+      expired: boolean;
+    }
+  | { kind: "error"; id: string; at: number; message: string; retryable: boolean }
+  | { kind: "limit"; id: string; at: number; steps: number };
+
+export type ToolItem = Extract<ChatItem, { kind: "tool" }>;
+export type ApprovalItem = Extract<ChatItem, { kind: "approval" }>;
 
 export interface Chat {
   items: ChatItem[];
   runId: string | null;
   usage: { input: number; output: number; cost: number | null };
   lastMessage: string | null;
+  /** Label of the brain the last message went to. */
+  actor: string | null;
+  /** The user stopped the latest run. */
+  cancelled: boolean;
 }
 
 export interface BrainOption {
@@ -80,6 +107,14 @@ class Agent {
     return out;
   });
 
+  /** Pending approvals of every session, oldest first (so none is lost behind another tab). */
+  allPending = $derived.by(() => {
+    const out: { sessionId: string; item: ApprovalItem }[] = [];
+    for (const [sessionId, chat] of Object.entries(this.chats))
+      for (const i of chat.items) if (i.kind === "approval" && !i.decision) out.push({ sessionId, item: i });
+    return out.sort((a, b) => a.item.at - b.item.at);
+  });
+
   private started = false;
 
   async init() {
@@ -87,6 +122,8 @@ class Agent {
     this.started = true;
     await api.on("agent://event", (e) => this.apply(e.session_id, e.run_id, e.event));
     await api.on("approval://requested", (req) => this.addApproval(req));
+    await api.on("approval://resolved", (id) => this.expire(id));
+    void opsLog.init();
     await this.reload();
   }
 
@@ -107,7 +144,14 @@ class Agent {
   chat(sessionId: string): Chat {
     let c = this.chats[sessionId];
     if (!c) {
-      this.chats[sessionId] = { items: [], runId: null, usage: { input: 0, output: 0, cost: null }, lastMessage: null };
+      this.chats[sessionId] = {
+        items: [],
+        runId: null,
+        usage: { input: 0, output: 0, cost: null },
+        lastMessage: null,
+        actor: null,
+        cancelled: false,
+      };
       c = this.chats[sessionId];
     }
     return c;
@@ -130,9 +174,7 @@ class Agent {
   }
 
   pendingApprovals(sessionId: string) {
-    return (this.chats[sessionId]?.items ?? []).filter(
-      (i): i is Extract<ChatItem, { kind: "approval" }> => i.kind === "approval" && !i.decision,
-    );
+    return (this.chats[sessionId]?.items ?? []).filter((i): i is ApprovalItem => i.kind === "approval" && !i.decision);
   }
 
   /** `display`: what the chat shows for the message when it carries context (file contents). */
@@ -140,13 +182,15 @@ class Agent {
     const brain = this.brainFor(sessionId);
     if (!brain) return;
     const chat = this.chat(sessionId);
-    chat.items.push({ kind: "user", id: nid(), text: display ?? message });
+    chat.items.push({ kind: "user", id: nid(), at: Date.now(), text: display ?? message });
     chat.lastMessage = message;
+    chat.actor = brain.harness ? brain.label : `${brain.label} · ${brain.detail}`;
+    chat.cancelled = false;
     try {
       const { run_id } = await api.agentSend(sessionId, $state.snapshot(brain.brain) as Brain, message);
       chat.runId = run_id;
     } catch (e) {
-      chat.items.push({ kind: "error", id: nid(), message: errorMessage(e), retryable: true });
+      chat.items.push({ kind: "error", id: nid(), at: Date.now(), message: errorMessage(e), retryable: true });
     }
   }
 
@@ -155,16 +199,23 @@ class Agent {
     if (!chat?.runId) return;
     const id = chat.runId;
     chat.runId = null;
+    chat.cancelled = true;
     await api.agentCancel(id).catch(() => {});
   }
 
   async decide(sessionId: string, approvalId: string, decision: ApprovalDecision) {
-    const item = this.chats[sessionId]?.items.find((i) => i.kind === "approval" && i.req.approval_id === approvalId);
-    if (item && item.kind === "approval") item.decision = decision;
+    const item = this.chats[sessionId]?.items.find((i): i is ApprovalItem => i.kind === "approval" && i.req.approval_id === approvalId);
+    if (item) {
+      item.decision = decision;
+      item.decidedAt = Date.now();
+    }
     try {
       await api.approvalDecide(approvalId, decision);
     } catch (e) {
-      if (item && item.kind === "approval") item.decision = null;
+      if (item) {
+        item.decision = null;
+        item.decidedAt = null;
+      }
       toasts.error(e);
     }
   }
@@ -190,7 +241,47 @@ class Agent {
   private addApproval(req: ApprovalRequest) {
     const chat = this.chat(req.session_id);
     if (chat.items.some((i) => i.kind === "approval" && i.req.approval_id === req.approval_id)) return;
-    chat.items.push({ kind: "approval", id: nid(), req, decision: null });
+    chat.items.push({
+      kind: "approval",
+      id: nid(),
+      at: Date.now(),
+      req,
+      decision: null,
+      decidedAt: null,
+      callId: matchCall(chat.items, req.command),
+      expired: false,
+    });
+  }
+
+  /** The backend dropped a request (no answer in time, run cancelled): it counts as denied. */
+  private expire(approvalId: string) {
+    for (const chat of Object.values(this.chats)) {
+      const a = chat.items.find((i): i is ApprovalItem => i.kind === "approval" && i.req.approval_id === approvalId);
+      if (!a) continue;
+      if (!a.decision) {
+        a.decision = { type: "deny", message: null };
+        a.decidedAt = Date.now();
+        a.expired = true;
+      }
+      return;
+    }
+  }
+
+  /** Record a finished tool call in the operations history (batched; never on the hot path). */
+  private log(sessionId: string, chat: Chat, tool: ToolItem) {
+    const approval = chat.items.find((i): i is ApprovalItem => i.kind === "approval" && i.callId === tool.callId) ?? null;
+    opsLog.record({
+      sessionId,
+      tool: tool.name,
+      input: $state.snapshot(tool.input) as Record<string, unknown>,
+      output: $state.snapshot(tool.output),
+      isError: tool.isError,
+      aborted: tool.aborted,
+      actor: approval?.req.actor_label ?? tool.actor,
+      approval: approval ? { decision: $state.snapshot(approval.decision) as ApprovalDecision | null, risk: approval.req.risk } : null,
+      startedAt: tool.at,
+      endedAt: tool.doneAt ?? Date.now(),
+    });
   }
 
   /** Fold one normalized AgentEvent into the session's transcript. */
@@ -203,31 +294,46 @@ class Agent {
       case "thinking_delta": {
         let a = last?.kind === "assistant" ? last : null;
         if (!a) {
-          chat.items.push({ kind: "assistant", id: nid(), text: "", thinking: "" });
+          chat.items.push({ kind: "assistant", id: nid(), at: Date.now(), text: "", thinking: "" });
           a = chat.items.at(-1) as Extract<ChatItem, { kind: "assistant" }>;
         }
         if (ev.type === "text_delta") a.text += ev.text;
         else a.thinking += ev.text;
         break;
       }
-      case "tool_call":
+      case "tool_call": {
+        const input = (ev.input && typeof ev.input === "object" ? ev.input : {}) as Record<string, unknown>;
         chat.items.push({
           kind: "tool",
           id: nid(),
+          at: Date.now(),
           callId: ev.call_id,
           name: ev.name,
-          input: (ev.input && typeof ev.input === "object" ? ev.input : {}) as Record<string, unknown>,
+          input,
           output: null,
           isError: false,
           done: false,
+          doneAt: null,
+          aborted: false,
+          actor: chat.actor,
         });
+        // The approval can arrive on its own channel before the call: link it now.
+        if (ev.name === "run_command" && typeof input.command === "string") {
+          const orphan = chat.items.find(
+            (i): i is ApprovalItem => i.kind === "approval" && !i.callId && !i.decision && i.req.command === input.command,
+          );
+          if (orphan) orphan.callId = ev.call_id;
+        }
         break;
+      }
       case "tool_result": {
-        const t = chat.items.find((i) => i.kind === "tool" && i.callId === ev.call_id);
-        if (t && t.kind === "tool") {
+        const t = chat.items.find((i): i is ToolItem => i.kind === "tool" && i.callId === ev.call_id);
+        if (t && !t.done) {
           t.output = ev.output;
           t.isError = ev.is_error;
           t.done = true;
+          t.doneAt = Date.now();
+          this.log(sessionId, chat, t);
         }
         break;
       }
@@ -237,8 +343,11 @@ class Agent {
         break;
       }
       case "approval_resolved": {
-        const a = chat.items.find((i) => i.kind === "approval" && i.req.approval_id === ev.approval_id);
-        if (a && a.kind === "approval") a.decision = ev.decision;
+        const a = chat.items.find((i): i is ApprovalItem => i.kind === "approval" && i.req.approval_id === ev.approval_id);
+        if (a) {
+          a.decision = ev.decision;
+          a.decidedAt ??= Date.now();
+        }
         break;
       }
       case "usage":
@@ -247,17 +356,37 @@ class Agent {
         if (ev.cost_usd != null) chat.usage.cost = (chat.usage.cost ?? 0) + ev.cost_usd;
         break;
       case "error":
-        chat.items.push({ kind: "error", id: nid(), message: ev.message, retryable: ev.retryable });
+        chat.items.push({ kind: "error", id: nid(), at: Date.now(), message: ev.message, retryable: ev.retryable });
         break;
       case "step_limit":
-        chat.items.push({ kind: "limit", id: nid(), steps: ev.steps });
+        chat.items.push({ kind: "limit", id: nid(), at: Date.now(), steps: ev.steps });
         break;
       case "done":
         if (chat.runId === runId || chat.runId === null) chat.runId = null;
-        for (const i of chat.items) if (i.kind === "tool" && !i.done) i.done = true;
+        for (const i of chat.items)
+          if (i.kind === "tool" && !i.done) {
+            i.done = true;
+            i.aborted = true;
+            i.doneAt = Date.now();
+            this.log(sessionId, chat, i);
+          }
         break;
     }
   }
+}
+
+/** The run_command call still waiting for its approval: the newest unfinished one running
+ *  `command`, or failing that the newest unfinished run_command without an approval. */
+export function matchCall(items: readonly ChatItem[], command: string): string | null {
+  let fallback: string | null = null;
+  for (let k = items.length - 1; k >= 0; k--) {
+    const i = items[k];
+    if (i.kind !== "tool" || i.name !== "run_command" || i.done) continue;
+    if (items.some((a) => a.kind === "approval" && a.callId === i.callId)) continue;
+    if (i.input.command === command) return i.callId;
+    fallback ??= i.callId;
+  }
+  return fallback;
 }
 
 export const agent = new Agent();
