@@ -169,6 +169,8 @@ class OpsLog {
 
   async saveSettings(next: OpsLogSettings) {
     const s = parseSettings(next);
+    // As for clear: a write under way would otherwise overwrite the pruned history.
+    await this.writing;
     await api.setSetting(OPSLOG_SETTINGS_KEY, s);
     this.settings = s;
     if (!s.enabled) this.pending = [];
@@ -182,8 +184,14 @@ class OpsLog {
     }
   }
 
-  /** Delete this device's history (and what has not been written yet). */
+  /** Delete this device's history (and what has not been written yet). A write already under
+   *  way finishes first: it read the old history, and would put it back after the clear. */
   async clear() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    await this.writing;
     await api.setSetting(this.key, []);
     this.pending = [];
     this.stored = [];

@@ -9,7 +9,7 @@ use aht_core::{Error, Result, SessionId};
 use aht_ssh::sftp::{join, temp_sibling, EXISTS};
 use serde::Deserialize;
 use tauri::{AppHandle, State};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// One end of a copy.
 #[derive(Clone, Debug, Deserialize)]
@@ -131,9 +131,39 @@ pub async fn copy_between(
                 return Err(Error::Busy(EXISTS.into()));
             }
             // Written beside the destination first: a failed upload never truncates a file
-            // being replaced.
+            // being replaced. A replaced file keeps its permissions (an executable script stays
+            // executable, a private file stays private).
             let tmp = temp_sibling(&dest);
-            if let Err(e) = dst.upload(&local, &tmp, progress).await {
+            let mode = match overwrite {
+                true => dst.stamp(&dest).await.ok().and_then(|s| s.permissions),
+                false => None,
+            };
+            let mut file = dst.create_mode(&tmp, mode).await?;
+            let mut progress = progress;
+            let copied = async {
+                let io = |e: std::io::Error| Error::Other(format!("{path}: {e}"));
+                let mut src = tokio::fs::File::open(&local).await.map_err(io)?;
+                let total = src.metadata().await.map_err(io)?.len();
+                let mut buf = vec![0u8; 256 * 1024];
+                let mut done = 0u64;
+                progress(0, total);
+                loop {
+                    let n = src.read(&mut buf).await.map_err(io)?;
+                    if n == 0 {
+                        break;
+                    }
+                    file.write_all(&buf[..n])
+                        .await
+                        .map_err(|e| Error::Other(format!("SFTP: {e}")))?;
+                    done += n as u64;
+                    progress(done, total);
+                }
+                file.shutdown()
+                    .await
+                    .map_err(|e| Error::Other(format!("SFTP: {e}")))
+            }
+            .await;
+            if let Err(e) = copied {
                 let _ = dst.remove(&tmp, false).await;
                 return Err(e);
             }
