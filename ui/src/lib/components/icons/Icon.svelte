@@ -28,6 +28,8 @@
     download: "M12 4v11M7 10l5 5 5-5M5 20h14",
     upload: "M12 20V9M7 14l5-5 5 5M5 4h14",
     arrowUp: "M12 19V5M6 11l6-6 6 6",
+    arrowDown: "M12 5v14M6 13l6 6 6-6",
+    sort: "M3 6h11M3 12h7M3 18h4M17 4v16M14 17l3 3 3-3",
     file: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8ZM14 3v5h5",
     filePlus: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8ZM14 3v5h5M12 11v6M9 14h6",
     check: "m5 12 5 5 9-10",

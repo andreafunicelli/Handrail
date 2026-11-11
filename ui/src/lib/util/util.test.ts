@@ -4,7 +4,7 @@ import { fuzzyFilter, fuzzyScore } from "./fuzzy";
 import { parseQuickConnect } from "./quickconnect";
 import { escapeHtml, renderMarkdown } from "./markdown";
 import { canSetApprovalMode, needsTypedConfirm } from "./approval";
-import { buildTree, groupPath, isDescendant } from "./tree";
+import { alphabeticalGroupOrder, buildTree, groupPath, isDescendant, stepTarget } from "./tree";
 import { passwordStrength } from "../stores/vault.svelte";
 import { joinArgs, splitArgs } from "./args";
 import { formatBytes, relativeTime } from "./time";
@@ -125,6 +125,37 @@ describe("folder tree", () => {
     expect(groupPath(groups, "b")).toBe("Prod / eu");
     expect(isDescendant(groups, "b", "a")).toBe(true);
     expect(isDescendant(groups, "c", "a")).toBe(false);
+  });
+  it("sorts every level of folders by name, numbers in numeric order", () => {
+    const gs = [
+      { id: "p", name: "Prod", parent_id: null, order: 0 },
+      { id: "d", name: "dev", parent_id: null, order: 1 },
+      { id: "n", name: "New", parent_id: null, order: 2 },
+      { id: "s10", name: "Server 10", parent_id: "p", order: 0 },
+      { id: "s2", name: "Server 2", parent_id: "p", order: 1 },
+    ];
+    const changes = new Map(alphabeticalGroupOrder(gs).map((c) => [c.id, c.order]));
+    const after = gs.map((g) => ({ ...g, order: changes.get(g.id) ?? g.order }));
+    const t = buildTree(after, []);
+    expect(t.folders.map((f) => f.group.name)).toEqual(["dev", "New", "Prod"]);
+    expect(t.folders[2].folders.map((f) => f.group.name)).toEqual(["Server 2", "Server 10"]);
+    // Already sorted: nothing to save.
+    expect(alphabeticalGroupOrder(after)).toEqual([]);
+  });
+  it("steps a folder up or down among its siblings", () => {
+    const gs = [
+      { id: "x", name: "X", parent_id: null, order: 0 },
+      { id: "y", name: "Y", parent_id: null, order: 1 },
+      { id: "z", name: "Z", parent_id: null, order: 2 },
+      { id: "k", name: "K", parent_id: "x", order: 0 },
+    ];
+    expect(stepTarget(gs, "y", -1)).toBe("x");
+    expect(stepTarget(gs, "x", -1)).toBeUndefined();
+    expect(stepTarget(gs, "x", 1)).toBe("z");
+    expect(stepTarget(gs, "y", 1)).toBeNull();
+    expect(stepTarget(gs, "z", 1)).toBeUndefined();
+    expect(stepTarget(gs, "k", 1)).toBeUndefined();
+    expect(stepTarget(gs, "missing", 1)).toBeUndefined();
   });
 });
 
