@@ -1,5 +1,5 @@
 import { api } from "../api";
-import type { AuthPromptEvent, HostKeyEvent, SessionInfo, TunnelStatus } from "../api/types";
+import type { AuthPromptEvent, Environment, HostKeyEvent, SessionInfo, SessionState, TunnelStatus } from "../api/types";
 import { errorMessage } from "../api/errors";
 import { b64ToBytes } from "../util/b64";
 import { uuid } from "../util/id";
@@ -22,9 +22,11 @@ import { agent } from "./agent.svelte";
 import { editors } from "./editors.svelte";
 import { backups } from "./backups.svelte";
 import { ui } from "./ui.svelte";
+import { toasts } from "./toasts.svelte";
 import { RECONNECT_ATTEMPTS, reconnectDelay, retryable, shouldAutoReconnect } from "../util/reconnect";
 import { t } from "../i18n";
 import { s3 } from "./s3.svelte";
+import { mostSensitiveEnv } from "../util/sessionContext";
 
 export interface Tab {
   id: string;
@@ -39,10 +41,37 @@ export interface Workspace {
   id: string;
   name: string;
   tabs: LayoutNode[];
+  /** When it was saved and last opened (ms epoch; absent in workspaces saved before 1.1). */
+  savedAt?: number;
+  openedAt?: number;
+}
+
+/** What a saved workspace holds, for its summary. */
+export interface WorkspaceSummary {
+  tabs: number;
+  ssh: number;
+  rdp: number;
+  db: number;
+  local: number;
+  /** Panes whose connection was deleted since (they are skipped when it opens). */
+  missing: number;
 }
 
 const COLS = 120;
 const ROWS = 32;
+
+/** A pane connected to a saved connection (a terminal, a remote desktop, a database, or one
+ *  still logging in), for the "Active sessions" list. */
+export interface OpenPane {
+  tabId: string;
+  leafId: string;
+  leafSession: string;
+  connectionId: string;
+  /** Live state of a terminal; null for other panes. */
+  state: SessionState | null;
+  /** Still logging in. */
+  pending: boolean;
+}
 
 /** A dropped SSH session logging in again in the background, keyed by the old session id. */
 export interface Reconnect {
@@ -129,6 +158,33 @@ export class Sessions {
     return id && isTerminal(id) ? id : null;
   });
   activeSession = $derived(this.activeSessionId ? (this.infos[this.activeSessionId] ?? null) : null);
+
+  /** Every pane on a saved connection, tab by tab. */
+  openPanes = $derived.by((): OpenPane[] => {
+    const out: OpenPane[] = [];
+    for (const tab of this.tabs) {
+      for (const l of leaves(tab.layout)) {
+        const id = l.sessionId;
+        let connectionId: string | null = null;
+        let state: SessionState | null = null;
+        let pending = false;
+        if (isView(id)) connectionId = viewConnectionOf(id);
+        else if (isPending(id)) {
+          connectionId = this.pending[pendingRef(id)]?.connectionId ?? null;
+          pending = true;
+        } else if (isTerminal(id)) {
+          const info = this.infos[id];
+          connectionId = info?.connection_id ?? null;
+          state = info?.state ?? null;
+        }
+        if (connectionId && connectionId !== "local") out.push({ tabId: tab.id, leafId: l.id, leafSession: id, connectionId, state, pending });
+      }
+    }
+    return out;
+  });
+
+  /** Connections with at least one open pane. */
+  activeConnections = $derived(new Set(this.openPanes.map((p) => p.connectionId)));
   /** The SSH session the focused pane works on: its terminal, file browser or file editor. */
   contextSession = $derived.by(() => {
     const tab = this.activeTab;
@@ -624,6 +680,30 @@ export class Sessions {
     return this.infos[l.sessionId] ?? null;
   }
 
+  /** The saved connection a pane works on (its terminal, file browser, view or login), if any. */
+  leafConnectionId(leafSession: string): string | null {
+    let id: string | null | undefined = null;
+    if (isPending(leafSession)) id = this.pending[pendingRef(leafSession)]?.connectionId;
+    else if (isView(leafSession)) id = viewConnectionOf(leafSession);
+    else if (isFiles(leafSession)) id = this.infos[filesSession(leafSession)]?.connection_id;
+    else if (isTerminal(leafSession)) id = this.infos[leafSession]?.connection_id;
+    return id && id !== "local" ? id : null;
+  }
+
+  /** The environment of a pane: its session's, else its connection's. */
+  leafEnv(leafSession: string): Environment {
+    if (isTerminal(leafSession) && this.infos[leafSession]) return this.infos[leafSession].env;
+    if (isFiles(leafSession) && this.infos[filesSession(leafSession)]) return this.infos[filesSession(leafSession)].env;
+    const cid = this.leafConnectionId(leafSession);
+    return (cid && connections.byId.get(cid)?.env) || "none";
+  }
+
+  /** The most sensitive environment among a tab's panes: a tab holding a production pane is a
+   *  production tab, whichever pane has focus. */
+  tabEnv(tab: Tab): Environment {
+    return mostSensitiveEnv(leaves(tab.layout).map((l) => this.leafEnv(l.sessionId)));
+  }
+
   // ---- workspaces ----
   saveWorkspace(name: string) {
     // File browsers are not saved; a pane still logging in is saved as its connection.
@@ -635,7 +715,7 @@ export class Sessions {
       for (const l of leaves(t.layout)) if (layout && browser(l.sessionId)) layout = removeLeaf(layout, l.id);
       return layout ? [mapLeaves(layout, (l) => ({ ...l, sessionId: connOf(l.sessionId) }))] : [];
     });
-    const ws: Workspace = { id: uuid(), name, tabs: $state.snapshot(tabs) as LayoutNode[] };
+    const ws: Workspace = { id: uuid(), name, tabs: $state.snapshot(tabs) as LayoutNode[], savedAt: Date.now() };
     this.workspaces = [...this.workspaces.filter((w) => w.name !== name), ws];
     save("workspaces", this.workspaces);
     return ws;
@@ -646,17 +726,56 @@ export class Sessions {
     save("workspaces", this.workspaces);
   }
 
+  /** The workspace opened or saved most recently. */
+  get lastWorkspace(): Workspace | null {
+    let best: Workspace | null = null;
+    for (const w of this.workspaces) {
+      const at = Math.max(w.openedAt ?? 0, w.savedAt ?? 0);
+      if (!best || at > Math.max(best.openedAt ?? 0, best.savedAt ?? 0)) best = w;
+    }
+    return best;
+  }
+
+  summarize(ws: Workspace): WorkspaceSummary {
+    const s: WorkspaceSummary = { tabs: ws.tabs.length, ssh: 0, rdp: 0, db: 0, local: 0, missing: 0 };
+    for (const layout of ws.tabs) {
+      for (const l of leaves(layout)) {
+        if (l.sessionId === "local") s.local++;
+        else {
+          const c = connections.byId.get(l.sessionId);
+          if (!c) s.missing++;
+          else if (c.kind === "rdp") s.rdp++;
+          else if (c.kind === "mysql" || c.kind === "postgres") s.db++;
+          else s.ssh++;
+        }
+      }
+    }
+    return s;
+  }
+
   async openWorkspace(id: string) {
     const ws = this.workspaces.find((w) => w.id === id);
     if (!ws) return;
-    for (const layout of ws.tabs) {
+    this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, openedAt: Date.now() } : w));
+    save("workspaces", this.workspaces);
+    let skipped = 0;
+    for (const saved of ws.tabs) {
+      // A pane whose connection was deleted since is left out (it used to open a local shell).
+      let layout: LayoutNode | null = saved;
+      for (const l of leaves(saved)) {
+        if (layout && l.sessionId !== "local" && !connections.byId.has(l.sessionId)) {
+          layout = removeLeaf(layout, l.id);
+          skipped++;
+        }
+      }
+      if (!layout) continue;
       const mapping = new Map<string, string>();
       const logins: [string, string][] = [];
       for (const l of leaves(layout)) {
         const conn = l.sessionId;
         if (opensItself(conn)) {
           mapping.set(l.id, viewLeaf(conn));
-        } else if (conn === "local" || !connections.byId.has(conn)) {
+        } else if (conn === "local") {
           const info = await api.openLocalSession(null, COLS, ROWS);
           this.infos[info.session_id] = info;
           mapping.set(l.id, info.session_id);
@@ -673,6 +792,7 @@ export class Sessions {
       // Each pane logs in on its own (and may ask for a password).
       for (const [ref, conn] of logins) void this.connect(ref, conn);
     }
+    if (skipped) toasts.info(t("ws.skipped", { n: skipped }));
   }
 }
 

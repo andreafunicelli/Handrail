@@ -48,7 +48,7 @@
     border-radius: 7px;
     border: 1px solid var(--border-strong);
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .demo {
     margin-top: 28px;

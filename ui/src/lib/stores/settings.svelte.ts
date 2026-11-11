@@ -3,9 +3,13 @@ import { schemeById } from "../terminal/schemes";
 import { terminals } from "../terminal/host";
 
 export type Theme = "dark" | "light" | "system";
+/** How much the interface packs in: comfortable (larger text and controls) or compact. The
+ *  terminal's own font size is separate. */
+export type Density = "comfortable" | "compact";
 
 interface Prefs {
   theme: Theme;
+  density: Density;
   fontSize: number;
   scheme: string;
   autoLock: number;
@@ -28,6 +32,7 @@ export type TerminalEditorChoice = "ask" | "editor" | "terminal";
 
 const DEFAULTS: Prefs = {
   theme: "dark",
+  density: "comfortable",
   fontSize: 13,
   scheme: "quiet",
   autoLock: 15,
@@ -46,6 +51,7 @@ const DEFAULTS: Prefs = {
 /** Local, per-device UI preferences (persisted to localStorage). */
 class Settings {
   theme = $state<Theme>(DEFAULTS.theme);
+  density = $state<Density>(DEFAULTS.density);
   fontSize = $state(DEFAULTS.fontSize);
   scheme = $state(DEFAULTS.scheme);
   autoLock = $state(DEFAULTS.autoLock);
@@ -71,6 +77,7 @@ class Settings {
   constructor() {
     const p = { ...DEFAULTS, ...load<Partial<Prefs>>("prefs", {}) };
     this.theme = p.theme;
+    this.density = p.density === "compact" ? "compact" : "comfortable";
     this.fontSize = p.fontSize;
     this.scheme = p.scheme;
     this.autoLock = p.autoLock;
@@ -93,6 +100,7 @@ class Settings {
       $effect(() => {
         save("prefs", {
           theme: this.theme,
+          density: this.density,
           fontSize: this.fontSize,
           scheme: this.scheme,
           autoLock: this.autoLock,
@@ -110,6 +118,9 @@ class Settings {
       });
       $effect(() => {
         if (typeof document !== "undefined") document.documentElement.dataset.theme = this.resolvedTheme;
+      });
+      $effect(() => {
+        if (typeof document !== "undefined") document.documentElement.dataset.density = this.density;
       });
       $effect(() => {
         terminals.configure(this.fontSize, this.terminalTheme);

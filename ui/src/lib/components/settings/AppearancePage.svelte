@@ -1,10 +1,12 @@
 <script lang="ts">
   import { segmented } from "../../actions/segmented";
   import { t } from "../../i18n";
-  import { settings, type TerminalEditorChoice, type Theme } from "../../stores/settings.svelte";
+  import { LANGS, locale } from "../../i18n";
+  import { settings, type Density, type TerminalEditorChoice, type Theme } from "../../stores/settings.svelte";
   import { SCHEMES } from "../../terminal/schemes";
 
   const themes: Theme[] = ["dark", "light", "system"];
+  const densities: Density[] = ["comfortable", "compact"];
   const editorChoices: TerminalEditorChoice[] = ["ask", "editor", "terminal"];
 </script>
 
@@ -15,6 +17,23 @@
       <button aria-pressed={settings.theme === th} onclick={() => (settings.theme = th)}>{t(`app.theme.${th}`)}</button>
     {/each}
   </div>
+</div>
+
+<div class="field">
+  <span class="label">{t("app.density")}</span>
+  <div class="seg" role="group" use:segmented aria-label={t("app.density")}>
+    {#each densities as d (d)}
+      <button aria-pressed={settings.density === d} onclick={() => (settings.density = d)}>{t(`app.density.${d}`)}</button>
+    {/each}
+  </div>
+  <span class="hint">{t("app.densityHint")}</span>
+</div>
+
+<div class="field">
+  <label class="label" for="app-lang">{t("app.language")}</label>
+  <select id="app-lang" class="select lang" value={locale.lang} onchange={(e) => locale.set(e.currentTarget.value === "it" ? "it" : "en")}>
+    {#each LANGS as l (l.id)}<option value={l.id}>{l.name}</option>{/each}
+  </select>
 </div>
 
 <h3>{t("app.fontSize")}</h3>
@@ -62,6 +81,10 @@
   .seg {
     justify-self: start;
   }
+  .lang {
+    justify-self: start;
+    min-width: 200px;
+  }
   .size {
     display: flex;
     align-items: center;
@@ -73,7 +96,7 @@
     accent-color: var(--accent);
   }
   .val {
-    font-size: 12px;
+    font-size: var(--fs-meta);
     color: var(--muted);
     min-width: 40px;
   }
@@ -110,7 +133,7 @@
     box-shadow: 0 0 0 2px var(--accent);
   }
   .prompt {
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
   }
   .swatches {
     display: flex;

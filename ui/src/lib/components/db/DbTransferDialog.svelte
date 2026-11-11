@@ -344,7 +344,7 @@
   }
   h2 {
     margin: 0;
-    font-size: 15px;
+    font-size: var(--fs-title);
     font-weight: 600;
   }
   p {
@@ -362,14 +362,14 @@
     flex: 1;
   }
   .label {
-    font-size: 12px;
+    font-size: var(--fs-meta);
     color: var(--muted);
   }
   .check {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 13px;
+    font-size: var(--fs);
   }
   .check.off {
     opacity: 0.5;
@@ -387,7 +387,7 @@
     background: none;
     color: var(--accent);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     cursor: pointer;
     padding: 0;
   }
@@ -405,7 +405,7 @@
   }
   .faint {
     color: var(--faint);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .file {
     overflow: hidden;
@@ -415,7 +415,7 @@
   }
   .note {
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .preview {
     overflow: auto;
@@ -425,7 +425,7 @@
   }
   table {
     border-collapse: collapse;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     width: 100%;
   }
   th {
@@ -436,7 +436,7 @@
   }
   th .select {
     height: 24px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     min-width: 100px;
   }
   td {
@@ -474,7 +474,7 @@
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     color: var(--muted);
   }
   .ok {
@@ -487,7 +487,7 @@
   .error {
     color: var(--danger);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .errors {
     margin: 0;
@@ -497,7 +497,7 @@
     overflow: auto;
     display: grid;
     gap: 6px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .errors li {
     display: grid;
@@ -509,7 +509,7 @@
     color: var(--faint);
     white-space: pre-wrap;
     word-break: break-all;
-    font-size: 11px;
+    font-size: var(--fs-small);
   }
   .actions {
     display: flex;

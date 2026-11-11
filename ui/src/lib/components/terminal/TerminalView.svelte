@@ -10,6 +10,7 @@
   import Icon from "../icons/Icon.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
   import SessionBar from "./SessionBar.svelte";
+  import { quickActions } from "./sessionActions.svelte";
 
   let { sessionId, focused = false }: { sessionId: string; focused?: boolean } = $props();
 
@@ -51,6 +52,12 @@
     terminals.peek(sessionId)?.term.focus();
   }
 
+  /** The SSH quick actions, after the terminal's own items. */
+  function quickSection(): MenuEntry[] {
+    const q = quickActions(sessionId);
+    return q.length ? ["sep", ...q] : [];
+  }
+
   /** The terminal's own right-click menu (the webview's is turned off app-wide). */
   function openMenu(e: MouseEvent) {
     e.preventDefault();
@@ -66,6 +73,7 @@
         { label: t("edit.selectAll"), action: () => term.selectAll() },
         "sep",
         { label: t("term.clear"), action: () => term.clear() },
+        ...quickSection(),
       ],
     };
   }
@@ -195,10 +203,10 @@
   {#if menu}<ContextMenu {...menu} onclose={closeMenu} />{/if}
   {#if info?.connection_id && settings.sessionBar}<SessionBar {sessionId} />{/if}
   {#if info?.integration === "limited"}
-    <span class="badge pill warn" title={t("term.limitedHint")}>{t("term.limited")}</span>
+    <span class="badge pill warn" class:above-bar={!!info?.connection_id && settings.sessionBar} title={t("term.limitedHint")}>{t("term.limited")}</span>
   {/if}
   {#if info?.state === "disconnected"}
-    <div class="ended" role="status">
+    <div class="ended" class:above-bar={!!info?.connection_id && settings.sessionBar} role="status">
       {#if rc?.running}
         <span class="spin" aria-hidden="true"><Icon name="refresh" size={13} /></span>
         <span class="msg" title={rc.error ?? ""}>
@@ -276,6 +284,13 @@
     bottom: 8px;
     z-index: 20;
     cursor: help;
+  }
+  /* Clear of the server bar under the terminal. */
+  .badge.above-bar {
+    bottom: 32px;
+  }
+  .ended.above-bar {
+    bottom: 42px;
   }
   .ended {
     position: absolute;

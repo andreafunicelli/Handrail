@@ -11,10 +11,13 @@ import type {
   AgentMarkEvent,
   ApprovalDecision,
   ApprovalMode,
+  ApprovalId,
   ApprovalRequest,
   ApprovalSettings,
   Brain,
   Connection,
+  ConnTestResult,
+  ConnTestSecrets,
   DetectedHarness,
   Group,
   HarnessExtensions,
@@ -86,6 +89,8 @@ export interface EventMap {
   /** A proposal ended without the user (agent cancelled or timed out): drop its diff. */
   "edit://resolved": string;
   "approval://requested": ApprovalRequest;
+  /** A request ended without an answer from the user (timed out, run cancelled): denied. */
+  "approval://resolved": ApprovalId;
   /** An agent's SQL waits for the user in a database tab. */
   "db://approval": DbApprovalRequest;
   /** An export or import advanced. */
@@ -114,6 +119,9 @@ export interface Api {
   // connections & groups
   listConnections(): Promise<Connection[]>;
   saveConnection(connection: Connection): Promise<Connection>;
+  /** Log in to `connection` as edited (it need not be saved) and close again; nothing runs on
+   *  the server. Never rejects for a failed login: the result says what happened. */
+  testConnection(connection: Connection, secrets?: ConnTestSecrets): Promise<ConnTestResult>;
   deleteConnection(id: string): Promise<void>;
   listGroups(): Promise<Group[]>;
   saveGroup(group: Group): Promise<Group>;
@@ -153,6 +161,11 @@ export interface Api {
   getApprovalSettings(): Promise<ApprovalSettings>;
   saveApprovalSettings(settings: ApprovalSettings): Promise<void>;
 
+  // generic vault settings (encrypted, synced; one JSON value per key; `sync.*` is refused)
+  /** The value stored under `key`, or null. Fails while the vault is locked. */
+  getSetting(key: string): Promise<unknown>;
+  setSetting(key: string, value: unknown): Promise<void>;
+
   // providers / harnesses / agent
   // files (SFTP on an SSH session's connection)
   /** Start the session's root SFTP server through sudo (see `root` below). Rejects with
@@ -177,6 +190,16 @@ export interface Api {
    * name is taken, unless `overwrite`.
    */
   copyBetween(from: Place, path: string, to: Place, toDir: string, overwrite: boolean, transferId: string): Promise<string>;
+  // "This computer" in the file manager. Paths use slashes (`/C:/Users/me` on Windows, whose
+  // `/` lists the drives).
+  localHome(): Promise<string>;
+  localList(path: string): Promise<FileEntry[]>;
+  localMkdir(path: string): Promise<void>;
+  /** Never replaces: a taken name rejects with `exists`. */
+  localRename(from: string, to: string): Promise<void>;
+  /** A folder goes with everything it holds; a link only removes the link. */
+  localRemove(path: string): Promise<void>;
+  localReadText(path: string): Promise<TextFile>;
 
   // remote desktop
   /**

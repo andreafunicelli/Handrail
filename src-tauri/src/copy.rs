@@ -1,14 +1,15 @@
-//! Copying between the file browsers' remote file systems: server to server over SFTP, an S3
-//! object to a server, and a server's file to S3. The bytes stream through this computer
-//! without touching its disk.
+//! Copying between the file browsers' file systems: server to server over SFTP, an S3 object to
+//! a server, and a server's file to S3 (the bytes stream through this computer without touching
+//! its disk); and files between this computer and a server or S3, or inside this computer.
 
+use crate::local_fs;
 use crate::sftp::{client as sftp, reporter};
 use crate::state::AppState;
 use aht_core::{Error, Result, SessionId};
 use aht_ssh::sftp::{join, temp_sibling, EXISTS};
 use serde::Deserialize;
 use tauri::{AppHandle, State};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// One end of a copy.
 #[derive(Clone, Debug, Deserialize)]
@@ -22,6 +23,8 @@ pub enum Place {
     },
     /// An S3 account; paths are `/bucket/key`.
     S3 { account_id: String },
+    /// This computer, in the page's slash form (see `local_fs`).
+    Local,
 }
 
 /// The last part of `path`: the name the copy gets.
@@ -119,6 +122,95 @@ pub async fn copy_between(
         (Place::S3 { .. }, Place::S3 { .. }) => Err(Error::Invalid(
             "copying between S3 accounts is not supported: download the file and upload it".into(),
         )),
+        // ---- this computer ----
+        (Place::Local, Place::Sftp { session_id, root }) => {
+            let local = local_fs::source_file(&path)?;
+            let dst = sftp(&state, session_id, Some(root)).await?;
+            let dest = join(&to_dir, &name);
+            if !overwrite && dst.exists(&dest).await {
+                return Err(Error::Busy(EXISTS.into()));
+            }
+            // Written beside the destination first: a failed upload never truncates a file
+            // being replaced. A replaced file keeps its permissions (an executable script stays
+            // executable, a private file stays private).
+            let tmp = temp_sibling(&dest);
+            let mode = match overwrite {
+                true => dst.stamp(&dest).await.ok().and_then(|s| s.permissions),
+                false => None,
+            };
+            let mut file = dst.create_mode(&tmp, mode).await?;
+            let mut progress = progress;
+            let copied = async {
+                let io = |e: std::io::Error| Error::Other(format!("{path}: {e}"));
+                let mut src = tokio::fs::File::open(&local).await.map_err(io)?;
+                let total = src.metadata().await.map_err(io)?.len();
+                let mut buf = vec![0u8; 256 * 1024];
+                let mut done = 0u64;
+                progress(0, total);
+                loop {
+                    let n = src.read(&mut buf).await.map_err(io)?;
+                    if n == 0 {
+                        break;
+                    }
+                    file.write_all(&buf[..n])
+                        .await
+                        .map_err(|e| Error::Other(format!("SFTP: {e}")))?;
+                    done += n as u64;
+                    progress(done, total);
+                }
+                file.shutdown()
+                    .await
+                    .map_err(|e| Error::Other(format!("SFTP: {e}")))
+            }
+            .await;
+            if let Err(e) = copied {
+                let _ = dst.remove(&tmp, false).await;
+                return Err(e);
+            }
+            dst.replace_with(&tmp, &dest).await?;
+            Ok(dest)
+        }
+        (Place::Sftp { session_id, root }, Place::Local) => {
+            let (dest, tmp, ui) = local_fs::dest_file(&to_dir, &name, overwrite)?;
+            let src = sftp(&state, session_id, Some(root)).await?;
+            let done = src.download(&path, &tmp, progress).await;
+            local_fs::finish(&tmp, &dest, done)?;
+            Ok(ui)
+        }
+        (Place::Local, Place::S3 { account_id }) => {
+            let local = local_fs::source_file(&path)?;
+            let (bucket, prefix) = crate::s3::in_bucket(&to_dir)?;
+            let prefix = prefix.trim_end_matches('/');
+            let key = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
+            let s3 = crate::s3::client(&state, &account_id).await?;
+            if !overwrite && s3.exists(&bucket, &key).await? {
+                return Err(Error::Busy(EXISTS.into()));
+            }
+            s3.upload(&bucket, &key, &local, progress).await?;
+            Ok(format!("/{bucket}/{key}"))
+        }
+        (Place::S3 { account_id }, Place::Local) => {
+            let (bucket, key) = crate::s3::object(&path)?;
+            let (dest, tmp, ui) = local_fs::dest_file(&to_dir, &name, overwrite)?;
+            let s3 = crate::s3::client(&state, &account_id).await?;
+            let done = s3.download(&bucket, &key, &tmp, progress).await;
+            local_fs::finish(&tmp, &dest, done)?;
+            Ok(ui)
+        }
+        (Place::Local, Place::Local) => {
+            let src = local_fs::source_file(&path)?;
+            let (dest, tmp, ui) = local_fs::dest_file(&to_dir, &name, overwrite)?;
+            if ui == path {
+                return Err(Error::Invalid(format!("{name} is already in {to_dir}")));
+            }
+            let done = local_fs::copy_local(&src, &tmp, progress).await;
+            local_fs::finish(&tmp, &dest, done)?;
+            Ok(ui)
+        }
     }
 }
 

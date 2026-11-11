@@ -317,7 +317,7 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .center {
     margin: auto;
@@ -357,7 +357,7 @@
   }
   header .select {
     height: 24px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     margin-left: 4px;
   }
   .body {
@@ -376,7 +376,7 @@
     margin: 8px;
     width: calc(100% - 16px);
     height: 26px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   ul {
     list-style: none;
@@ -443,7 +443,7 @@
   .filter {
     width: 260px;
     height: 26px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .grid {
     flex: 1;
@@ -467,7 +467,7 @@
     margin: 8px 0 0;
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .mono {
     font-family: var(--font-mono);

@@ -6,14 +6,14 @@
   import type { FileEntry } from "../../api/types";
   import { s3 } from "../../stores/s3.svelte";
   import { sessions } from "../../stores/sessions.svelte";
-  import { errorMessage, toasts } from "../../stores/toasts.svelte";
+  import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
-  import { ui } from "../../stores/ui.svelte";
-  import { alreadyExists, canCopy, s3Backend, sftpBackend, type FileBackend } from "../../util/fileBackends";
+  import { canCopy, localBackend, s3Backend, sftpBackend, type FileBackend } from "../../util/fileBackends";
+  import { copyItems } from "./copyFlow";
 
   /**
-   * Copy `entries` from `fs` into a folder of another file system: an open SSH session's server
-   * (or the same one), or an S3 account. They are copied one after the other.
+   * Copy `entries` from `fs` into a folder of another file system: this computer, an open SSH
+   * session's server (or the same one), or an S3 account. They are copied one after the other.
    */
   let { fs, entries, onclose }: { fs: FileBackend; entries: FileEntry[]; onclose: () => void } = $props();
   const one = $derived(entries.length === 1 ? entries[0] : null);
@@ -23,19 +23,19 @@
     /** `FileBackend.key` of the destination. */
     key: string;
     label: string;
-    kind: "sftp" | "s3";
+    kind: "sftp" | "s3" | "local";
     fs: FileBackend;
   }
 
   /** Where it can go: the browser already open there (its folder, root or not), else a new one. */
   const targets = $derived.by(() => {
     const open = (key: string, make: () => FileBackend) => transfers.locations[key]?.fs ?? make();
-    const out: Target[] = [];
+    const here = (key: string) => (key === fs.key ? ` ${t("files.copySame")}` : "");
+    const out: Target[] = [{ key: "local", kind: "local", label: `${t("files.compare.thisComputer")}${here("local")}`, fs: open("local", localBackend) }];
     for (const i of Object.values(sessions.infos)) {
       if (!i.connection_id || i.state === "disconnected") continue;
       const key = `sftp:${i.session_id}`;
-      const here = key === fs.key ? ` ${t("files.copySame")}` : "";
-      out.push({ key, kind: "sftp", label: `${i.title} — ${i.user ?? ""}@${i.host ?? ""}${here}`, fs: open(key, () => sftpBackend(i.session_id)) });
+      out.push({ key, kind: "sftp", label: `${i.title} — ${i.user ?? ""}@${i.host ?? ""}${here(key)}`, fs: open(key, () => sftpBackend(i.session_id)) });
     }
     for (const a of s3.sorted) {
       const key = `s3:${a.id}`;
@@ -69,38 +69,18 @@
     void pickDir();
   });
 
-  /** S3: "/" is the bucket list, not a folder. */
-  const dirOk = $derived(!!dir.trim() && !(dest?.kind === "s3" && !dir.trim().replace(/^\/+/, "")));
+  /** S3: "/" is the bucket list, not a folder; this computer: "/" is the drive list on Windows. */
+  const dirOk = $derived(!!dir.trim() && !!dest?.fs.writable(dir.trim().replace(/\/+$/, "") || "/"));
 
   async function go(ev: SubmitEvent) {
     ev.preventDefault();
     // Read everything first: closing the dialog drops its props.
     const d = dest;
-    const [src, where, items] = [fs, dir.trim(), entries.map((e) => ({ path: e.path, name: e.name, kind: e.kind }))];
+    const [src, where, items] = [fs, dir.trim(), entries.map((e) => ({ ...e }))];
     if (!d || !dirOk) return;
     onclose();
-    let copied = 0;
-    let last = "";
-    for (const item of items) {
-      const run = (overwrite: boolean) => transfers.copy(src, item.path, d.fs, where, overwrite);
-      try {
-        try {
-          last = await run(false);
-        } catch (e) {
-          if (!alreadyExists(e)) throw e;
-          const ok = await ui.ask(t("files.copyExists", { name: item.name }), {
-            body: t(item.kind === "dir" ? "files.copyMerge" : "files.copyReplace"),
-            confirmLabel: t("files.copyOverwrite"),
-            danger: true,
-          });
-          if (!ok) continue;
-          last = await run(true);
-        }
-        copied++;
-      } catch (e) {
-        toasts.error(items.length > 1 ? `${item.name}: ${errorMessage(e)}` : e);
-      }
-    }
+    // A taken name opens the comparison (see `copyItems`).
+    const { copied, last } = await copyItems(src, items, d.fs, where);
     if (copied === 1 && items.length === 1) toasts.success(t("files.copied", { path: last, where: d.label }));
     else if (copied) toasts.success(t("files.copiedMany", { n: copied, where: d.label }));
   }
@@ -141,7 +121,7 @@
   }
   .dialog h2 {
     margin: 0;
-    font-size: 15px;
+    font-size: var(--fs-title);
     font-weight: 600;
     overflow-wrap: anywhere;
   }

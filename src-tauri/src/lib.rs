@@ -1,9 +1,11 @@
 mod autosync;
 mod cmd_misc;
 mod cmd_vault;
+mod conn_test;
 mod copy;
 mod db;
 mod db_backup;
+mod local_fs;
 mod nightly;
 mod rdp;
 mod s3;
@@ -183,6 +185,13 @@ pub fn run() {
             sftp::sftp_download,
             sftp::sftp_upload,
             copy::copy_between,
+            local_fs::local_home,
+            local_fs::local_list,
+            local_fs::local_mkdir,
+            local_fs::local_rename,
+            local_fs::local_remove,
+            local_fs::local_read_text,
+            conn_test::connection_test,
             rdp::rdp_open,
             rdp::rdp_input,
             rdp::rdp_resize,

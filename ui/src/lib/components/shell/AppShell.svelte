@@ -313,7 +313,7 @@
   }
   .dialog h2 {
     margin: 0 0 12px;
-    font-size: 15px;
+    font-size: var(--fs-title);
     font-weight: 600;
   }
   .dialog p {
