@@ -318,7 +318,7 @@ export interface EditProposal {
 }
 export type EditOutcome = "saved" | "rejected" | "failed";
 /** One end of a copy between file browsers. */
-export type Place = { kind: "sftp"; session_id: string; root: boolean } | { kind: "s3"; account_id: string };
+export type Place = { kind: "sftp"; session_id: string; root: boolean } | { kind: "s3"; account_id: string } | { kind: "local" };
 
 export interface TransferProgress {
   transfer_id: string;

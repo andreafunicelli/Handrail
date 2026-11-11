@@ -278,7 +278,7 @@ impl Stamp {
         }
     }
 
-    fn of(s: FileStamp, contents: &[u8]) -> Self {
+    pub(crate) fn of(s: FileStamp, contents: &[u8]) -> Self {
         Stamp {
             size: s.size,
             modified: s.modified,

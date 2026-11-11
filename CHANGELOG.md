@@ -111,11 +111,14 @@ The first release of the 1.1 series. Later fixes are released as 1.1.x.
 - Account management from the server panel.
 
 ### File management
-- **Dual-pane file manager**: a second pane on any connected SSH server or S3 account.
-  - Copy between the panes with F5, where supported.
+- **Dual-pane file manager**: a second pane on **this computer**, any connected SSH server, or
+  an S3 account.
+  - Copy between the panes with F5, where supported: files both ways between this computer and
+    a server or S3; files and folders between servers.
   - Move within one file system with F6.
   - Switch panes with Tab.
-  - Local files still go through Upload and Download; there is no local pane.
+  - On this computer: browse, create folders, rename and delete (after a confirmation). Windows
+    drives are listed at the top level.
 - **Transfer panel** on the icon rail: uploads, downloads and copies, with progress, completion
   and errors. A failed transfer is never shown as done.
 - **Compare before overwrite** for copies and uploads:
@@ -151,6 +154,8 @@ The first release of the 1.1 series. Later fixes are released as 1.1.x.
 - The activity timeline is built from tool and approval events, not from every streamed token.
 
 ### Fixes
+- In the dual-pane file manager, selecting a row no longer makes the toolbar taller, which
+  moved the rows so that a double-click opened the row above.
 - A restored workspace no longer opens a local shell in place of a deleted connection.
 - Approval requests withdrawn by the backend no longer stay "pending" in the sidebar.
 - Uploads over an existing file now ask first, with a comparison. They used to replace it

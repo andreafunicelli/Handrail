@@ -13,6 +13,7 @@ export type { Transfer } from "../util/transfers";
 /** A file system's name for people: the session's title and user@host, or the S3 account. */
 export function placeLabel(fs: FileBackend): string {
   if (fs.place.kind === "s3") return `${s3.byId(fs.place.account_id)?.name ?? "S3"} (S3)`;
+  if (fs.place.kind === "local") return t("files.compare.thisComputer");
   const i = sessions.infos[fs.place.session_id];
   const who = i ? `${i.user ?? ""}@${i.host ?? ""}` : "SFTP";
   return `${i?.title && i.title !== i.host ? `${i.title} · ` : ""}${who}${fs.root ? " (root)" : ""}`;

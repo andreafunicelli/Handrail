@@ -67,6 +67,12 @@ export function createTauriApi(): Api {
     sftpDownload: (session_id, path, transfer_id, root = false) => invoke("sftp_download", { session_id, path, transfer_id, root }),
     sftpUpload: (session_id, local_path, dir, transfer_id, root = false) => invoke("sftp_upload", { session_id, local_path, dir, transfer_id, root }),
     copyBetween: (from, path, to, to_dir, overwrite, transfer_id) => invoke("copy_between", { from, path, to, to_dir, overwrite, transfer_id }),
+    localHome: () => invoke("local_home"),
+    localList: (path) => invoke("local_list", { path }),
+    localMkdir: (path) => invoke("local_mkdir", { path }),
+    localRename: (from, to) => invoke("local_rename", { from, to }),
+    localRemove: (path) => invoke("local_remove", { path }),
+    localReadText: (path) => invoke("local_read_text", { path }),
     rdpOpen: (connection_id, size, onMessage) => {
       const on_event = new Channel<ArrayBuffer>(onMessage);
       return invoke("rdp_open", { connection_id, size, on_event });

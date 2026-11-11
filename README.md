@@ -111,7 +111,7 @@ Import connections from `~/.ssh/config`, PuTTY, MobaXterm, mRemoteNG, WinSCP, Se
 - **Agent-assisted edits:** ask about a file or selection, then accept or reject the proposed diff.
 - **S3-compatible storage:** work with Amazon S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO, and compatible services from the file browser.
 - **Search and select files:** in SFTP and S3 browsers, filter a folder or search its subfolders by name or pattern (`*.log`), and select many files (Ctrl/Cmd-click, Shift-click, Ctrl+A) to download, copy or delete them together.
-- **Dual pane:** open a second pane on another connected server or S3 account. **F5** copies between the panes, **F6** moves within one file system, **Tab** switches pane. Local files go through Upload and Download.
+- **Dual pane:** open a second pane on this computer, another connected server, or an S3 account. **F5** copies between the panes (files both ways between this computer and a server or S3; folders between servers), **F6** moves within one file system, **Tab** switches pane.
 - **Compare before overwrite:** a copy or upload onto an existing file shows both files' size, time and permissions, and a line diff for text files up to 256 KB.
 - **Transfer panel:** uploads, downloads and copies with their progress and errors, from the icon rail.
 - **Copy between destinations:** stream files and folders between servers, or files between a server and S3, without first saving a local copy. Server-to-server transfers preserve permissions; replacements require confirmation.

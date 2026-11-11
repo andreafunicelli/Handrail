@@ -1435,7 +1435,7 @@ export const it: Partial<Record<MessageKey, string>> = {
   "ops.more": "Mostra altre {n}",
   // v1.1 files
   "files.dual.toggle": "Due pannelli",
-  "files.dual.on": "Mostra un secondo pannello, per copiare tra due server o S3",
+  "files.dual.on": "Mostra un secondo pannello, per copiare tra questo computer, i server e S3",
   "files.dual.off": "Chiudi il secondo pannello",
   "files.dual.toolbar": "Tra i due pannelli",
   "files.dual.otherPane": "Altro pannello",
@@ -1447,7 +1447,8 @@ export const it: Partial<Record<MessageKey, string>> = {
   "files.dual.moveTip": "Sposta la selezione nella cartella dell'altro pannello (F6)",
   "files.dual.keys": "Tab: altro pannello · F5: copia",
   "files.dual.keysMove": "Tab: altro pannello · F5: copia · F6: sposta",
-  "files.dual.noLocal": "Entrambi i pannelli sono remoti (SSH o S3): i file di questo computer passano da Carica e Scarica.",
+  "files.dual.localNote": "Questo computer: i file si copiano in entrambe le direzioni con F5 e vengono confrontati prima di sostituire qualcosa. Le cartelle si copiano solo tra server.",
+  "files.dual.noFolderLocal": "Tra questo computer e un server o S3 si possono copiare solo file, non cartelle.",
   "files.dual.pickToCopy": "Prima seleziona file o cartelle nel pannello attivo.",
   "files.dual.noS3ToS3": "Da S3 a S3 non è supportato: scarica il file e caricalo, oppure copialo passando da un server.",
   "files.dual.noFolderS3": "Tra un server e S3 si possono copiare solo file, non cartelle.",

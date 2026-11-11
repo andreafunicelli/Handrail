@@ -92,7 +92,7 @@ BE = new backend; X = cross-cutting.
 - [x] FE — Dual-pane file manager: a second pane on any connected SSH session or S3 account;
   copy between panes (F5) where `copyBetween` supports it (S3 → S3 and folders to/from S3 are
   explained, not offered); move (F6) only inside one file system (a rename); Tab switches pane.
-  No local pane (no backend local file access): Upload/Download, and the bar says so. Large
+  This computer is a pane too (`local_fs.rs`, below). Large
   folders render rows in steps of 300 (5000 rows: ~1.2 s → ~0.12 s to first paint, mock).
 - [x] FE — Global transfer panel on the icon rail: running badge; source, destination, bytes,
   percent, done/failed with the error; in memory only; no cancel (the backend cannot stop one).
@@ -122,5 +122,9 @@ BE = new backend; X = cross-cutting.
   connection, agent, decision, outcome, exit code, duration) and the command with known secret
   patterns redacted; never terminal output. Retention and clearing are configurable; a locked
   vault cannot be read.
-- **No local filesystem pane**: the backend has no local file access API; the dual pane offers
-  SSH and S3 destinations only, and says so.
+- **This computer as a pane** (added after testing the first nightly): `src-tauri/src/local_fs.rs`
+  lists, creates, renames (never over an existing name) and deletes local files, and reads text
+  for the comparison. Paths cross to the page in slash form (`/C:/Users/me` on Windows, whose `/`
+  lists the drives); `..` is refused. `copy_between` copies files between this computer and a
+  server or S3 through a temporary file renamed over the destination. Folders to or from this
+  computer are not copied yet. The local pane has no editor and no Upload/Download.

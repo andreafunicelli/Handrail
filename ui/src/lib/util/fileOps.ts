@@ -1,13 +1,14 @@
 /**
  * What can go between two file systems, for the dual-pane file manager and the copy dialog.
  * Copies use `api.copyBetween` (see `src-tauri/src/copy.rs`): server to server (files and
- * folders), S3 to a server and a server to S3 (files only); never S3 to S3. A move is only a
- * rename inside one file system: there is no backend move between hosts.
+ * folders); S3 to a server, a server to S3, and this computer to or from a server or S3 (files
+ * only); never S3 to S3. A move is only a rename inside one file system: there is no backend
+ * move between hosts.
  */
 import type { FileEntry } from "../api/types";
 import { parentDir } from "./files";
 
-type Kind = "sftp" | "s3";
+type Kind = "sftp" | "s3" | "local";
 interface Side {
   key: string;
   kind: Kind;
@@ -16,7 +17,7 @@ interface Side {
 }
 
 /** Why a copy is not offered. */
-export type CopyBlock = "none" | "s3ToS3" | "folderS3" | "notWritable" | "intoItself";
+export type CopyBlock = "none" | "s3ToS3" | "folderS3" | "folderLocal" | "notWritable" | "intoItself";
 /** Why a move is not offered. */
 export type MoveBlock = "none" | "otherPlace" | "otherBucket" | "s3Folder" | "notWritable" | "sameFolder" | "intoItself";
 
@@ -31,7 +32,7 @@ export function copyKindOk(from: Kind, to: Kind, entryKind: FileEntry["kind"]): 
 export function copyBlock(from: Side, entries: FileEntry[], to: Side, dir: string): CopyBlock | null {
   if (!entries.length) return "none";
   if (from.kind === "s3" && to.kind === "s3") return "s3ToS3";
-  if (!entries.every((e) => copyKindOk(from.kind, to.kind, e.kind))) return "folderS3";
+  if (!entries.every((e) => copyKindOk(from.kind, to.kind, e.kind))) return from.kind === "local" || to.kind === "local" ? "folderLocal" : "folderS3";
   if (!to.writable(dir)) return "notWritable";
   if (from.key === to.key && intoItself(entries, dir)) return "intoItself";
   return null;

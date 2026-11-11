@@ -189,6 +189,16 @@ export interface Api {
    * name is taken, unless `overwrite`.
    */
   copyBetween(from: Place, path: string, to: Place, toDir: string, overwrite: boolean, transferId: string): Promise<string>;
+  // "This computer" in the file manager. Paths use slashes (`/C:/Users/me` on Windows, whose
+  // `/` lists the drives).
+  localHome(): Promise<string>;
+  localList(path: string): Promise<FileEntry[]>;
+  localMkdir(path: string): Promise<void>;
+  /** Never replaces: a taken name rejects with `exists`. */
+  localRename(from: string, to: string): Promise<void>;
+  /** A folder goes with everything it holds; a link only removes the link. */
+  localRemove(path: string): Promise<void>;
+  localReadText(path: string): Promise<TextFile>;
 
   // remote desktop
   /**

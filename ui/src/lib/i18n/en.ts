@@ -1430,7 +1430,7 @@ export const en = {
   "ops.more": "Show {n} more",
   // v1.1 files
   "files.dual.toggle": "Two panes",
-  "files.dual.on": "Show a second pane, to copy between two servers or S3",
+  "files.dual.on": "Show a second pane, to copy between this computer, servers and S3",
   "files.dual.off": "Close the second pane",
   "files.dual.toolbar": "Between the two panes",
   "files.dual.otherPane": "Other pane",
@@ -1442,7 +1442,8 @@ export const en = {
   "files.dual.moveTip": "Move the selection into the other pane's folder (F6)",
   "files.dual.keys": "Tab: other pane · F5: copy",
   "files.dual.keysMove": "Tab: other pane · F5: copy · F6: move",
-  "files.dual.noLocal": "Both panes are remote (SSH or S3): files on this computer go through Upload and Download.",
+  "files.dual.localNote": "This computer: files copy both ways with F5 and are compared before anything is replaced. Folders are copied between servers only.",
+  "files.dual.noFolderLocal": "Between this computer and a server or S3 only files can be copied, not folders.",
   "files.dual.pickToCopy": "Select files or folders in the active pane first.",
   "files.dual.noS3ToS3": "S3 to S3 is not supported: download the file and upload it, or copy through a server.",
   "files.dual.noFolderS3": "Between a server and S3 only files can be copied, not folders.",

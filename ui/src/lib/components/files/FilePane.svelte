@@ -54,6 +54,8 @@
   /** The same file system as root, while the root toggle is on. */
   let rootFs = $state<FileBackend | null>(null);
   const fs = $derived(rootFs ?? base);
+  /** This computer: its files leave by copying to the other pane, not Upload/Download. */
+  const local = $derived(fs.kind === "local");
   // A reconnect hands over a new session: its root server has to be started again.
   $effect(() => {
     void base.key;
@@ -255,7 +257,7 @@
   function open(e: FileEntry) {
     if (e.kind === "dir") void go(e.path);
     else if (editable(fs, e)) void edit(e);
-    else void download(e);
+    else if (!local) void download(e);
   }
 
   /** Open a text file in the editor (as root while the browser is). */
@@ -379,7 +381,7 @@
       y: ev.clientY,
       items: [
         ...newItems(path, writable),
-        { label: t("files.upload"), icon: "upload", disabled: !writable, action: upload },
+        ...(local ? [] : [{ label: t("files.upload"), icon: "upload" as const, disabled: !writable, action: upload }]),
         "sep",
         { label: t("files.refresh"), icon: "refresh", action: refresh },
         { label: t("files.copyPath"), icon: "copy", disabled: !path, action: () => void copyPath(path) },
@@ -401,7 +403,7 @@
         x: ev.clientX,
         y: ev.clientY,
         items: [
-          { label: t("files.downloadN", { n: files }), icon: "download", disabled: !files, action: () => downloadMany(many) },
+          ...(local ? [] : [{ label: t("files.downloadN", { n: files }), icon: "download" as const, disabled: !files, action: () => downloadMany(many) }]),
           { label: t("files.copyN", { n: many.length }), icon: "server", disabled: !copyAll(many), action: () => (copying = many) },
           { label: t("files.copyPaths"), icon: "copy", action: () => void copyPath(many.map((x) => x.path).join("\n")) },
           "sep",
@@ -415,8 +417,8 @@
       x: ev.clientX,
       y: ev.clientY,
       items: [
-        ...(isFile && fs.readText ? [{ label: t(fs.writeText ? "files.edit" : "files.view"), icon: (fs.writeText ? "edit" : "file") as "edit" | "file", action: () => edit(e) }] : []),
-        isFile ? { label: t("files.download"), icon: "download", action: () => download(e) } : { label: t("files.open"), icon: "folder", action: () => go(e.path) },
+        ...(isFile && fs.readText && !local ? [{ label: t(fs.writeText ? "files.edit" : "files.view"), icon: (fs.writeText ? "edit" : "file") as "edit" | "file", action: () => edit(e) }] : []),
+        ...(isFile ? (local ? [] : [{ label: t("files.download"), icon: "download" as const, action: () => download(e) }]) : [{ label: t("files.open"), icon: "folder" as const, action: () => go(e.path) }]),
         { label: t("files.copyPath"), icon: "copy", action: () => void copyPath(e.path) },
         // Folders only go server to server; files also between a server and S3.
         ...(fs.kind === "sftp" || isFile ? [{ label: t("files.copyToServer"), icon: "server" as const, action: () => (copying = [e]) }] : []),
@@ -487,7 +489,9 @@
       <button class="icon-btn" title={t("files.newFile")} aria-label={t("files.newFile")} disabled={!writable} onclick={() => (naming = { mode: "touch", value: "" })}><Icon name="filePlus" size={14} /></button>
     {/if}
     <button class="icon-btn" title={t("files.newFolder")} aria-label={t("files.newFolder")} disabled={!writable} onclick={() => (naming = { mode: "mkdir", value: "" })}><Icon name="folderPlus" size={14} /></button>
-    <button class="btn sm" disabled={!writable} aria-label={t("files.upload")} onclick={upload}><Icon name="upload" size={13} /><span class="lbl">{t("files.upload")}</span></button>
+    {#if !local}
+      <button class="btn sm" disabled={!writable} aria-label={t("files.upload")} onclick={upload}><Icon name="upload" size={13} /><span class="lbl">{t("files.upload")}</span></button>
+    {/if}
     <button class="btn sm" disabled={!copyable} aria-label={t("files.copyButton")} title={copyable ? t("files.copyToServer") : t("files.copyPick")} onclick={() => (copying = copyable)}><Icon name="send" size={13} /><span class="lbl">{t("files.copyButton")}</span></button>
     {#if ondualtoggle}
       <button class="icon-btn" class:on={dual} aria-pressed={dual} title={t(dual ? "files.dual.off" : "files.dual.on")} aria-label={t("files.dual.toggle")} onclick={ondualtoggle}><Icon name="splitRight" size={14} /></button>
@@ -564,7 +568,7 @@
   {#if picked.length > 1}
     <div class="selbar">
       <span class="count">{t("files.selected", { n: picked.length })}</span>
-      <button class="btn sm ghost" disabled={!picked.some((e) => e.kind === "file")} onclick={() => downloadMany(picked)} aria-label={t("files.download")} title={t("files.download")}><Icon name="download" size={13} /><span class="lbl">{t("files.download")}</span></button>
+      <button class="btn sm ghost" hidden={local} disabled={!picked.some((e) => e.kind === "file")} onclick={() => downloadMany(picked)} aria-label={t("files.download")} title={t("files.download")}><Icon name="download" size={13} /><span class="lbl">{t("files.download")}</span></button>
       <button class="btn sm ghost danger" disabled={!picked.every((e) => fs.writable(parentDir(e.path)))} onclick={() => remove(picked)} aria-label={t("common.delete")} title={t("common.delete")}><Icon name="trash" size={13} /><span class="lbl">{t("common.delete")}</span></button>
       <span class="grow"></span>
       <button class="icon-btn" onclick={() => (sel = [])} aria-label={t("files.clearSelection")} title={t("files.clearSelection")}><Icon name="x" size={13} /></button>

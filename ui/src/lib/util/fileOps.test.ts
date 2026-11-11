@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FileEntry } from "../api/types";
 import { copyBlock, copyKindOk, moveBlock, PREVIEW_MAX, previewBlock } from "./fileOps";
-import { canCopy, looksBinary, s3Backend, sftpBackend } from "./fileBackends";
+import { canCopy, editable, localBackend, looksBinary, s3Backend, sftpBackend } from "./fileBackends";
 
 const file = (path: string, size = 10): FileEntry => ({ name: path.split("/").pop()!, path, kind: "file", link: false, size, modified: 1, permissions: 0o100644 });
 const dir = (path: string): FileEntry => ({ ...file(path), kind: "dir", size: 0 });
@@ -10,6 +10,7 @@ const a = sftpBackend("a");
 const b = sftpBackend("b");
 const s = s3Backend("s");
 const s2 = s3Backend("s2");
+const pc = localBackend();
 
 describe("copy capability matrix", () => {
   it.each([
@@ -21,6 +22,14 @@ describe("copy capability matrix", () => {
     ["s3", "sftp", "dir", false],
     ["s3", "s3", "file", false],
     ["s3", "s3", "dir", false],
+    ["local", "sftp", "file", true],
+    ["local", "sftp", "dir", false],
+    ["sftp", "local", "file", true],
+    ["sftp", "local", "dir", false],
+    ["local", "s3", "file", true],
+    ["s3", "local", "file", true],
+    ["local", "local", "file", true],
+    ["local", "local", "dir", false],
   ] as const)("%s → %s, %s: %s", (from, to, kind, ok) => {
     expect(copyKindOk(from, to, kind)).toBe(ok);
   });
@@ -48,6 +57,23 @@ describe("copyBlock", () => {
     expect(copyBlock(s, [file("/bk/x")], a, "/tmp")).toBeNull();
     // Into another folder of the same server.
     expect(copyBlock(a, [dir("/srv/app")], a, "/srv/backup")).toBeNull();
+  });
+
+  it("copies files between this computer and a server or S3, not folders", () => {
+    expect(copyBlock(pc, [file("/Users/me/a.txt")], a, "/tmp")).toBeNull();
+    expect(copyBlock(a, [file("/etc/hosts")], pc, "/Users/me")).toBeNull();
+    expect(copyBlock(s, [file("/bk/x")], pc, "/C:/Users/me")).toBeNull();
+    expect(copyBlock(pc, [dir("/Users/me/Documents")], a, "/tmp")).toBe("folderLocal");
+    expect(copyBlock(a, [dir("/srv/app")], pc, "/Users/me")).toBe("folderLocal");
+    // The drive list on Windows (and "/" elsewhere) takes no files.
+    expect(copyBlock(a, [file("/etc/hosts")], pc, "/")).toBe("notWritable");
+  });
+
+  it("moves inside this computer, and never opens a local file in the editor", () => {
+    expect(moveBlock(pc, [file("/Users/me/a.txt")], pc, "/Users/me/Documents")).toBeNull();
+    expect(moveBlock(pc, [file("/Users/me/a.txt")], a, "/tmp")).toBe("otherPlace");
+    expect(editable(pc, file("/Users/me/a.txt"))).toBe(false);
+    expect(editable(a, file("/etc/hosts"))).toBe(true);
   });
 });
 

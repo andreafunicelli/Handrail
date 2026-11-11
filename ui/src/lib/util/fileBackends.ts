@@ -5,11 +5,11 @@ import { copyKindOk } from "./fileOps";
 /** A real folder, not a link to one (deleting a link removes only the link). */
 export const isFolder = (e: FileEntry) => e.kind === "dir" && !e.link;
 
-/** What the file browser needs from a remote file system (SFTP on a session, or S3). */
+/** What the file browser needs from a file system (SFTP on a session, S3, or this computer). */
 export interface FileBackend {
   /** Identifies the browser's transfers. */
   key: string;
-  kind: "sftp" | "s3";
+  kind: "sftp" | "s3" | "local";
   home(): Promise<string>;
   list(path: string): Promise<FileEntry[]>;
   mkdir(path: string): Promise<void>;
@@ -105,6 +105,31 @@ export function s3Backend(accountId: string): FileBackend {
   };
 }
 
+/**
+ * This computer, as the second pane of the file manager. Its files reach a server or S3 by
+ * copying between the panes, so it has no Upload/Download of its own; and it has no editor
+ * (`readText` is for the comparison before a copy replaces a file).
+ */
+export function localBackend(): FileBackend {
+  const none = () => Promise.reject(new Error("copy between the panes instead"));
+  return {
+    key: "local",
+    kind: "local",
+    home: () => api.localHome(),
+    list: (p) => api.localList(p),
+    readText: (p) => api.localReadText(p),
+    mkdir: (p) => api.localMkdir(p),
+    rename: (e, to) => api.localRename(e.path, to),
+    remove: (e) => api.localRemove(e.path),
+    download: none,
+    upload: none,
+    // "/" is the drive list on Windows, and not a place for files elsewhere.
+    writable: (dir) => dir !== "/",
+    canRename: () => true,
+    place: { kind: "local" },
+  };
+}
+
 /** The error a copy rejects with when its destination name is taken. */
 export const alreadyExists = (e: unknown) => !!e && typeof e === "object" && (e as { message?: unknown }).message === "exists";
 
@@ -120,5 +145,5 @@ export const looksBinary = (name: string) => BINARY.test(name);
 
 /** Whether double-clicking `e` should open the editor. */
 export function editable(fs: FileBackend, e: FileEntry): boolean {
-  return !!fs.readText && e.kind === "file" && e.size <= 5 * 1024 * 1024 && !BINARY.test(e.name);
+  return fs.kind !== "local" && !!fs.readText && e.kind === "file" && e.size <= 5 * 1024 * 1024 && !BINARY.test(e.name);
 }

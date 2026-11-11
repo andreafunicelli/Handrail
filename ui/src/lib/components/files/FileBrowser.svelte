@@ -11,15 +11,14 @@
   import { sessions } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { placeLabel } from "../../stores/transfers.svelte";
-  import { s3Backend, sftpBackend, type FileBackend } from "../../util/fileBackends";
+  import { localBackend, s3Backend, sftpBackend, type FileBackend } from "../../util/fileBackends";
   import { copyBlock, moveBlock, type CopyBlock, type MoveBlock } from "../../util/fileOps";
   import { joinPath } from "../../util/files";
 
   /**
    * The file browser of one remote file system, optionally with a second pane next to it on
-   * another (or the same) SSH session or S3 account: copy and move between the two. There is
-   * no local pane: the backend has no local file access, so local files go through Upload and
-   * Download.
+   * this computer, another (or the same) SSH session, or an S3 account: copy and move between
+   * the two.
    */
   let { fs, label }: { fs: FileBackend; label: string } = $props();
 
@@ -35,9 +34,9 @@
     make: () => FileBackend;
   }
 
-  /** Where the second pane can be: every connected SSH session and every S3 account. */
+  /** Where the second pane can be: this computer, every connected SSH session, every S3 account. */
   const targets = $derived.by(() => {
-    const out: Target[] = [];
+    const out: Target[] = [{ key: "local", label: t("files.compare.thisComputer"), make: localBackend }];
     for (const i of Object.values(sessions.infos)) {
       if (!i.connection_id || i.state === "disconnected") continue;
       const key = `sftp:${i.session_id}`;
@@ -60,7 +59,8 @@
   function toggleDual() {
     dual = !dual;
     activeSide = 0;
-    if (dual && !targets.some((x) => x.key === otherKey)) otherKey = (targets.find((x) => x.key !== fs.key) ?? targets[0])?.key ?? "";
+    // This computer first: copying to and from it is what the second pane is mostly for.
+    if (dual && !targets.some((x) => x.key === otherKey)) otherKey = targets[0]?.key ?? "";
   }
 
   onMount(() => {
@@ -80,6 +80,7 @@
     none: "files.dual.pickToCopy",
     s3ToS3: "files.dual.noS3ToS3",
     folderS3: "files.dual.noFolderS3",
+    folderLocal: "files.dual.noFolderLocal",
     notWritable: "files.dual.notWritable",
     intoItself: "files.dual.intoItself",
   };
@@ -180,12 +181,12 @@
           <Icon name="send" size={13} /><span>{count ? t("files.dual.moveN", { n: count }) : t("files.dual.move")}</span>{@render dirArrow()}
         </button>
       {/if}
-      {#if why}<span class="why">{why}</span>{/if}
+      {#if why}<span class="why" title={why}>{why}</span>{/if}
       <span class="grow"></span>
       <span class="keys">{t(samePlace ? "files.dual.keysMove" : "files.dual.keys")}</span>
-      <button class="icon-btn" title={t("files.dual.off")} aria-label={t("files.dual.off")} onclick={toggleDual}><Icon name="x" size={13} /></button>
+      <button class="icon-btn close" title={t("files.dual.off")} aria-label={t("files.dual.off")} onclick={toggleDual}><Icon name="x" size={13} /></button>
     </div>
-    <p class="local"><Icon name="info" size={12} />{t("files.dual.noLocal")}</p>
+    {#if other?.fs.kind === "local"}<p class="local"><Icon name="info" size={12} />{t("files.dual.localNote")}</p>{/if}
   {/if}
   <div class="panes" class:dual>
     <FilePane {fs} {label} handle={panes[0]} {dual} active={dual && activeSide === 0} onactivate={() => (activeSide = 0)} ondualtoggle={toggleDual} />
@@ -217,10 +218,13 @@
     min-width: 0;
     background: var(--bg);
   }
+  /* One line whatever is selected: a bar that grew when a row was picked moved the rows under
+     the pointer, so a double-click opened the row above. */
   .dualbar {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow: hidden;
     gap: var(--sp-2);
     padding: 6px 8px;
     border-bottom: 1px solid var(--border);
@@ -230,17 +234,23 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    min-width: 0;
+    flex: 0 1 auto;
+    min-width: 80px;
   }
   .dest .lbl {
     color: var(--muted);
     white-space: nowrap;
   }
   .dest select {
+    min-width: 0;
     max-width: 260px;
     height: var(--ctl-h-sm);
   }
+  .dualbar > :global(.btn) {
+    flex: none;
+  }
   .why {
+    flex: 1 1 0;
     color: var(--warn);
     min-width: 0;
     overflow: hidden;
@@ -249,6 +259,9 @@
   }
   .grow {
     flex: 1;
+  }
+  .close {
+    flex: none;
   }
   .keys {
     color: var(--faint);

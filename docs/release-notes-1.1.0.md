@@ -15,8 +15,8 @@ agent is doing, and what a file operation is about to replace. The complete list
   and quick actions.
 - **AI sidebar**: Summary, Activity and Chat views; approvals that stay visible in every view; an
   encrypted operations history in Settings › Approvals.
-- **Files**: dual pane (F5 copy, F6 move, Tab to switch), a transfer panel, and a comparison
-  before an existing file is replaced.
+- **Files**: dual pane, with this computer as one side (F5 copy, F6 move, Tab to switch), a
+  transfer panel, and a comparison before an existing file is replaced.
 - **Connection editor** in sections, with **Test connection** before saving.
 - **Databases**: focus mode, a resizable editor, export and import, and an SQL backup viewer.
 - **Interface density** (Comfortable, Compact) and an **Italian** translation.
@@ -34,8 +34,8 @@ agent is doing, and what a file operation is about to replace. The complete list
 
 ## Known limitations
 
-- **No local file pane.** The second pane can be another server or S3 account; local files still
-  go through Upload and Download.
+- **Folders between this computer and a server or S3** are not copied yet: copy the files, or
+  copy folders between servers.
 - **Transfers cannot be cancelled** from the transfer panel.
 - **S3 to S3 copies, and folders to or from S3**, are not offered between panes; the reason is
   shown.
