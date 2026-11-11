@@ -1403,8 +1403,9 @@ export function createMockApi(): Api {
       await sleep(120);
       return mockBackupIndex(kind);
     },
-    async dbBackupRows(token, table, from, limit, filter) {
-      await sleep(50);
+    async dbBackupRows(token, table, from, limit, filter, column) {
+      // A filter reads the backup: slower, as in the app.
+      await sleep(filter ? 700 : 50);
       const t = MOCK_BACKUP[table];
       if (!t) throw fail("not_found", "table of the backup");
       const f = filter?.toLowerCase() ?? "";
@@ -1413,7 +1414,9 @@ export function createMockApi(): Api {
       let next: number | null = null;
       for (let pos = from; pos < t.rows; pos++) {
         const r = t.row(pos);
-        if (f && !r.some((v) => v?.toLowerCase().includes(f))) continue;
+        const ci = column ? t.columns.indexOf(column) : -1;
+        const cells = column ? (ci >= 0 ? [r[ci]] : []) : r;
+        if (f && !cells.some((v) => v?.toLowerCase().includes(f))) continue;
         if (rows.length === limit) {
           next = pos;
           break;
@@ -1423,7 +1426,7 @@ export function createMockApi(): Api {
       }
       return { columns: t.columns, rows, positions, next };
     },
-    async dbBackupExport(token, table, format, filter, transfer_id) {
+    async dbBackupExport(token, table, format, filter, _column, transfer_id) {
       const t = MOCK_BACKUP[table];
       await sleep(200);
       emit("db://transfer", { transfer_id, progress: { table: null, tables_done: 0, tables: 0, rows: t.rows, statements: 0, bytes: 0, errors: 0 } });

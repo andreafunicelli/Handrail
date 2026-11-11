@@ -1239,12 +1239,25 @@ fn each_row(
     Ok(())
 }
 
-fn matches(row: &[Value], filter: &str) -> bool {
-    row.iter().any(|v| match v {
+fn cell_matches(v: &Value, filter: &str) -> bool {
+    match v {
         Value::Text(s) => s.to_lowercase().contains(filter),
         Value::Bytes { hex } => hex.contains(filter),
         Value::Null => false,
-    })
+    }
+}
+
+/// Whether a row holds `filter` (lower case): in the cell of `column` (by name, as the row's
+/// statement names its columns), or in any cell.
+fn matches(row: &[Value], names: &[String], filter: &str, column: Option<&str>) -> bool {
+    match column {
+        Some(c) => names
+            .iter()
+            .position(|n| n == c)
+            .and_then(|i| row.get(i))
+            .is_some_and(|v| cell_matches(v, filter)),
+        None => row.iter().any(|v| cell_matches(v, filter)),
+    }
 }
 
 /// A page of a table's rows.
@@ -1259,7 +1272,8 @@ pub struct BackupPage {
 }
 
 /// Up to `limit` rows from position `from` (with `filter`: only rows holding that text, any
-/// case, and `next` is where the scan stopped).
+/// case, in `column` or any column; `next` is where the scan stopped).
+#[allow(clippy::too_many_arguments)]
 pub fn rows(
     src: &mut dyn Source,
     ix: &BackupIndex,
@@ -1267,6 +1281,7 @@ pub fn rows(
     from: u64,
     limit: usize,
     filter: Option<&str>,
+    column: Option<&str>,
     cancel: &AtomicBool,
 ) -> Result<BackupPage> {
     let filter = filter.map(str::to_lowercase).filter(|f| !f.is_empty());
@@ -1280,7 +1295,10 @@ pub fn rows(
     let mut last = from;
     each_row(src, ix, table, from, cancel, &mut |pos, names, v| {
         last = pos + 1;
-        if filter.as_deref().is_some_and(|f| !matches(&v, f)) {
+        if filter
+            .as_deref()
+            .is_some_and(|f| !matches(&v, names, f, column))
+        {
             return true;
         }
         if page.rows.len() == limit {
@@ -1406,14 +1424,15 @@ fn put_statement(out: &mut dyn Write, s: &str) -> io::Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Save a table (all of it, or the rows holding `filter`) as CSV, JSON or SQL. Returns the
-/// rows written.
+/// Save a table (all of it, or the rows holding `filter`, in `column` or any column) as CSV,
+/// JSON or SQL. Returns the rows written.
 pub fn export(
     src: &mut dyn Source,
     ix: &BackupIndex,
     table: usize,
     format: Format,
     filter: Option<&str>,
+    column: Option<&str>,
     out: &mut dyn Write,
     report: &mut dyn FnMut(u64),
     cancel: &AtomicBool,
@@ -1436,7 +1455,10 @@ pub fn export(
                 out.write_all(b"[")?;
             }
             each_row(src, ix, table, 0, cancel, &mut |_, names, v| {
-                if filter.as_deref().is_some_and(|f| !matches(&v, f)) {
+                if filter
+                    .as_deref()
+                    .is_some_and(|f| !matches(&v, names, f, column))
+                {
                     return true;
                 }
                 let line = match format {
@@ -1589,7 +1611,10 @@ pub fn export(
             } else {
                 let mut ins: Option<(Vec<String>, dump::Inserts)> = None;
                 each_row(src, ix, table, 0, cancel, &mut |_, names, v| {
-                    if filter.as_deref().is_some_and(|f| !matches(&v, f)) {
+                    if filter
+                        .as_deref()
+                        .is_some_and(|f| !matches(&v, names, f, column))
+                    {
                         return true;
                     }
                     if ins.as_ref().is_none_or(|(n, _)| n.as_slice() != names) {
@@ -1687,6 +1712,61 @@ UNLOCK TABLES;\n\
 /*!50001 CREATE ALGORITHM=UNDEFINED */\n/*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER */\n/*!50001 VIEW `v_names` AS select `customers`.`name` AS `name` from `customers` */;\n";
 
     #[test]
+    fn filters_in_one_column_or_any() {
+        let dump = b"-- MySQL dump 10.13\n\
+CREATE TABLE `orders` (\n  `id` int NOT NULL,\n  `created` date DEFAULT NULL,\n  `total` decimal(10,2) DEFAULT NULL\n) ENGINE=InnoDB;\n\
+INSERT INTO `orders` VALUES (1,'2025-12-30',12.50),(2,'2026-01-05',20.00),(3,'2024-02-01',2026.00);\n\
+INSERT INTO `orders` (`total`, `id`, `created`) VALUES (5.00,4,'2026-03-01');\n";
+        let (mut src, ix) = build(dump, Some(DbKind::Mysql));
+        let stop = AtomicBool::new(false);
+        let ids = |p: BackupPage| {
+            texts(&p)
+                .into_iter()
+                .map(|r| r[0].clone())
+                .collect::<Vec<_>>()
+        };
+        // Any column: the total 2026.00 matches too.
+        let any = rows(&mut src, &ix, 0, 0, 10, Some("2026"), None, &stop).unwrap();
+        assert_eq!(texts(&any).len(), 3);
+        // Only `created`, also when a statement names its columns in another order.
+        let p = rows(
+            &mut src,
+            &ix,
+            0,
+            0,
+            10,
+            Some("2026"),
+            Some("created"),
+            &stop,
+        )
+        .unwrap();
+        assert_eq!(
+            texts(&p).iter().map(|r| r.join("|")).collect::<Vec<_>>(),
+            vec!["2|2026-01-05|20.00", "5.00|4|2026-03-01"]
+        );
+        let p = rows(&mut src, &ix, 0, 0, 10, Some("2026"), Some("total"), &stop).unwrap();
+        assert_eq!(ids(p), vec!["3"]);
+        // A column the table does not have matches nothing.
+        let p = rows(&mut src, &ix, 0, 0, 10, Some("2026"), Some("nope"), &stop).unwrap();
+        assert!(p.rows.is_empty());
+        // The save keeps the same rows.
+        let mut out = Vec::new();
+        let n = export(
+            &mut src,
+            &ix,
+            0,
+            Format::Csv,
+            Some("2026"),
+            Some("created"),
+            &mut out,
+            &mut |_| {},
+            &stop,
+        )
+        .unwrap();
+        assert_eq!(n, 2);
+    }
+
+    #[test]
     fn indexes_and_reads_a_mysqldump() {
         assert_eq!(detect(MYSQLDUMP), DbKind::Mysql);
         let (mut src, ix) = build(MYSQLDUMP, None);
@@ -1714,7 +1794,7 @@ UNLOCK TABLES;\n\
         );
         assert_eq!(ix.preamble.len(), 2);
         let stop = AtomicBool::new(false);
-        let p = rows(&mut src, &ix, 0, 0, 10, None, &stop).unwrap();
+        let p = rows(&mut src, &ix, 0, 0, 10, None, None, &stop).unwrap();
         assert_eq!(p.columns, vec!["id", "name", "photo"]);
         assert_eq!(
             texts(&p),
@@ -1726,10 +1806,10 @@ UNLOCK TABLES;\n\
             ]
         );
         // Pages and filters.
-        let p = rows(&mut src, &ix, 0, 1, 2, None, &stop).unwrap();
+        let p = rows(&mut src, &ix, 0, 1, 2, None, None, &stop).unwrap();
         assert_eq!(p.positions, vec![1, 2]);
         assert_eq!(p.next, Some(3));
-        let p = rows(&mut src, &ix, 0, 0, 1, Some("BREAK"), &stop).unwrap();
+        let p = rows(&mut src, &ix, 0, 0, 1, Some("BREAK"), None, &stop).unwrap();
         assert_eq!((p.positions.clone(), p.next), (vec![3], None));
         // A table saved as SQL: the file's statements; as CSV and JSON.
         let mut out = Vec::new();
@@ -1738,6 +1818,7 @@ UNLOCK TABLES;\n\
             &ix,
             0,
             Format::Sql,
+            None,
             None,
             &mut out,
             &mut |_| {},
@@ -1763,6 +1844,7 @@ UNLOCK TABLES;\n\
             0,
             Format::Csv,
             Some("semi"),
+            None,
             &mut out,
             &mut |_| {},
             &stop,
@@ -1779,6 +1861,7 @@ UNLOCK TABLES;\n\
             0,
             Format::Json,
             Some("ada"),
+            None,
             &mut out,
             &mut |_| {},
             &stop,
@@ -1795,6 +1878,7 @@ UNLOCK TABLES;\n\
             0,
             Format::Sql,
             Some("semi"),
+            None,
             &mut out,
             &mut |_| {},
             &stop,
@@ -1835,7 +1919,7 @@ CREATE INDEX ix_note ON public.orders USING btree (note);\n\
         assert_eq!(t.columns, vec!["id", "note", "Total"]);
         assert_eq!(t.chunks.len(), 2);
         let stop = AtomicBool::new(false);
-        let p = rows(&mut src, &ix, 0, 0, 10, None, &stop).unwrap();
+        let p = rows(&mut src, &ix, 0, 0, 10, None, None, &stop).unwrap();
         assert_eq!(
             texts(&p),
             vec![
@@ -1846,7 +1930,7 @@ CREATE INDEX ix_note ON public.orders USING btree (note);\n\
                 vec!["5", "plain \\ backslash", "NULL"],
             ]
         );
-        let p = rows(&mut src, &ix, 0, 2, 2, None, &stop).unwrap();
+        let p = rows(&mut src, &ix, 0, 2, 2, None, None, &stop).unwrap();
         assert_eq!((p.positions.clone(), p.next), (vec![2, 3], Some(4)));
         let mut out = Vec::new();
         let n = export(
@@ -1854,6 +1938,7 @@ CREATE INDEX ix_note ON public.orders USING btree (note);\n\
             &ix,
             0,
             Format::Sql,
+            None,
             None,
             &mut out,
             &mut |_| {},
@@ -1892,6 +1977,7 @@ CREATE INDEX ix_note ON public.orders USING btree (note);\n\
             0,
             Format::Sql,
             Some("colon"),
+            None,
             &mut out,
             &mut |_| {},
             &stop,
@@ -1945,7 +2031,7 @@ INSERT INTO \"s\".\"t\" (\"id\") VALUES\n('1'),\n('2');\n";
         let (mut src, ix) = build(ours, None);
         assert_eq!(ix.kind, DbKind::Postgres);
         let stop = AtomicBool::new(false);
-        let p = rows(&mut src, &ix, 0, 0, 10, None, &stop).unwrap();
+        let p = rows(&mut src, &ix, 0, 0, 10, None, None, &stop).unwrap();
         assert_eq!(p.columns, vec!["id"]);
         assert_eq!(texts(&p), vec![vec!["1"], vec!["2"]]);
         // Columns named in another order land under the right header; a column left out is
@@ -1959,6 +2045,7 @@ INSERT INTO \"s\".\"t\" (\"id\") VALUES\n('1'),\n('2');\n";
             &ix,
             0,
             Format::Csv,
+            None,
             None,
             &mut out,
             &mut |_| {},

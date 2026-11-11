@@ -261,9 +261,10 @@ export interface Api {
   /** Read an open backup again as the other dialect. */
   dbBackupReindex(token: string, kind: "mysql" | "postgres", transferId: string): Promise<DbBackupIndex>;
   /** A page of a backup table's rows, from position `from` (only rows holding `filter`). */
-  dbBackupRows(token: string, table: number, from: number, limit: number, filter: string | null): Promise<DbBackupPage>;
+  /** `column`: only that column holds the filter text (null: any column). */
+  dbBackupRows(token: string, table: number, from: number, limit: number, filter: string | null, column?: string | null): Promise<DbBackupPage>;
   /** Save a backup table to a file picked in a save dialog (null: cancelled). */
-  dbBackupExport(token: string, table: number, format: DbBackupFormat, filter: string | null, transferId: string): Promise<{ path: string; rows: number } | null>;
+  dbBackupExport(token: string, table: number, format: DbBackupFormat, filter: string | null, column: string | null, transferId: string): Promise<{ path: string; rows: number } | null>;
   /** Forget an open backup. */
   dbBackupClose(token: string): Promise<void>;
   /** Stop the statement running in a tab. */

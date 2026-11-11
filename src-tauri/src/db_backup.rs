@@ -200,7 +200,7 @@ pub async fn db_backup_reindex(
     Ok(index)
 }
 
-/// A page of a table's rows (with `filter`: only rows holding that text).
+/// A page of a table's rows (with `filter`: only rows holding that text, in `column` or any).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn db_backup_rows(
     state: State<'_, AppState>,
@@ -209,6 +209,7 @@ pub async fn db_backup_rows(
     from: u64,
     limit: Option<usize>,
     filter: Option<String>,
+    column: Option<String>,
 ) -> Result<BackupPage> {
     let b = backup(&state, &token)?;
     let limit = limit.unwrap_or(500).clamp(1, 10_000);
@@ -225,6 +226,7 @@ pub async fn db_backup_rows(
             from,
             limit,
             filter.as_deref(),
+            column.as_deref(),
             &stop,
         )
     })
@@ -237,9 +239,10 @@ pub struct BackupSaved {
     pub rows: u64,
 }
 
-/// Save a table of the backup (all its rows, or the ones holding `filter`) as CSV, JSON or
-/// SQL, to a file picked in a save dialog; `None` when the dialog is cancelled. A stopped or
-/// failed save leaves no file.
+/// Save a table of the backup (all its rows, or the ones holding `filter`, in `column` or any)
+/// as CSV, JSON or SQL, to a file picked in a save dialog; `None` when the dialog is cancelled.
+/// A stopped or failed save leaves no file.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(rename_all = "snake_case")]
 pub async fn db_backup_export(
     app: AppHandle,
@@ -248,6 +251,7 @@ pub async fn db_backup_export(
     table: usize,
     format: Format,
     filter: Option<String>,
+    column: Option<String>,
     transfer_id: String,
 ) -> Result<Option<BackupSaved>> {
     use tauri_plugin_dialog::DialogExt;
@@ -323,6 +327,7 @@ pub async fn db_backup_export(
             table,
             format,
             filter.as_deref(),
+            column.as_deref(),
             &mut out,
             &mut |rows| {
                 report(&Progress {

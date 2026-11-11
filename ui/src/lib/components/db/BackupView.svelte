@@ -28,6 +28,9 @@
   let nameFilter = $state("");
   let filter = $state("");
   let applied = $state("");
+  /** The column the filter looks in ("" = every column), as typed and as applied. */
+  let filterColumn = $state("");
+  let appliedColumn = $state("");
   let page = $state<DbBackupPage | null>(null);
   /** Where each page shown so far started (Back pops). */
   let starts = $state<number[]>([0]);
@@ -108,6 +111,8 @@
     selected = i;
     filter = "";
     applied = "";
+    filterColumn = "";
+    appliedColumn = "";
     starts = [0];
     page = null;
     pageError = null;
@@ -122,7 +127,7 @@
     loading = true;
     pageError = null;
     try {
-      const p = await api.dbBackupRows(token, at, starts[starts.length - 1], PAGE, applied || null);
+      const p = await api.dbBackupRows(token, at, starts[starts.length - 1], PAGE, applied || null, (applied && appliedColumn) || null);
       if (n !== requests || at !== selected) return;
       page = p;
     } catch (e) {
@@ -137,6 +142,7 @@
   function applyFilter(e: Event) {
     e.preventDefault();
     applied = filter.trim();
+    appliedColumn = filterColumn;
     starts = [0];
     void load();
   }
@@ -158,7 +164,7 @@
     saving = { format, rows: 0 };
     await listen();
     try {
-      const r = await api.dbBackupExport(token, selected, format, applied || null, newTransfer());
+      const r = await api.dbBackupExport(token, selected, format, applied || null, (applied && appliedColumn) || null, newTransfer());
       if (r) toasts.success(t("backup.saved", { n: r.rows.toLocaleString(), path: r.path }));
     } catch (e) {
       toasts.error(e);
@@ -255,11 +261,20 @@
           </div>
           {#if view === "data"}
             <form class="bar" onsubmit={applyFilter}>
+              {#if table.columns.length}
+                <select class="select sm col" bind:value={filterColumn} aria-label={t("backup.filterColumn")} title={t("backup.filterColumn")}>
+                  <option value="">{t("backup.anyColumn")}</option>
+                  {#each table.columns as c (c)}<option value={c}>{c}</option>{/each}
+                </select>
+              {/if}
               <input class="input filter" bind:value={filter} placeholder={t("backup.filter")} aria-label={t("backup.filter")} spellcheck="false" />
               <button class="btn sm" type="submit">{t("backup.apply")}</button>
-              {#if applied}<button class="btn sm ghost" type="button" onclick={() => ((filter = ""), applyFilter(new Event("submit")))}>{t("backup.clear")}</button>{/if}
+              {#if applied}<button class="btn sm ghost" type="button" onclick={() => ((filter = ""), (filterColumn = ""), applyFilter(new Event("submit")))}>{t("backup.clear")}</button>{/if}
               <span class="spacer"></span>
-              {#if page}
+              {#if loading && applied}
+                <!-- A filter reads the backup from the start: say so, the rows below are the old ones. -->
+                <span class="faint" role="status">{t("backup.searching", { text: applied })}</span>
+              {:else if page}
                 <span class="faint">
                   {#if !page.rows.length}
                     {t("backup.none")}
@@ -276,7 +291,7 @@
             {#if pageError}
               <p class="error" role="alert">{pageError}</p>
             {:else if result}
-              <div class="grid"><DbGrid {result} firstRow={applied ? 0 : shownFrom} /></div>
+              <div class="grid" class:busy={loading} aria-busy={loading}><DbGrid {result} firstRow={applied ? 0 : shownFrom} /></div>
             {:else}
               <p class="faint pad">{t("db.loading")}</p>
             {/if}
@@ -433,6 +448,15 @@
   .grid {
     flex: 1;
     min-height: 0;
+  }
+  .grid.busy {
+    opacity: 0.45;
+    pointer-events: none;
+  }
+  .col {
+    max-width: 160px;
+    height: 26px;
+    font-size: var(--fs-meta);
   }
   .structure {
     overflow: auto;
