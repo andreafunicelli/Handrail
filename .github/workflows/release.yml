@@ -29,12 +29,6 @@ name: Release
 #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 #       Updater signing key (`npx tauri signer generate`). With it, the release also carries
 #       latest.json and .sig files, which installed apps use to update themselves.
-#   RELEASES_TOKEN
-#       Transition only. Releases used to go to andreafunicelli/handrail-releases, and apps
-#       installed from there still look for updates there. While this secret exists (a token
-#       with "Contents: read and write" on that repository), each release's latest.json is
-#       copied there too; it points at the installers in this repository, so those apps
-#       update to a version that looks here. Delete the secret once they have updated.
 
 on:
   push:
@@ -254,9 +248,6 @@ jobs:
             target/release/bundle/deb/*.deb
             target/release/bundle/rpm/*.rpm
 
-  # Transition: apps installed from andreafunicelli/handrail-releases look for updates there.
-  # Copy this release's latest.json (which links to the installers here) so they update to a
-  # version that looks in this repository. Off once the RELEASES_TOKEN secret is deleted.
   promote:
     name: Make the release the latest
     needs: [version, build]
@@ -270,27 +261,6 @@ jobs:
     steps:
       - name: Mark the release latest
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --latest
-
-  bridge:
-    name: Point old installs here
-    needs: [version, promote]
-    if: ${{ !cancelled() && needs.promote.result == 'success' }}
-    runs-on: ubuntu-latest
-    env:
-      TAG: v${{ needs.version.outputs.version }}
-      BRIDGE_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-    steps:
-      - name: Copy latest.json to handrail-releases
-        if: env.BRIDGE_TOKEN != ''
-        run: |
-          if ! GH_TOKEN="${{ github.token }}" gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json; then
-            echo "No latest.json in $TAG (no updater signing key): nothing to point old installs to."
-            exit 0
-          fi
-          GH_TOKEN="$BRIDGE_TOKEN" gh release create "$TAG" latest.json \
-            --repo andreafunicelli/handrail-releases --target main \
-            --title "Handrail ${TAG#v}" \
-            --notes "Handrail releases have moved to https://github.com/$GITHUB_REPOSITORY/releases. This entry only lets older installs update."
 
   # Nightly installs look for updates in the rolling prerelease `nightly-latest`: give it this
   # nightly's latest.json (which links to this nightly's installers).
