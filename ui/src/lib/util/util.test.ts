@@ -157,6 +157,18 @@ describe("folder tree", () => {
     expect(stepTarget(gs, "k", 1)).toBeUndefined();
     expect(stepTarget(gs, "missing", 1)).toBeUndefined();
   });
+  it("steps folders with the same order as the tree shows them", () => {
+    // Equal orders happen: deleting a folder does not renumber its siblings.
+    const gs = [
+      { id: "s10", name: "Server 10", parent_id: null, order: 0 },
+      { id: "s2", name: "Server 2", parent_id: null, order: 0 },
+    ];
+    expect(buildTree(gs, []).folders.map((f) => f.group.id)).toEqual(["s2", "s10"]);
+    expect(stepTarget(gs, "s2", -1)).toBeUndefined();
+    expect(stepTarget(gs, "s2", 1)).toBeNull();
+    expect(stepTarget(gs, "s10", -1)).toBe("s2");
+    expect(stepTarget(gs, "s10", 1)).toBeUndefined();
+  });
 });
 
 describe("password strength", () => {

@@ -8,6 +8,12 @@ export interface FolderNode {
   count: number;
 }
 
+const byName = (a: Group, b: Group) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+
+/** The order folders are shown in: their `order`, then by name ("Server 2" before
+ *  "Server 10"). Everything that places folders uses it, so positions mean what is shown. */
+export const compareGroups = (a: Group, b: Group) => a.order - b.order || byName(a, b);
+
 /** Build the nested folder tree. `order` maps connection id → manual sort position. */
 export function buildTree(
   groups: Group[],
@@ -31,7 +37,7 @@ export function buildTree(
   const build = (parent: string | null): FolderNode[] =>
     (byParent.get(parent) ?? [])
       .filter((g) => !seen.has(g.id) && seen.add(g.id))
-      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
+      .sort(compareGroups)
       .map((group) => {
         const folders = build(group.id);
         const connections = sortC(conns.get(group.id) ?? []);
@@ -65,8 +71,6 @@ export function isDescendant(groups: Group[], candidate: string, ancestor: strin
   return false;
 }
 
-const byName = (a: Group, b: Group) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
-
 /** The `order` every folder takes when all folders, at every level, are sorted by name
  *  ("Server 2" before "Server 10"). Only folders whose position changes are returned. */
 export function alphabeticalGroupOrder(groups: Group[]): { id: string; order: number }[] {
@@ -90,7 +94,7 @@ export function alphabeticalGroupOrder(groups: Group[]): { id: string; order: nu
 export function stepTarget(groups: Group[], id: string, delta: -1 | 1): string | null | undefined {
   const g = groups.find((x) => x.id === id);
   if (!g) return undefined;
-  const siblings = groups.filter((x) => x.parent_id === g.parent_id).sort((a, b) => a.order - b.order || byName(a, b));
+  const siblings = groups.filter((x) => x.parent_id === g.parent_id).sort(compareGroups);
   const i = siblings.findIndex((x) => x.id === id);
   if (delta < 0) return i > 0 ? siblings[i - 1].id : undefined;
   if (i < 0 || i >= siblings.length - 1) return undefined;

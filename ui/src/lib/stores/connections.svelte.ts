@@ -2,7 +2,7 @@ import { api } from "../api";
 import type { Connection, Group } from "../api/types";
 import { uuid } from "../util/id";
 import { load, save } from "../util/storage";
-import { alphabeticalGroupOrder, buildTree, isDescendant, stepTarget } from "../util/tree";
+import { alphabeticalGroupOrder, buildTree, compareGroups, isDescendant, stepTarget } from "../util/tree";
 import type { QuickTarget } from "../util/quickconnect";
 
 /** A database connection is listed under Databases; every other one under Servers. */
@@ -129,10 +129,8 @@ class Connections {
     if (parentId && isDescendant(this.groups, parentId, id)) return;
     const g = this.groups.find((x) => x.id === id);
     if (!g) return;
-    // Same order as the tree (ties by name), so "before" means what the user sees.
-    const siblings = this.groups
-      .filter((x) => x.parent_id === parentId && x.id !== id)
-      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    // Same order as the tree, so "before" means what the user sees.
+    const siblings = this.groups.filter((x) => x.parent_id === parentId && x.id !== id).sort(compareGroups);
     const idx = beforeId ? siblings.findIndex((s) => s.id === beforeId) : -1;
     siblings.splice(idx < 0 ? siblings.length : idx, 0, g);
     for (const [i, s] of siblings.entries()) {
