@@ -456,7 +456,7 @@
   .col {
     max-width: 160px;
     height: 26px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .structure {
     overflow: auto;
