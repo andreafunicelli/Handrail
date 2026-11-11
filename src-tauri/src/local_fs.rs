@@ -287,12 +287,13 @@ pub(crate) fn dest_file(
 /// Move the finished temporary file over the destination (replacing it), or remove it on error.
 /// A replaced file keeps its permissions.
 pub(crate) fn finish(tmp: &Path, dest: &Path, done: Result<u64>) -> Result<()> {
-    let done = done.map(|n| {
-        if let Ok(m) = std::fs::metadata(dest) {
-            let _ = std::fs::set_permissions(tmp, m.permissions());
-        }
-        n
-    });
+    let replaced = match done {
+        Ok(_) => std::fs::metadata(dest).ok(),
+        Err(_) => None,
+    };
+    if let Some(m) = replaced {
+        let _ = std::fs::set_permissions(tmp, m.permissions());
+    }
     match done.and_then(|_| {
         std::fs::rename(tmp, dest).map_err(|e| Error::Other(format!("{}: {e}", dest.display())))
     }) {
