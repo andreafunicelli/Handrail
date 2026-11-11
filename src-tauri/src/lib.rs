@@ -5,11 +5,8 @@ mod conn_test;
 mod copy;
 mod db;
 mod db_backup;
-<<<<<<< HEAD
 mod local_fs;
-=======
 mod nightly;
->>>>>>> origin/main
 mod rdp;
 mod s3;
 mod sftp;
