@@ -8,12 +8,12 @@
   import { sessions } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { transfers } from "../../stores/transfers.svelte";
-  import { canCopy, s3Backend, sftpBackend, type FileBackend } from "../../util/fileBackends";
+  import { canCopy, localBackend, s3Backend, sftpBackend, type FileBackend } from "../../util/fileBackends";
   import { copyItems } from "./copyFlow";
 
   /**
-   * Copy `entries` from `fs` into a folder of another file system: an open SSH session's server
-   * (or the same one), or an S3 account. They are copied one after the other.
+   * Copy `entries` from `fs` into a folder of another file system: this computer, an open SSH
+   * session's server (or the same one), or an S3 account. They are copied one after the other.
    */
   let { fs, entries, onclose }: { fs: FileBackend; entries: FileEntry[]; onclose: () => void } = $props();
   const one = $derived(entries.length === 1 ? entries[0] : null);
@@ -23,19 +23,19 @@
     /** `FileBackend.key` of the destination. */
     key: string;
     label: string;
-    kind: "sftp" | "s3";
+    kind: "sftp" | "s3" | "local";
     fs: FileBackend;
   }
 
   /** Where it can go: the browser already open there (its folder, root or not), else a new one. */
   const targets = $derived.by(() => {
     const open = (key: string, make: () => FileBackend) => transfers.locations[key]?.fs ?? make();
-    const out: Target[] = [];
+    const here = (key: string) => (key === fs.key ? ` ${t("files.copySame")}` : "");
+    const out: Target[] = [{ key: "local", kind: "local", label: `${t("files.compare.thisComputer")}${here("local")}`, fs: open("local", localBackend) }];
     for (const i of Object.values(sessions.infos)) {
       if (!i.connection_id || i.state === "disconnected") continue;
       const key = `sftp:${i.session_id}`;
-      const here = key === fs.key ? ` ${t("files.copySame")}` : "";
-      out.push({ key, kind: "sftp", label: `${i.title} — ${i.user ?? ""}@${i.host ?? ""}${here}`, fs: open(key, () => sftpBackend(i.session_id)) });
+      out.push({ key, kind: "sftp", label: `${i.title} — ${i.user ?? ""}@${i.host ?? ""}${here(key)}`, fs: open(key, () => sftpBackend(i.session_id)) });
     }
     for (const a of s3.sorted) {
       const key = `s3:${a.id}`;
@@ -69,8 +69,8 @@
     void pickDir();
   });
 
-  /** S3: "/" is the bucket list, not a folder. */
-  const dirOk = $derived(!!dir.trim() && !(dest?.kind === "s3" && !dir.trim().replace(/^\/+/, "")));
+  /** S3: "/" is the bucket list, not a folder; this computer: "/" is the drive list on Windows. */
+  const dirOk = $derived(!!dir.trim() && !!dest?.fs.writable(dir.trim().replace(/\/+$/, "") || "/"));
 
   async function go(ev: SubmitEvent) {
     ev.preventDefault();
