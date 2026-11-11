@@ -20,6 +20,11 @@ name: Release
 #     nightly replaces. Stable installs never see prereleases (releases/latest skips them).
 # Manual runs publish only from main (stable) or nightly; from other refs they only build.
 #
+# A stable release becomes the one installed apps update to ("latest") only once every build
+# has uploaded its installers: `prepare` creates it as not-latest, the builds fill it, `promote`
+# marks it latest. Until then apps keep seeing the previous, complete release (an app asking
+# while a build was still running used to find a latest.json without its platform).
+#
 # Optional secrets (the workflow still produces installers without them):
 #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 #       Updater signing key (`npx tauri signer generate`). With it, the release also carries
@@ -105,8 +110,32 @@ jobs:
           echo "channel=${channel}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
-  build:
+  # Stable only: the release exists before the builds upload to it, and is not "latest" yet.
+  prepare:
+    name: Create the release (not latest yet)
     needs: version
+    if: needs.version.outputs.channel == 'stable'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.version.outputs.tag }}
+      VERSION: ${{ needs.version.outputs.version }}
+      NOTES: ${{ needs.version.outputs.notes }}
+    steps:
+      - name: Create the release
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$TAG exists (a re-run): the builds upload to it."
+            exit 0
+          fi
+          printf '%s\n' "$NOTES" > notes.md
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Handrail $VERSION" --notes-file notes.md --latest=false
+
+  build:
+    needs: [version, prepare]
+    # `prepare` is skipped for pull requests and nightlies.
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.prepare.result != 'failure' }}
     name: Build (${{ matrix.name }})
     strategy:
       fail-fast: false
@@ -228,10 +257,24 @@ jobs:
   # Transition: apps installed from andreafunicelli/handrail-releases look for updates there.
   # Copy this release's latest.json (which links to the installers here) so they update to a
   # version that looks in this repository. Off once the RELEASES_TOKEN secret is deleted.
+  promote:
+    name: Make the release the latest
+    needs: [version, build]
+    # Explicit results: a skipped job further up (`prepare` on nightlies) would otherwise skip
+    # every job below it, even after the builds succeeded.
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.version.outputs.channel == 'stable' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - name: Mark the release latest
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --latest
+
   bridge:
     name: Point old installs here
-    needs: [version, build]
-    if: needs.version.outputs.channel == 'stable'
+    needs: [version, promote]
+    if: ${{ !cancelled() && needs.promote.result == 'success' }}
     runs-on: ubuntu-latest
     env:
       TAG: v${{ needs.version.outputs.version }}
@@ -254,7 +297,7 @@ jobs:
   nightly-pointer:
     name: Point nightly installs here
     needs: [version, build]
-    if: needs.version.outputs.channel == 'nightly'
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.version.outputs.channel == 'nightly' }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
