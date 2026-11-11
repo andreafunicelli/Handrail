@@ -119,6 +119,7 @@ The first release of the 1.1 series. Later fixes are released as 1.1.x.
   - Switch panes with Tab.
   - On this computer: browse, create folders, rename and delete (after a confirmation). Windows
     drives are listed at the top level.
+- **Copy to…** offers this computer as well as servers and S3 accounts.
 - **Transfer panel** on the icon rail: uploads, downloads and copies, with progress, completion
   and errors. A failed transfer is never shown as done.
 - **Compare before overwrite** for copies and uploads:
