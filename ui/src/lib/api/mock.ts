@@ -771,6 +771,19 @@ export function createMockApi(): Api {
     async restartApp() {
       location.reload();
     },
+    async nightlyBuild() {
+      await sleep(300);
+      // `?nonightly` in the URL simulates no published nightly.
+      if (typeof location !== "undefined" && new URLSearchParams(location.search).has("nonightly")) return null;
+      const tag = "nightly-1.1.0-212";
+      const base = "https://github.com/andreafunicelli/Handrail/releases";
+      return {
+        version: "1.1.0-212",
+        page_url: `${base}/tag/${tag}`,
+        published_at: new Date(Date.now() - 3 * 3600_000).toISOString(),
+        download: { name: "Handrail.Nightly_1.1.0-212_universal.dmg", url: `${base}/download/${tag}/Handrail.Nightly_1.1.0-212_universal.dmg`, size: 48_000_000 },
+      };
+    },
     async openUrl(url) {
       if (!/^https:\/\//.test(url)) throw new Error("only https links can be opened");
       if (typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");

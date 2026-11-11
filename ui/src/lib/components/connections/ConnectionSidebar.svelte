@@ -10,7 +10,7 @@
   import { ui } from "../../stores/ui.svelte";
   import { fuzzyFilter } from "../../util/fuzzy";
   import { parseQuickConnect } from "../../util/quickconnect";
-  import { buildTree, groupPath, type FolderNode } from "../../util/tree";
+  import { buildTree, groupPath, stepTarget, type FolderNode } from "../../util/tree";
   import type { Connection, S3Account, SessionState } from "../../api/types";
   import { blankS3Account, s3 } from "../../stores/s3.svelte";
   import { s3Where } from "../../util/s3";
@@ -250,6 +250,20 @@
         { label: t("ctx.rename"), icon: "edit", action: () => ((renaming = f.group.id), (renameValue = f.group.name)) },
         "sep",
         {
+          label: t("ctx.moveUp"),
+          icon: "arrowUp",
+          disabled: stepTarget(connections.groups, f.group.id, -1) === undefined,
+          action: () => connections.stepGroup(f.group.id, -1).catch(toasts.error),
+        },
+        {
+          label: t("ctx.moveDown"),
+          icon: "arrowDown",
+          disabled: stepTarget(connections.groups, f.group.id, 1) === undefined,
+          action: () => connections.stepGroup(f.group.id, 1).catch(toasts.error),
+        },
+        { label: t("ctx.sortFolders"), icon: "sort", action: sortFolders },
+        "sep",
+        {
           label: t("ctx.delete"),
           icon: "trash",
           danger: true,
@@ -258,6 +272,24 @@
             await connections.removeGroup(f.group.id).catch(toasts.error);
           },
         },
+      ],
+    };
+  }
+
+  async function sortFolders() {
+    await connections.sortGroupsByName().catch(toasts.error);
+  }
+
+  /** The empty part of the tree: new folder, sort folders. */
+  function treeMenu(e: MouseEvent) {
+    if (e.target !== e.currentTarget) return;
+    e.preventDefault();
+    menu = {
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { label: t("sidebar.newFolder"), icon: "folderPlus", action: () => startFolder(null) },
+        { label: t("ctx.sortFolders"), icon: "sort", disabled: connections.groups.length < 2, action: sortFolders },
       ],
     };
   }
@@ -299,6 +331,24 @@
     e.preventDefault();
     e.stopPropagation();
     dropTarget = key;
+  }
+  /** A folder dragged onto the top edge of another folder goes before it (same parent);
+   *  anywhere else on the row, inside it. */
+  function overFolder(e: DragEvent, id: string) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const before = (e.dataTransfer?.types ?? []).includes(DT_GROUP) && e.clientY < r.top + r.height * 0.35;
+    over(e, (before ? "gb:" : "g:") + id);
+  }
+  async function dropFolderRow(e: DragEvent, f: FolderNode) {
+    if (dropTarget === "gb:" + f.group.id) {
+      e.preventDefault();
+      e.stopPropagation();
+      dropTarget = null;
+      const g = e.dataTransfer?.getData(DT_GROUP);
+      if (g && g !== f.group.id) await connections.moveGroup(g, f.group.parent_id, f.group.id).catch(toasts.error);
+      return;
+    }
+    await dropOnFolder(e, f.group.id);
   }
   async function dropOnFolder(e: DragEvent, groupId: string | null) {
     e.preventDefault();
@@ -429,6 +479,7 @@
     <div
       class="folder"
       class:drop={dropTarget === "g:" + f.group.id}
+      class:before={dropTarget === "gb:" + f.group.id}
       role="treeitem"
       aria-expanded={open}
       aria-selected="false"
@@ -445,9 +496,9 @@
       }}
       oncontextmenu={(e) => folderMenu(e, f)}
       ondragstart={(e) => dragStart(e, "g", f.group.id)}
-      ondragover={(e) => over(e, "g:" + f.group.id)}
-      ondragleave={() => dropTarget === "g:" + f.group.id && (dropTarget = null)}
-      ondrop={(e) => dropOnFolder(e, f.group.id)}
+      ondragover={(e) => overFolder(e, f.group.id)}
+      ondragleave={() => dropTarget?.endsWith(":" + f.group.id) && (dropTarget = null)}
+      ondrop={(e) => dropFolderRow(e, f)}
     >
       <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
       {#if renaming === f.group.id}
@@ -582,6 +633,7 @@
     ondragover={(e) => over(e, "root")}
     ondragleave={(e) => e.target === e.currentTarget && (dropTarget = null)}
     ondrop={(e) => dropOnFolder(e, null)}
+    oncontextmenu={treeMenu}
   >
     {#if results}
       {#each results as c (c.id)}{@render row(c, 0, true)}{/each}
@@ -845,6 +897,9 @@
     background: var(--danger-soft);
     border-color: var(--danger);
     color: var(--danger);
+  }
+  .folder.before {
+    box-shadow: inset 0 2px 0 var(--accent);
   }
   .folder.drop,
   .row.drop {

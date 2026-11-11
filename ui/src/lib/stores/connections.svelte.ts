@@ -2,7 +2,7 @@ import { api } from "../api";
 import type { Connection, Group } from "../api/types";
 import { uuid } from "../util/id";
 import { load, save } from "../util/storage";
-import { buildTree, isDescendant } from "../util/tree";
+import { alphabeticalGroupOrder, buildTree, compareGroups, isDescendant, stepTarget } from "../util/tree";
 import type { QuickTarget } from "../util/quickconnect";
 
 /** A database connection is listed under Databases; every other one under Servers. */
@@ -129,11 +129,28 @@ class Connections {
     if (parentId && isDescendant(this.groups, parentId, id)) return;
     const g = this.groups.find((x) => x.id === id);
     if (!g) return;
-    const siblings = this.groups.filter((x) => x.parent_id === parentId && x.id !== id).sort((a, b) => a.order - b.order);
+    // Same order as the tree, so "before" means what the user sees.
+    const siblings = this.groups.filter((x) => x.parent_id === parentId && x.id !== id).sort(compareGroups);
     const idx = beforeId ? siblings.findIndex((s) => s.id === beforeId) : -1;
     siblings.splice(idx < 0 ? siblings.length : idx, 0, g);
     for (const [i, s] of siblings.entries()) {
       if (s.order !== i || s.id === id) await this.saveGroup({ ...$state.snapshot(s), order: i, parent_id: parentId } as Group);
+    }
+  }
+
+  /** Move a folder one place up or down among its siblings. */
+  async stepGroup(id: string, delta: -1 | 1) {
+    const before = stepTarget(this.groups, id, delta);
+    const g = this.groups.find((x) => x.id === id);
+    if (before === undefined || !g) return;
+    await this.moveGroup(id, g.parent_id, before);
+  }
+
+  /** Sort every folder, at every level, by name. */
+  async sortGroupsByName() {
+    for (const { id, order } of alphabeticalGroupOrder(this.groups)) {
+      const g = this.groups.find((x) => x.id === id);
+      if (g) await this.saveGroup({ ...$state.snapshot(g), order } as Group);
     }
   }
 

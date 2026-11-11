@@ -440,6 +440,16 @@ export interface UpdateInfo {
   date?: string | null;
 }
 
+/** The newest Handrail Nightly prerelease (a separate app installed beside this one). */
+export interface NightlyBuild {
+  /** `1.1.0-212` */
+  version: string;
+  page_url: string;
+  published_at?: string | null;
+  /** The installer for this system; null while it is building or for an unsupported system. */
+  download?: { name: string; url: string; size: number } | null;
+}
+
 export type CloudDrive = "icloud" | "dropbox" | "onedrive" | "google_drive";
 
 /** A cloud-drive folder found on this device (`sync_folder_presets`). */

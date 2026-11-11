@@ -5,7 +5,11 @@ mod conn_test;
 mod copy;
 mod db;
 mod db_backup;
+<<<<<<< HEAD
 mod local_fs;
+=======
+mod nightly;
+>>>>>>> origin/main
 mod rdp;
 mod s3;
 mod sftp;
@@ -118,6 +122,7 @@ pub fn run() {
             app_version,
             restart_app,
             open_url,
+            nightly::nightly_build,
             cmd_vault::vault_status,
             cmd_vault::vault_create,
             cmd_vault::vault_unlock,
