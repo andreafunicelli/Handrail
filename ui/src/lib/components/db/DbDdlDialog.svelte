@@ -85,7 +85,7 @@
   }
   h2 {
     margin: 0;
-    font-size: 15px;
+    font-size: var(--fs-title);
     font-weight: 600;
   }
   h2.danger {
@@ -100,7 +100,7 @@
     gap: 4px;
   }
   .label {
-    font-size: 12px;
+    font-size: var(--fs-meta);
     color: var(--muted);
   }
   .sql {
@@ -110,14 +110,14 @@
     background: var(--bg);
     border: 1px solid var(--border);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
   .error {
     color: var(--danger);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     white-space: pre-wrap;
   }
   .actions {

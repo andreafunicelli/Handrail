@@ -142,7 +142,7 @@
     border-radius: var(--r-sm);
     border: 1px solid var(--border);
     background: var(--bg);
-    font-size: 11px;
+    font-size: var(--fs-small);
     color: var(--muted);
     outline: none;
   }
@@ -192,7 +192,7 @@
     white-space: nowrap;
   }
   .dt {
-    font-size: 10.5px;
+    font-size: var(--fs-small);
     color: var(--faint);
   }
   .sep {

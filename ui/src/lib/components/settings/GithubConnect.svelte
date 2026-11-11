@@ -93,7 +93,7 @@
   }
   .uri {
     color: var(--accent-text);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .code {
     font-size: 22px;

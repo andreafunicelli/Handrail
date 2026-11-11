@@ -5,6 +5,16 @@
   import { ui } from "../../stores/ui.svelte";
   import { vault } from "../../stores/vault.svelte";
   import { toasts } from "../../stores/toasts.svelte";
+  import { transfers } from "../../stores/transfers.svelte";
+  import TransferPanel from "../files/TransferPanel.svelte";
+  import CompareHost from "../files/CompareHost.svelte";
+
+  let transfersBtn = $state<HTMLButtonElement>();
+  const transfersLabel = $derived(transfers.running ? t("files.transfers.buttonRunning", { n: transfers.running }) : t("files.transfers.title"));
+  function closeTransfers() {
+    transfers.panelOpen = false;
+    transfersBtn?.focus();
+  }
 </script>
 
 <nav class="rail" aria-label="Main">
@@ -16,6 +26,20 @@
     <Icon name="snippet" size={18} />
   </button>
   <span class="grow"></span>
+  <button
+    bind:this={transfersBtn}
+    data-transfers-button
+    class="item"
+    class:on={transfers.panelOpen}
+    aria-expanded={transfers.panelOpen}
+    aria-haspopup="dialog"
+    title={transfersLabel}
+    aria-label={transfersLabel}
+    onclick={() => (transfers.panelOpen = !transfers.panelOpen)}
+  >
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 4v14M3.5 14.5 7 18l3.5-3.5M17 20V6M13.5 9.5 17 6l3.5 3.5" /></svg>
+    {#if transfers.running}<span class="badge" aria-hidden="true">{transfers.running > 99 ? "99+" : transfers.running}</span>{/if}
+  </button>
   <button class="item" title={t("vault.lock")} aria-label={t("vault.lock")} onclick={() => vault.lock().catch(toasts.error)}>
     <Icon name="lock" size={17} />
   </button>
@@ -23,6 +47,8 @@
     <Icon name="settings" size={18} />
   </button>
 </nav>
+{#if transfers.panelOpen}<TransferPanel onclose={closeTransfers} />{/if}
+<CompareHost rank={0} />
 
 <style>
   .rail {
@@ -43,7 +69,7 @@
     height: 28px;
     margin-bottom: 10px;
     color: var(--text);
-    font-size: 13px;
+    font-size: var(--fs);
   }
   .item {
     position: relative;
@@ -74,5 +100,20 @@
   }
   .grow {
     flex: 1;
+  }
+  .badge {
+    position: absolute;
+    top: 2px;
+    right: 1px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: var(--fs-tiny);
+    font-weight: 600;
+    line-height: 15px;
+    text-align: center;
   }
 </style>

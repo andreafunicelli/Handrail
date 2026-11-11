@@ -153,7 +153,7 @@
     flex: none;
   }
   strong {
-    font-size: 15px;
+    font-size: var(--fs-title);
     font-weight: 600;
   }
   .intro {

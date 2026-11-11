@@ -60,21 +60,6 @@ jobs:
         with:
           # The whole history and its tags: the changelog starts at the previous release tag.
           fetch-depth: 0
-      - id: notes
-        name: Write the changelog
-        run: |
-          {
-            echo 'body<<HANDRAIL_NOTES_EOF'
-            bash .github/scripts/changelog.sh
-            echo
-            echo '## Install'
-            echo
-            echo 'The builds are not code-signed yet:'
-            echo '- macOS: open the .dmg, drag Handrail to Applications; the first time, open System Settings > Privacy & Security and click "Open Anyway".'
-            echo '- Windows: on the SmartScreen warning click "More info" > "Run anyway".'
-            echo '- Linux (glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later): install the .deb (Debian, Ubuntu) or .rpm (Fedora, openSUSE), or make the .AppImage executable (chmod +x) and run it.'
-            echo 'HANDRAIL_NOTES_EOF'
-          } >> "$GITHUB_OUTPUT"
       - id: v
         name: Compute version
         run: |
@@ -103,6 +88,30 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "channel=${channel}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+      - id: notes
+        name: Write the release notes
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          {
+            echo 'body<<HANDRAIL_NOTES_EOF'
+            # A release with notes written for it (docs/release-notes-<version>.md) starts with
+            # them, without their title (the release has its own); the changes list follows.
+            written="docs/release-notes-${VERSION}.md"
+            if [ -f "$written" ]; then
+              sed '1{/^# /d}' "$written"
+              echo
+            fi
+            bash .github/scripts/changelog.sh
+            echo
+            echo '## Install'
+            echo
+            echo 'The builds are not code-signed yet:'
+            echo '- macOS: open the .dmg, drag Handrail to Applications; the first time, open System Settings > Privacy & Security and click "Open Anyway".'
+            echo '- Windows: on the SmartScreen warning click "More info" > "Run anyway".'
+            echo '- Linux (glibc 2.35 or newer: Ubuntu 22.04, Debian 12, Fedora 36 and later): install the .deb (Debian, Ubuntu) or .rpm (Fedora, openSUSE), or make the .AppImage executable (chmod +x) and run it.'
+            echo 'HANDRAIL_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
 
   # Stable only: the release exists before the builds upload to it, and is not "latest" yet.
   prepare:

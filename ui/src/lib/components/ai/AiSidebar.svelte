@@ -1,12 +1,16 @@
 <script lang="ts">
   import BusyButton from "../common/BusyButton.svelte";
   import { tick } from "svelte";
+  import { segmented } from "../../actions/segmented";
   import Icon from "../icons/Icon.svelte";
   import Markdown from "../common/Markdown.svelte";
   import BrainPicker from "./BrainPicker.svelte";
   import ApprovalModeControl from "./ApprovalModeControl.svelte";
   import ToolCard from "./ToolCard.svelte";
   import ApprovalCard from "./ApprovalCard.svelte";
+  import AgentStatusChip from "./AgentStatusChip.svelte";
+  import ActivityView from "./ActivityView.svelte";
+  import SummaryView from "./SummaryView.svelte";
   import { t, type MessageKey } from "../../i18n";
   import { api } from "../../api";
   import { agent } from "../../stores/agent.svelte";
@@ -14,6 +18,9 @@
   import { settings } from "../../stores/settings.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { ui } from "../../stores/ui.svelte";
+  import { agentStatus } from "../../util/agentActivity";
+  import { load, save } from "../../util/storage";
+  import { targetOf } from "./target";
 
   const TEMPLATES: { key: string; label: MessageKey; text: MessageKey }[] = [
     { key: "diagnose", label: "tpl.diagnose", text: "tpl.diagnose.text" },
@@ -21,6 +28,8 @@
     { key: "explain", label: "tpl.explain", text: "tpl.explain.text" },
     { key: "services", label: "tpl.services", text: "tpl.services.text" },
   ];
+  type View = "summary" | "activity" | "chat";
+  const VIEWS: View[] = ["summary", "activity", "chat"];
 
   const session = $derived(sessions.contextSession);
   const sid = $derived(session?.session_id ?? null);
@@ -31,9 +40,27 @@
   const native = $derived(brain?.harness?.display === "native" || chamber);
   let opening = $state(false);
   const running = $derived(!!chat?.runId);
+  const target = $derived(sid ? targetOf(sid) : null);
+  const status = $derived(agentStatus(chat?.items ?? [], running, chat?.cancelled ?? false));
+  const pending = $derived(sid ? agent.pendingApprovals(sid) : []);
+  /** Approvals waiting in other sessions: one line each, so none is lost behind another tab. */
+  const elsewhere = $derived.by(() => {
+    const by = new Map<string, number>();
+    for (const p of agent.allPending) if (p.sessionId !== sid) by.set(p.sessionId, (by.get(p.sessionId) ?? 0) + 1);
+    return [...by].map(([sessionId, n]) => ({ sessionId, n, name: targetOf(sessionId)?.name ?? sessionId }));
+  });
+
+  // svelte-ignore state_referenced_locally
+  let view = $state<View>(VIEWS.includes(load("ai-view", "chat")) ? load<View>("ai-view", "chat") : "chat");
+  function setView(v: View) {
+    view = v;
+    save("ai-view", v);
+  }
+  const tabId = $props.id();
 
   let input = $state("");
   let scroller = $state<HTMLDivElement>();
+  let pane = $state<HTMLDivElement>();
   let area = $state<HTMLTextAreaElement>();
   let tplIndex = $state(0);
 
@@ -48,7 +75,7 @@
     void chat?.items.length;
     const lastItem = chat?.items.at(-1);
     void (lastItem?.kind === "assistant" ? lastItem.text.length : 0);
-    if (stick && scroller) tick().then(() => scroller && (scroller.scrollTop = scroller.scrollHeight));
+    if (stick && scroller && view === "chat") tick().then(() => scroller && (scroller.scrollTop = scroller.scrollHeight));
   });
 
   async function send(text = input) {
@@ -58,6 +85,25 @@
     stick = true;
     await agent.send(sid, msg);
     area?.focus();
+  }
+
+  /** User-initiated: a normal chat message (visible in Chat, uses tokens). */
+  function askSummary() {
+    if (!sid || running || native) return;
+    setView("chat");
+    void send(t("ai.summary.askPrompt"));
+  }
+
+  /** Bring the first pending approval into view and focus it, in the view that shows it. */
+  async function review() {
+    const first = pending[0];
+    if (!first) return;
+    if (view === "summary") setView("activity");
+    await tick();
+    const root = view === "chat" ? scroller : pane;
+    const card = root?.querySelector<HTMLElement>(`[data-approval="${CSS.escape(first.req.approval_id)}"]`);
+    card?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    card?.focus({ preventScroll: true });
   }
 
   function useTemplate(i: number) {
@@ -119,12 +165,17 @@
   }
 
   const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const viewLabel = (v: View) => t(`ai.view.${v}`);
 </script>
 
 <aside class="ai" aria-label={t("ai.title")}>
   <header>
     <BrainPicker sessionId={sid} />
     <span class="grow"></span>
+    {#if running && sid && view !== "chat"}
+      <button class="icon-btn" title={t("ai.stopRun")} aria-label={t("ai.stopRun")} onclick={() => sid && agent.cancel(sid)}><Icon name="stop" size={13} /></button>
+    {/if}
+    <button class="icon-btn" title={t("ai.history.open")} aria-label={t("ai.history.open")} onclick={() => ui.openSettings("approvals")}><Icon name="clock" size={14} /></button>
     {#if sid && chat?.items.length && !running}
       <button class="icon-btn" title={t("ai.clear")} aria-label={t("ai.clear")} onclick={() => sid && agent.clear(sid)}><Icon name="trash" size={14} /></button>
     {/if}
@@ -135,14 +186,92 @@
     <div class="mode">
       <span class="ctx">
         <span class="env env-{session.env}"></span>
-        <span class="ctx-name">{session.title}</span>
-        {#if session.env !== "none"}<span class="ctx-env">{t(`env.${session.env}`)}</span>{/if}
+        <span class="ctx-name">{target?.name ?? session.title}</span>
+        {#if session.env === "prod"}<span class="env-prod-badge" title={t("env.prod")}>{t("ai.prodBadge")}</span>
+        {:else if session.env !== "none"}<span class="ctx-env">{t(`env.${session.env}`)}</span>{/if}
+        {#if target?.user || target?.host}<span class="ctx-user mono">{target.user ?? ""}{target.user && target.host ? "@" : ""}{target.host ?? ""}</span>{/if}
+        <span class="grow"></span>
+        {#if brain}<AgentStatusChip {status} live />{/if}
       </span>
       <ApprovalModeControl {session} />
     </div>
   {/if}
 
-  <div class="transcript" bind:this={scroller} onscroll={() => scroller && (stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40)}>
+  {#if session && brain}
+    <div class="views" role="tablist" aria-label={t("ai.view.label")} use:segmented>
+      {#each VIEWS as v (v)}
+        <button
+          role="tab"
+          id="{tabId}-tab-{v}"
+          aria-selected={view === v}
+          aria-controls="{tabId}-panel-{v}"
+          onclick={() => setView(v)}
+        >
+          {viewLabel(v)}
+          {#if v === "activity" && pending.length}
+            <span class="badge" aria-label={t("ai.view.pendingBadge", { n: pending.length })}>{pending.length}</span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+  {/if}
+
+  {#if session && brain && (pending.length || elsewhere.length)}
+    <div class="banners">
+      {#if pending.length}
+        <div class="banner" role="alert">
+          <Icon name="shield" size={13} />
+          <span>{pending.length === 1 ? t("ai.pending.one") : t("ai.pending.many", { n: pending.length })}</span>
+          <button class="btn sm primary" onclick={review}>{t("ai.pending.review")}</button>
+        </div>
+      {/if}
+      {#each elsewhere as o (o.sessionId)}
+        <div class="banner other">
+          <Icon name="shield" size={12} />
+          <span>{o.n === 1 ? t("ai.pending.other", { name: o.name }) : `${o.name}: ${t("ai.pending.many", { n: o.n })}`}</span>
+          <button class="btn sm" onclick={() => sessions.focusSession(o.sessionId)}>{t("ai.pending.go")}</button>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  {#if session && brain && sid && view !== "chat"}
+    <div class="pane" bind:this={pane} role="tabpanel" id="{tabId}-panel-{view}" aria-labelledby="{tabId}-tab-{view}">
+      {#if native}
+        <div class="external" role="note">
+          <Icon name="info" size={13} />
+          <div>
+            <strong>{t("ai.external.title", { name: brain.label })}</strong>
+            <p>{t("ai.external.body")}</p>
+          </div>
+        </div>
+      {/if}
+      {#if view === "summary"}
+        <SummaryView
+          {chat}
+          sessionId={sid}
+          {target}
+          {status}
+          agentLabel={chat?.actor ?? (brain.harness ? brain.label : `${brain.label} · ${brain.detail}`)}
+          canAsk={!running && !native}
+          onask={askSummary}
+          onactivity={() => setView("activity")}
+        />
+      {:else}
+        <ActivityView {chat} sessionId={sid} {target} />
+      {/if}
+    </div>
+  {/if}
+
+  <div
+    class="transcript"
+    hidden={!!(session && brain) && view !== "chat"}
+    bind:this={scroller}
+    role={session && brain ? "tabpanel" : undefined}
+    id={session && brain ? `${tabId}-panel-chat` : undefined}
+    aria-labelledby={session && brain ? `${tabId}-tab-chat` : undefined}
+    onscroll={() => scroller && (stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40)}
+  >
     {#if !session}
       <div class="empty">
         <Icon name="sparkle" size={18} />
@@ -218,7 +347,7 @@
     {/if}
   </div>
 
-  {#if session && brain && !native}
+  {#if session && brain && !native && view === "chat"}
     <div class="composer">
       {#if templates.length}
         <div class="tpls" role="listbox">
@@ -271,6 +400,11 @@
     padding: 0 6px 0 6px;
     border-bottom: 1px solid var(--border);
     flex: none;
+    min-width: 0;
+  }
+  header :global(.picker) {
+    min-width: 0;
+    flex: 0 1 auto;
   }
   .grow {
     flex: 1;
@@ -298,6 +432,19 @@
   .ctx-env {
     color: var(--faint);
   }
+  .ctx-name {
+    flex: 0 0 auto;
+    max-width: 45%;
+  }
+  .ctx-user {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--faint);
+    font-size: var(--fs-small);
+  }
   .env {
     width: 3px;
     height: 11px;
@@ -313,6 +460,113 @@
   }
   .env-dev {
     background: var(--env-dev);
+  }
+  .views {
+    display: flex;
+    gap: 2px;
+    margin: 8px 12px 0;
+    padding: 2px;
+    border-radius: var(--r);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    flex: none;
+  }
+  .views button {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: calc(var(--ctl-h-sm) - 4px);
+    border-radius: var(--r-sm);
+    color: var(--muted);
+    font-size: var(--fs-meta);
+    white-space: nowrap;
+  }
+  .views button:hover,
+  .views button[aria-selected="true"] {
+    color: var(--text);
+  }
+  .views button:focus-visible {
+    box-shadow: var(--focus-ring);
+  }
+  .badge {
+    display: inline-grid;
+    place-items: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--warn);
+    color: var(--bg);
+    font-size: var(--fs-tiny);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .banners {
+    display: grid;
+    gap: 6px;
+    margin: 8px 12px 0;
+    flex: none;
+  }
+  .banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 6px 10px;
+    border-radius: var(--r-lg);
+    border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+    background: var(--warn-soft);
+    color: var(--text);
+    font-size: var(--fs-meta);
+  }
+  .banner :global(svg) {
+    flex: none;
+    color: var(--warn);
+  }
+  .banner span {
+    flex: 1;
+    min-width: 0;
+  }
+  .banner.other {
+    border-color: var(--border);
+    background: var(--hover);
+    font-size: var(--fs-small);
+    color: var(--text-2);
+  }
+  .banner.other :global(svg) {
+    color: var(--muted);
+  }
+  .pane {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .external {
+    display: flex;
+    gap: 8px;
+    padding: 9px 11px;
+    border-radius: var(--r-lg);
+    border: 1px solid var(--border);
+    background: var(--hover);
+    font-size: var(--fs-meta);
+    color: var(--muted);
+  }
+  .external :global(svg) {
+    flex: none;
+    margin-top: 2px;
+    color: var(--accent);
+  }
+  .external strong {
+    color: var(--text);
+    font-weight: 550;
+  }
+  .external p {
+    margin: 3px 0 0;
   }
   .transcript {
     flex: 1;
@@ -336,7 +590,7 @@
     color: var(--accent);
   }
   .spark {
-    font-size: 15px;
+    font-size: var(--fs-title);
   }
   .empty strong {
     color: var(--text);
@@ -499,7 +753,7 @@
   }
   .tpls .mono {
     color: var(--accent-text);
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
     min-width: 72px;
   }
   .usage {

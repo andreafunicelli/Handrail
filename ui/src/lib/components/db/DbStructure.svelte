@@ -88,7 +88,7 @@
   }
   h3 {
     margin: 0 0 6px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -101,7 +101,7 @@
   table {
     border-collapse: collapse;
     width: 100%;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   th {
     text-align: left;
@@ -134,11 +134,11 @@
     margin-right: 4px;
     border: 1px solid var(--border-strong);
     border-radius: 4px;
-    font-size: 11px;
+    font-size: var(--fs-small);
   }
   .none {
     margin: 0;
     color: var(--faint);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
 </style>

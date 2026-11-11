@@ -44,7 +44,7 @@
   .pw input {
     width: 100%;
     height: 36px;
-    font-size: 14px;
+    font-size: var(--fs-heading);
     padding-right: 40px;
   }
   .toggle {

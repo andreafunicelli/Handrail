@@ -48,7 +48,7 @@
   }
   .md :global(code) {
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
     padding: 1px 4px;
     border-radius: var(--r-sm);
     background: var(--hover);
@@ -65,7 +65,7 @@
   .md :global(pre code) {
     padding: 0;
     background: none;
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
     line-height: 1.55;
     white-space: pre;
   }

@@ -79,7 +79,7 @@
   }
   .input.lg {
     height: 36px;
-    font-size: 14px;
+    font-size: var(--fs-heading);
   }
   .err {
     margin: -4px 0 0;

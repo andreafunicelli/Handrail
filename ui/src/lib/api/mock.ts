@@ -7,6 +7,7 @@ import type {
   Brain,
   CommandResult,
   Connection,
+  ConnTestResult,
   Group,
   Identity,
   HarnessProfile,
@@ -301,6 +302,8 @@ export function createMockApi(): Api {
     default_mode: "confirm_all",
     deny_list: ["shutdown", "reboot"],
   };
+  /** Generic vault settings (get_setting / set_setting). */
+  const settingStore = new Map<string, unknown>();
   let sync: SyncStatus = { config: null, last_sync_ms: null, last_report: null, can_join: false, auto: true, syncing: false, last_error: null };
   const hour = 3_600_000;
   const snapName = (ms: number) => `${String(ms).padStart(15, "0")}-${Math.random().toString(16).slice(2, 10)}.snap`;
@@ -337,6 +340,26 @@ export function createMockApi(): Api {
   const files = new Map<string, FsNode>();
   const parentOf = (p: string) => p.replace(/\/[^/]+$/, "") || "/";
   const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
+  // ---- fake files of "this computer" ----
+  const LOCAL_HOME = "/Users/me";
+  const localFiles = new Map<string, FsNode>();
+  {
+    const now = Math.floor(Date.now() / 1000);
+    for (const d of ["/", "/Users", LOCAL_HOME, `${LOCAL_HOME}/Desktop`, `${LOCAL_HOME}/Documents`, `${LOCAL_HOME}/Downloads`])
+      localFiles.set(d, { kind: "dir", size: 0, modified: now - 86400, permissions: 0o40755 });
+    for (const [p, size] of [
+      [`${LOCAL_HOME}/Documents/deploy.yml`, 1820],
+      [`${LOCAL_HOME}/Documents/notes.txt`, 412],
+      [`${LOCAL_HOME}/Downloads/backup.tar.gz`, 48_000_000],
+      [`${LOCAL_HOME}/.bashrc`, 3771],
+    ] as const)
+      localFiles.set(p, { kind: "file", size, modified: now - 7200, permissions: 0o100644 });
+  }
+  function localNode(path: string) {
+    const n = localFiles.get(path);
+    if (!n) throw fail("not_found", path);
+    return n;
+  }
   function seedFiles(home: string) {
     if (files.has(home)) return;
     const now = Math.floor(Date.now() / 1000);
@@ -787,6 +810,25 @@ export function createMockApi(): Api {
       else db.connections.push(structuredClone(c));
       return c;
     },
+    async testConnection(c, secrets = {}) {
+      // Deterministic by host, so the preview shows every result: "edge…" has a new host key
+      // (until accepted in a terminal), "10.0.2.40" a changed one, "…unreach…" / "10.9.…" no
+      // route, "…slow…" a timeout, "…badauth…" or the password "wrong" a refused login.
+      await sleep(c.host.includes("slow") ? 1500 : 450);
+      const r = (status: ConnTestResult["status"], message: string | null = null): ConnTestResult => ({ status, message, host: null, fingerprint: null, elapsed_ms: 450 });
+      const hostPort = `${c.host}:${c.port}`;
+      if (c.host.includes("unreach") || c.host.startsWith("10.9.")) return r("unreachable", `${hostPort}: Connection refused (os error 111)`);
+      if (c.host.includes("slow")) return r("timeout", `${hostPort}: connect timed out`);
+      if (c.kind === "rdp") return r("reachable", "credentials not checked");
+      if (c.host.startsWith("edge") && !trusted.has(hostPort)) {
+        return { ...r("host_key_unknown"), host: hostPort, fingerprint: "SHA256:q3Vx8f2nK0tL9mXcE4pR7bZs1YhUo6WjA5dQiN+gTkc" };
+      }
+      if (c.host === "10.0.2.40") return r("host_key_mismatch", `${hostPort} (recorded SHA256:Hb2K9sPq4Lw7Rt1ZxV0cN8mJfY3aGd6UeO5iS+kQrTo, presented SHA256:q3Vx8f2nK0tL9mXcE4pR7bZs1YhUo6WjA5dQiN+gTkc)`);
+      const prompt = !c.identity && c.auth.type === "prompt";
+      if (prompt && !secrets.password) return r("needs_password");
+      if (c.host.includes("badauth") || secrets.password === "wrong") return r("auth_failed", `password authentication failed for ${c.user}@${hostPort}`);
+      return r("success");
+    },
     async deleteConnection(id) {
       db.connections = db.connections.filter((c) => c.id !== id);
     },
@@ -1006,6 +1048,16 @@ export function createMockApi(): Api {
     },
     async saveApprovalSettings(s) {
       approvalSettings = structuredClone(s);
+    },
+    async getSetting(key) {
+      if (vault.locked) throw fail("locked", "The vault is locked.");
+      if (key.startsWith("sync.")) throw fail("denied", `setting ${key} is not accessible`);
+      return settingStore.has(key) ? structuredClone(settingStore.get(key)) : null;
+    },
+    async setSetting(key, value) {
+      if (vault.locked) throw fail("locked", "The vault is locked.");
+      if (key.startsWith("sync.")) throw fail("denied", `setting ${key} is not accessible`);
+      settingStore.set(key, structuredClone(value));
     },
 
     async sftpSudo(session_id, password) {
@@ -1418,9 +1470,91 @@ export function createMockApi(): Api {
       await sleep(120);
       return edits.length;
     },
+    async localHome() {
+      return LOCAL_HOME;
+    },
+    async localList(path) {
+      if (localNode(path).kind !== "dir") throw fail("invalid", `${path} is not a folder`);
+      return [...localFiles.entries()]
+        .filter(([p]) => p !== path && parentOf(p) === path)
+        .map(([p, n]) => ({ name: baseName(p), path: p, kind: n.kind, link: false, size: n.size, modified: n.modified, permissions: n.permissions }))
+        .sort((a, b) => Number(b.kind === "dir") - Number(a.kind === "dir") || a.name.localeCompare(b.name));
+    },
+    async localMkdir(path) {
+      if (localFiles.has(path)) throw fail("busy", "exists");
+      if (localFiles.get(parentOf(path))?.kind !== "dir") throw fail("not_found", parentOf(path));
+      localFiles.set(path, { kind: "dir", size: 0, modified: Math.floor(Date.now() / 1000), permissions: 0o40755 });
+    },
+    async localRename(from, to) {
+      localNode(from);
+      if (localFiles.has(to)) throw fail("busy", "exists");
+      for (const [p, n] of [...localFiles.entries()])
+        if (p === from || p.startsWith(from + "/")) {
+          localFiles.delete(p);
+          localFiles.set(to + p.slice(from.length), n);
+        }
+    },
+    async localRemove(path) {
+      localNode(path);
+      for (const p of [...localFiles.keys()]) if (p === path || p.startsWith(path + "/")) localFiles.delete(p);
+    },
+    async localReadText(path) {
+      const n = localNode(path);
+      if (n.kind !== "file") throw fail("invalid", `${path} is not a file`);
+      if (/\.(gz|zip|tar|png|jpg|bin)$/.test(path)) throw fail("invalid", `${path} is a binary file`);
+      const text = texts.get(path) ?? `# ${baseName(path)} on this computer\n`;
+      return { text, stamp: { size: n.size, modified: n.modified, hash: hashOf(text) } };
+    },
     async copyBetween(from, path, to, toDir, overwrite, transfer_id) {
       const name = baseName(path);
       const now = Math.floor(Date.now() / 1000);
+      if (from.kind === "local" || to.kind === "local") {
+        // Files only, as in the backend.
+        let size: number;
+        if (from.kind === "local") {
+          const n = localNode(path);
+          if (n.kind !== "file") throw fail("invalid", `${path} is a folder: folders are copied between servers only`);
+          size = n.size;
+        } else if (from.kind === "sftp") {
+          sshShell(from.session_id, from.root, path);
+          const n = files.get(path);
+          if (!n || n.kind !== "file") throw fail("invalid", `${path} is not a file`);
+          size = n.size;
+        } else {
+          s3Account(from.account_id);
+          const { b, key } = s3Object(path);
+          const o = b.objects.get(key);
+          if (!o) throw fail("not_found", "NoSuchKey: The specified key does not exist.");
+          size = o.size;
+        }
+        const dest = `${toDir === "/" ? "" : toDir}/${name}`;
+        const node = { kind: "file" as const, size, modified: now, permissions: 0o100644 };
+        if (to.kind === "local") {
+          if (dest === path) throw fail("invalid", `${name} is already in ${toDir}`);
+          if (localFiles.get(toDir)?.kind !== "dir") throw fail("not_found", toDir);
+          if (localFiles.has(dest) && !overwrite) throw fail("busy", "exists");
+          await transfer(transfer_id, size);
+          localFiles.set(dest, node);
+          if (from.kind === "sftp" && texts.has(path)) texts.set(dest, texts.get(path)!);
+          return dest;
+        }
+        if (to.kind === "sftp") {
+          sshShell(to.session_id, to.root, dest, true);
+          if (files.has(dest) && !overwrite) throw fail("busy", "exists");
+          await transfer(transfer_id, size);
+          files.set(dest, node);
+          return dest;
+        }
+        s3Account(to.account_id);
+        const { bucket, key: prefix } = s3Split(toDir);
+        if (!bucket) throw fail("invalid", "open a bucket first");
+        const b = s3Bucket(bucket);
+        const k = (prefix ? prefix + "/" : "") + name;
+        if (b.objects.has(k) && !overwrite) throw fail("busy", "exists");
+        await transfer(transfer_id, size);
+        b.objects.set(k, { size, modified: now });
+        return `/${bucket}/${k}`;
+      }
       if (from.kind === "s3" && to.kind === "s3") throw fail("invalid", "copying between S3 accounts is not supported: download the file and upload it");
       if (to.kind === "sftp") {
         const dest = `${toDir === "/" ? "" : toDir}/${name}`;

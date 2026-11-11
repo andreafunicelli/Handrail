@@ -104,7 +104,7 @@
   }
   .dialog h2 {
     margin: 0;
-    font-size: 15px;
+    font-size: var(--fs-title);
     font-weight: 600;
   }
   .actions {
@@ -118,7 +118,7 @@
     border-radius: var(--r);
     background: var(--bg);
     border: 1px solid var(--border);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     white-space: pre-wrap;
     word-break: break-all;
   }

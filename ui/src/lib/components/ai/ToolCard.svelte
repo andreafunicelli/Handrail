@@ -45,7 +45,7 @@
     <div class="meta">
       {#if result.exit_code != null}<span class:bad={result.exit_code !== 0}>{t("tool.exit", { code: result.exit_code })}</span>{/if}
       <span>{fmtMs(result.duration_ms)}</span>
-      {#if result.truncated}<span>truncated</span>{/if}
+      {#if result.truncated}<span title={t("ai.activity.truncated")}>{t("tool.truncated")}</span>{/if}
       <span class="grow"></span>
       {#if outputText}
         <button class="link" onclick={() => (open = !open)} aria-expanded={open}>
@@ -87,7 +87,7 @@
   }
   .glyph {
     color: var(--accent);
-    font-size: 10px;
+    font-size: var(--fs-tiny);
     flex: none;
   }
   .running .glyph {
@@ -100,7 +100,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 12px;
+    font-size: var(--fs-meta);
     color: var(--text);
   }
   .tname {
@@ -142,7 +142,7 @@
     padding: 9px 11px;
     max-height: 260px;
     overflow: auto;
-    font-size: 11.5px;
+    font-size: var(--fs-meta);
     line-height: 1.5;
     white-space: pre;
     background: var(--bg);

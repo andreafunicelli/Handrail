@@ -104,6 +104,7 @@
   </div>
 {:else}
   {@const info = sessions.infos[node.sessionId]}
+  {@const env = sessions.leafEnv(node.sessionId)}
   {@const focused = sessions.activeTabId === tabId && sessions.activeTab?.activeLeaf === node.id}
   {@const bcast = sessions.broadcasting(tabId) && sessions.broadcastTargets(tabId).includes(node.sessionId)}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -119,9 +120,10 @@
   >
     {#if multi}
       <div class="pane-head">
-        <span class="dot {info?.state ?? ''}"></span>
-        <span class="env-tick env-{info?.env ?? 'none'}"></span>
+        <span class="dot {info?.state ?? ''}" aria-hidden="true"></span>
+        {#if env !== "prod"}<span class="env-tick env-{env}" aria-hidden="true"></span>{/if}
         <span class="ptitle">{sessions.paneTitle(node.sessionId)}</span>
+        {#if env === "prod"}<span class="env-prod-badge" title={t("sess.prodTip")}>{t("sess.prod")}</span>{/if}
         {#if others.length}
           <div class="others" role="group" aria-label={t("tabs.otherPanes")}>
             {#each others as o (o.id)}
@@ -260,7 +262,7 @@
     border-radius: 8px;
     background: var(--warn-soft);
     color: var(--warn);
-    font-size: 10px;
+    font-size: var(--fs-tiny);
     font-weight: 600;
     letter-spacing: 0.02em;
   }
@@ -282,7 +284,7 @@
     border-radius: 9px;
     border: 1px solid var(--border);
     color: var(--muted);
-    font-size: 11px;
+    font-size: var(--fs-small);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -305,9 +307,10 @@
     border-radius: 2px;
     display: none;
   }
-  .env-tick.env-prod {
-    display: block;
-    background: var(--env-prod);
+  .pane-head .env-prod-badge {
+    flex: none;
+    height: 16px;
+    padding: 0 5px;
   }
   .env-tick.env-staging {
     display: block;

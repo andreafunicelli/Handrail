@@ -23,6 +23,8 @@ export function createTauriApi(): Api {
 
     listConnections: () => invoke("list_connections"),
     saveConnection: (connection) => invoke("save_connection", { connection }),
+    testConnection: (connection, secrets = {}) =>
+      invoke("connection_test", { connection, password: secrets.password || null, key: secrets.key || null, passphrase: secrets.passphrase || null }),
     deleteConnection: (id) => invoke("delete_connection", { id }),
     listGroups: () => invoke("list_groups"),
     saveGroup: (group) => invoke("save_group", { group }),
@@ -52,6 +54,8 @@ export function createTauriApi(): Api {
     getApprovalSettings: async () =>
       (await invoke<ApprovalSettings | null>("get_setting", { key: APPROVALS_KEY })) ?? DEFAULT_APPROVALS,
     saveApprovalSettings: (settings) => invoke("set_setting", { key: APPROVALS_KEY, value: settings }),
+    getSetting: async (key) => (await invoke<unknown>("get_setting", { key })) ?? null,
+    setSetting: (key, value) => invoke("set_setting", { key, value }),
 
     sftpSudo: (session_id, password) => invoke("sftp_sudo", { session_id, password }),
     sftpRootOff: (session_id) => invoke("sftp_root_off", { session_id }),
@@ -63,6 +67,12 @@ export function createTauriApi(): Api {
     sftpDownload: (session_id, path, transfer_id, root = false) => invoke("sftp_download", { session_id, path, transfer_id, root }),
     sftpUpload: (session_id, local_path, dir, transfer_id, root = false) => invoke("sftp_upload", { session_id, local_path, dir, transfer_id, root }),
     copyBetween: (from, path, to, to_dir, overwrite, transfer_id) => invoke("copy_between", { from, path, to, to_dir, overwrite, transfer_id }),
+    localHome: () => invoke("local_home"),
+    localList: (path) => invoke("local_list", { path }),
+    localMkdir: (path) => invoke("local_mkdir", { path }),
+    localRename: (from, to) => invoke("local_rename", { from, to }),
+    localRemove: (path) => invoke("local_remove", { path }),
+    localReadText: (path) => invoke("local_read_text", { path }),
     rdpOpen: (connection_id, size, onMessage) => {
       const on_event = new Channel<ArrayBuffer>(onMessage);
       return invoke("rdp_open", { connection_id, size, on_event });

@@ -206,7 +206,7 @@
     overflow: auto;
     outline: none;
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .inner {
     position: relative;
@@ -269,12 +269,12 @@
   .head .arrow {
     margin-left: auto;
     color: var(--accent);
-    font-size: 9px;
+    font-size: var(--fs-tiny);
   }
   .head .type {
     color: var(--faint);
     font-weight: 400;
-    font-size: 11px;
+    font-size: var(--fs-small);
   }
   .cell.bytes {
     color: var(--syn-number, var(--muted));

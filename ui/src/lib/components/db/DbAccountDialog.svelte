@@ -207,7 +207,7 @@
   }
   h2 {
     margin: 0;
-    font-size: 15px;
+    font-size: var(--fs-title);
     font-weight: 600;
   }
   h2.danger {
@@ -228,7 +228,7 @@
     flex: 1;
   }
   .label {
-    font-size: 12px;
+    font-size: var(--fs-meta);
     color: var(--muted);
   }
   .grants {
@@ -259,7 +259,7 @@
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 4px 10px;
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .priv {
     display: flex;
@@ -273,18 +273,18 @@
     background: var(--bg);
     border: 1px solid var(--border);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
   .warn {
     color: var(--warn);
-    font-size: 12px;
+    font-size: var(--fs-meta);
   }
   .error {
     color: var(--danger);
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--fs-meta);
     white-space: pre-wrap;
   }
   .hint {
