@@ -17,6 +17,7 @@
   import { uuid } from "../../util/id";
   import { newTunnel, tunnelProblem } from "../../util/tunnels";
   import ConnectionTest from "./ConnectionTest.svelte";
+  import JumpHostPicker from "./JumpHostPicker.svelte";
   import { initialSections, networkHasError, testLogin, testSignature, type LoginForm } from "./editorForm";
 
   let { connection, isNew }: { connection: Connection; isNew: boolean } = $props();
@@ -236,9 +237,6 @@
     if (f) keyText = await f.text();
   }
 
-  function toggleJump(id: string) {
-    c.jump = c.jump.includes(id) ? c.jump.filter((j) => j !== id) : [...c.jump, id];
-  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -422,17 +420,7 @@
           <legend class="label">{t(dbKind ? "editor.dbTunnel" : "editor.jump")}</legend>
           {#if rdp}<p class="hint">{t("editor.rdpJump")}</p>{/if}
           {#if dbKind}<p class="hint">{t("editor.dbTunnelHint")}</p>{/if}
-          {#if !jumpCandidates.length}
-            <p class="hint">{t("editor.jumpNone")}</p>
-          {:else}
-            <div class="chips">
-              {#each jumpCandidates as j (j.id)}
-                <button type="button" class="chip" aria-pressed={c.jump.includes(j.id)} onclick={() => toggleJump(j.id)}>
-                  {#if c.jump.includes(j.id)}<span class="ord">{c.jump.indexOf(j.id) + 1}</span>{/if}{j.name}
-                </button>
-              {/each}
-            </div>
-          {/if}
+          <JumpHostPicker candidates={jumpCandidates} groups={connections.groups} bind:value={c.jump} label={t(dbKind ? "editor.dbTunnel" : "editor.jump")} />
         </fieldset>
 
         {#if dbKind}
@@ -779,31 +767,6 @@
   }
   .envdot.env-dev {
     background: var(--env-dev);
-  }
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 24px;
-    padding: 0 9px;
-    border-radius: 999px;
-    border: 1px solid var(--border-strong);
-    font-size: var(--fs-meta);
-    color: var(--text-2);
-  }
-  .chip[aria-pressed="true"] {
-    border-color: var(--accent-line);
-    background: var(--accent-soft);
-    color: var(--accent-text);
-  }
-  .ord {
-    font-size: var(--fs-tiny);
-    font-weight: 600;
   }
   .row-actions {
     display: flex;
