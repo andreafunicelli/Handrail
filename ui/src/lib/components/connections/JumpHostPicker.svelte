@@ -71,14 +71,24 @@
     value = next;
   }
 
+  /** Keep the highlighted option visible: focus stays in the input, so the list never scrolls by itself. */
+  function reveal() {
+    requestAnimationFrame(() => {
+      const c = shown[active];
+      if (c) document.getElementById(`${uid}-${c.id}`)?.scrollIntoView({ block: "nearest" });
+    });
+  }
+
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
       show();
-      active = Math.min(active + 1, shown.length - 1);
+      active = Math.max(0, Math.min(active + 1, shown.length - 1));
+      reveal();
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       active = Math.max(active - 1, 0);
+      reveal();
     } else if (e.key === "Enter") {
       // Never submit the editor form from here.
       e.preventDefault();
