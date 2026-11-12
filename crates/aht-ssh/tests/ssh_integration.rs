@@ -6,7 +6,9 @@ use aht_ssh::*;
 use async_trait::async_trait;
 use russh::keys::ssh_key::LineEnding;
 use russh::keys::{Algorithm, EcdsaCurve, PrivateKey, PublicKey};
-use russh::server::{self, Auth, ChannelOpenHandle, Msg, Response, Session};
+use russh::server::{
+    self, Auth, ChannelOpenHandle, Msg, PublicKeyOffer, Response, Session, VerifiedPublicKey,
+};
 use russh::{Channel, ChannelId};
 use std::borrow::Cow;
 use std::net::SocketAddr;
@@ -49,6 +51,22 @@ struct SrvHandler {
     shells: std::collections::HashSet<ChannelId>,
 }
 
+impl SrvHandler {
+    fn key_auth(&self, user: &str, key: &PublicKey) -> Auth {
+        let ok = user == USER
+            && self
+                .st
+                .authorized
+                .iter()
+                .any(|k| k.key_data() == key.key_data());
+        if ok {
+            Auth::Accept
+        } else {
+            Auth::reject()
+        }
+    }
+}
+
 impl server::Handler for SrvHandler {
     type Error = russh::Error;
 
@@ -63,19 +81,17 @@ impl server::Handler for SrvHandler {
     async fn auth_publickey_offered(
         &mut self,
         _user: &str,
-        key: &PublicKey,
+        offer: PublicKeyOffer<'_>,
     ) -> Result<Auth, Self::Error> {
-        self.auth_publickey(USER, key).await
+        Ok(self.key_auth(USER, offer.public_key))
     }
 
-    async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
-        let ok = user == USER
-            && self
-                .st
-                .authorized
-                .iter()
-                .any(|k| k.key_data() == key.key_data());
-        Ok(if ok { Auth::Accept } else { Auth::reject() })
+    async fn auth_publickey(
+        &mut self,
+        user: &str,
+        key: VerifiedPublicKey<'_>,
+    ) -> Result<Auth, Self::Error> {
+        Ok(self.key_auth(user, key.public_key))
     }
 
     async fn auth_keyboard_interactive<'a>(
