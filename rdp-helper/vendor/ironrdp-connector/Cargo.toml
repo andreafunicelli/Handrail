@@ -26,7 +26,7 @@ ironrdp-error = "0.2"
 ironrdp-pdu = { version = "0.9", features = ["std"] }
 sspi = { version = "0.21", features = ["scard"] }
 url = "2.5"
-rand = { version = "0.9", features = ["std"] }
+rand = { version = "0.10", features = ["std"] }
 tracing = { version = "0.1", features = ["log"] }
 picky-asn1-der = "0.5"
 picky-asn1-x509 = "0.15"
