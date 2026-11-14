@@ -20,6 +20,10 @@ name: Release
 #     nightly replaces. Stable installs never see prereleases (releases/latest skips them).
 # Manual runs publish only from main (stable) or nightly; from other refs they only build.
 #
+# Nothing is published unless the same commit passed CI: pushes and manual runs first run
+# ci.yml (the `checks` job), and `prepare` and `build` need it. Pull requests skip that call,
+# since ci.yml runs on pull_request by itself; their builds run in `build-only`, read-only.
+#
 # A stable release becomes the one installed apps update to ("latest") only once every build
 # has uploaded its installers: `prepare` creates it as not-latest, the builds fill it, `promote`
 # marks it latest. Until then apps keep seeing the previous, complete release (an app asking
@@ -36,8 +40,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only by default; the jobs that create or edit releases ask for write themselves.
 permissions:
-  contents: write
+  contents: read
 
 # Publishing runs (pushes and manual runs, from any ref) share one group and run one at a time:
 # each picks the next version from the tags the previous one created, so two can never take the
@@ -48,6 +53,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  checks:
+    name: CI
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/ci.yml
+
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -56,7 +66,7 @@ jobs:
       tag: ${{ steps.v.outputs.tag }}
       notes: ${{ steps.notes.outputs.body }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # The whole history and its tags: the changelog starts at the previous release tag.
           fetch-depth: 0
@@ -116,9 +126,11 @@ jobs:
   # Stable only: the release exists before the builds upload to it, and is not "latest" yet.
   prepare:
     name: Create the release (not latest yet)
-    needs: version
+    needs: [version, checks]
     if: needs.version.outputs.channel == 'stable'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.version.outputs.tag }}
@@ -135,12 +147,17 @@ jobs:
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Handrail $VERSION" --notes-file notes.md --latest=false
 
+  # Publishing builds (stable and nightly). `build-only` below runs the same matrix and steps
+  # (YAML aliases of the anchors here) read-only, for pull requests and manual runs elsewhere.
   build:
-    needs: [version, prepare]
-    # `prepare` is skipped for pull requests and nightlies.
-    if: ${{ !cancelled() && needs.version.result == 'success' && needs.prepare.result != 'failure' }}
+    needs: [version, checks, prepare]
+    # `prepare` is skipped for nightlies; `checks` must have passed (a failed `checks` skips
+    # `prepare`, which on its own would not stop this job).
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.version.outputs.channel != 'none' && needs.checks.result == 'success' && needs.prepare.result != 'failure' }}
     name: Build (${{ matrix.name }})
-    strategy:
+    permissions:
+      contents: write
+    strategy: &build-strategy
       fail-fast: false
       matrix:
         include:
@@ -159,16 +176,16 @@ jobs:
             rust_targets: ""
             args: ""
     runs-on: ${{ matrix.platform }}
-    env:
+    env: &build-env
       VERSION: ${{ needs.version.outputs.version }}
       PUBLISH: ${{ needs.version.outputs.channel != 'none' }}
       CHANNEL: ${{ needs.version.outputs.channel }}
       TAG: ${{ needs.version.outputs.tag }}
       HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
-    steps:
-      - uses: actions/checkout@v4
+    steps: &build-steps
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -188,12 +205,13 @@ jobs:
             libxdo-dev
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-11-14
         with:
+          toolchain: 1.99.0 # keep equal to rust-toolchain.toml
           targets: ${{ matrix.rust_targets }}
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: release-${{ matrix.platform }}
 
@@ -227,7 +245,7 @@ jobs:
           cat src-tauri/tauri.release.conf.json
 
       - name: Build and publish
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -245,7 +263,7 @@ jobs:
 
       - name: Upload installers (pull requests)
         if: env.PUBLISH != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Handrail-${{ env.VERSION }}-${{ runner.os }}
           if-no-files-found: error
@@ -257,6 +275,17 @@ jobs:
             target/release/bundle/deb/*.deb
             target/release/bundle/rpm/*.rpm
 
+  # Pull requests and manual runs from other refs (channel none): the same build, no release, no
+  # write permission. It does not wait for `checks`: it publishes nothing.
+  build-only:
+    needs: version
+    if: needs.version.outputs.channel == 'none'
+    name: Build (${{ matrix.name }})
+    strategy: *build-strategy
+    runs-on: ${{ matrix.platform }}
+    env: *build-env
+    steps: *build-steps
+
   promote:
     name: Make the release the latest
     needs: [version, build]
@@ -264,6 +293,8 @@ jobs:
     # every job below it, even after the builds succeeded.
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.version.outputs.channel == 'stable' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.version.outputs.tag }}
@@ -278,6 +309,8 @@ jobs:
     needs: [version, build]
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.version.outputs.channel == 'nightly' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.version.outputs.tag }}

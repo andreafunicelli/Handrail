@@ -6,9 +6,17 @@ class Sudo {
   /** The password dialog (one at a time). */
   ask = $state<{ password: string; error: string | null; busy: boolean } | null>(null);
   private answer: ((password: string | null) => void) | null = null;
+  /** Requests wait for the one before: there is a single dialog and a single answer. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   /** `fs` as root, or null when the user cancelled the password dialog. */
-  async elevate(fs: FileBackend): Promise<FileBackend | null> {
+  elevate(fs: FileBackend): Promise<FileBackend | null> {
+    const run = this.queue.then(() => this.elevateNow(fs));
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
+  private async elevateNow(fs: FileBackend): Promise<FileBackend | null> {
     if (!fs.asRoot) return null;
     try {
       return await fs.asRoot(null);

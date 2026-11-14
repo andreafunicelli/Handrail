@@ -35,3 +35,15 @@ function copyFallback(text: string): boolean {
   focused?.focus?.();
   return ok;
 }
+
+/** Empty the clipboard after `ms` if it still holds `text` (a secret just copied). When the
+ *  clipboard cannot be read it is left alone: it may hold something else by then. */
+export function clearClipboardLater(text: string, ms = 60_000) {
+  setTimeout(async () => {
+    try {
+      if ((await navigator.clipboard.readText()) === text) await navigator.clipboard.writeText("");
+    } catch {
+      /* unreadable: leave it */
+    }
+  }, ms);
+}

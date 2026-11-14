@@ -3,7 +3,8 @@
 //! Layout under the vault directory:
 //! - `manifest.json` — plaintext: format version, vault id, KDF params, salt, AEAD key check.
 //! - `items/<file_id>.enc` — one encrypted [`Envelope`] per logical item (incl. tombstones).
-//! - `snapshots/<ms>-<rand>.snap` — encrypted bundles of all item files (last 10 kept).
+//! - `snapshots/<ms>-<rand>.snap` — encrypted bundles of all item files (last 10 kept);
+//!   automatic ones (e.g. before a sync) are `<ms>-auto-<rand>.snap`, kept 10 on their own.
 //! - `local/` — device-local state, never synced: device id, conflict history.
 //!
 //! `manifest.json` and `items/` are what sync uploads ([`Vault::raw_files`]).
@@ -32,8 +33,10 @@ const LOCAL: &str = "local";
 const HISTORY: &str = "history";
 const KEY_CHECK_PLAINTEXT: &[u8] = b"aihubterm vault key check v1";
 const SNAPSHOT_MAGIC: &[u8] = b"AHTSNAP1";
-/// Number of snapshots kept on disk.
+/// Number of snapshots kept on disk, of each kind (manual and automatic).
 pub const MAX_SNAPSHOTS: usize = 10;
+/// Marks an automatic snapshot's name: `<ms>-auto-<rand>.snap` (a random part is hex, never this).
+const AUTO_SNAPSHOT: &str = "auto";
 /// Upper bounds for the Argon2 parameters a manifest may ask for.
 const MAX_KDF_MEMORY_KIB: u32 = 1024 * 1024;
 const MAX_KDF_PASSES: u32 = 16;
@@ -167,6 +170,8 @@ pub struct SnapshotInfo {
     pub name: String,
     pub created_ms: u64,
     pub size: u64,
+    /// Taken automatically (before a sync), not by the user.
+    pub auto: bool,
 }
 
 struct Entry {
@@ -216,6 +221,15 @@ fn item_aad(file_id: &str) -> Vec<u8> {
 
 fn is_file_id(s: &str) -> bool {
     s.len() == 32 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Whether `path` names a vault item file, `items/<32 lowercase hex>.enc`. Anything else under
+/// `items/` (a cloud drive's `<id> (1).enc` conflict copy, a stray file) is not part of the
+/// vault: sync neither uploads nor merges it.
+pub fn is_item_path(path: &str) -> bool {
+    path.strip_prefix("items/")
+        .and_then(|p| p.strip_suffix(".enc"))
+        .is_some_and(is_file_id)
 }
 
 fn read_opt(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -585,7 +599,8 @@ impl Vault {
 
     // ---------------------------------------------------------------- sync
 
-    /// The syncable files (`manifest.json` + `items/*.enc`). Works while locked.
+    /// The syncable files (`manifest.json` + the item files, see [`is_item_path`]). Works while
+    /// locked. Stray files in `items/` are left out (they show up in [`Vault::corrupt_files`]).
     pub fn raw_files(&self) -> Result<Vec<RawFile>> {
         let mut out = Vec::new();
         let mut push = |path: String, bytes: Vec<u8>| {
@@ -600,7 +615,9 @@ impl Vault {
             push(MANIFEST.to_string(), b);
         }
         for (stem, path) in sorted_dir(&self.dir.join(ITEMS), ".enc")? {
-            push(format!("{ITEMS}/{stem}.enc"), std::fs::read(path)?);
+            if is_file_id(&stem) {
+                push(format!("{ITEMS}/{stem}.enc"), std::fs::read(path)?);
+            }
         }
         Ok(out)
     }
@@ -654,6 +671,8 @@ impl Vault {
             atomic_write(&self.item_path(&file_id), bytes)?;
             self.revision += 1;
             if let Some(u) = self.unlocked.as_mut() {
+                // A good copy replaced a local file that failed to open.
+                u.corrupt.retain(|p| *p != path);
                 u.index.insert(file_id, remote);
             }
         }
@@ -751,13 +770,28 @@ impl Vault {
         Ok(info)
     }
 
-    /// Like [`Vault::snapshot`] without deleting old snapshots. For a tentative snapshot (e.g.
-    /// before a sync) that may be dropped again with [`Vault::delete_snapshot`]: pruning first
-    /// would lose an old snapshot for nothing. Call [`Vault::prune_snapshots`] to keep it.
+    /// Like [`Vault::snapshot`] without deleting old snapshots. For a tentative snapshot that
+    /// may be dropped again with [`Vault::delete_snapshot`]: pruning first would lose an old
+    /// snapshot for nothing. Call [`Vault::prune_snapshots`] to keep it.
     pub fn snapshot_unpruned(&self) -> Result<SnapshotInfo> {
+        self.write_snapshot(false)
+    }
+
+    /// An automatic snapshot (e.g. before a sync merge), unpruned like
+    /// [`Vault::snapshot_unpruned`]. Automatic snapshots are pruned separately from the user's,
+    /// so routine syncs never rotate those out.
+    pub fn snapshot_auto(&self) -> Result<SnapshotInfo> {
+        self.write_snapshot(true)
+    }
+
+    fn write_snapshot(&self, auto: bool) -> Result<SnapshotInfo> {
         let u = self.unlocked()?;
         let mut plain = Zeroizing::new(SNAPSHOT_MAGIC.to_vec());
         for (stem, path) in sorted_dir(&self.dir.join(ITEMS), ".enc")? {
+            // Only files that open: one bad entry would make the snapshot unrestorable.
+            if !u.index.contains_key(&stem) {
+                continue;
+            }
             let data = std::fs::read(path)?;
             for chunk in [stem.as_bytes(), &data[..]] {
                 plain.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
@@ -765,7 +799,12 @@ impl Vault {
             }
         }
         let created_ms = wall_now_ms();
-        let name = format!("{created_ms:015}-{}.snap", random_hex(4)?);
+        let kind = if auto {
+            format!("{AUTO_SNAPSHOT}-")
+        } else {
+            String::new()
+        };
+        let name = format!("{created_ms:015}-{kind}{}.snap", random_hex(4)?);
         let mut bytes = vec![FORMAT_VERSION as u8];
         bytes.extend(u.key.seal(&snapshot_aad(&name), &plain)?);
         atomic_write(&self.dir.join(SNAPSHOTS).join(&name), &bytes)?;
@@ -773,14 +812,17 @@ impl Vault {
             name,
             created_ms,
             size: bytes.len() as u64,
+            auto,
         })
     }
 
-    /// Delete all but the newest [`MAX_SNAPSHOTS`] snapshots.
+    /// Delete all but the newest [`MAX_SNAPSHOTS`] manual and the newest [`MAX_SNAPSHOTS`]
+    /// automatic snapshots.
     pub fn prune_snapshots(&self) -> Result<()> {
         let all = self.list_snapshots()?;
-        if all.len() > MAX_SNAPSHOTS {
-            for old in &all[..all.len() - MAX_SNAPSHOTS] {
+        for auto in [false, true] {
+            let kind: Vec<&SnapshotInfo> = all.iter().filter(|s| s.auto == auto).collect();
+            for old in kind.iter().rev().skip(MAX_SNAPSHOTS) {
                 std::fs::remove_file(self.dir.join(SNAPSHOTS).join(&old.name))?;
             }
         }
@@ -803,15 +845,13 @@ impl Vault {
     pub fn list_snapshots(&self) -> Result<Vec<SnapshotInfo>> {
         let mut out = Vec::new();
         for (stem, path) in sorted_dir(&self.dir.join(SNAPSHOTS), ".snap")? {
-            let created_ms = stem
-                .split('-')
-                .next()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
+            let mut parts = stem.split('-');
+            let created_ms = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
             out.push(SnapshotInfo {
                 name: format!("{stem}.snap"),
                 created_ms,
                 size: std::fs::metadata(path)?.len(),
+                auto: parts.next() == Some(AUTO_SNAPSHOT),
             });
         }
         Ok(out)
@@ -821,6 +861,13 @@ impl Vault {
     /// first. Differences are written as fresh edits (new HLC) so the rollback wins on sync;
     /// items absent from the snapshot become tombstones.
     pub fn restore_snapshot(&mut self, name: &str) -> Result<()> {
+        self.restore_snapshot_counted(name).map(|_| ())
+    }
+
+    /// [`Vault::restore_snapshot`], returning how many entries of the snapshot were skipped
+    /// because they do not open (stray or damaged files captured by older versions). Items
+    /// behind a skipped entry are left as they are now, never deleted.
+    pub fn restore_snapshot_counted(&mut self, name: &str) -> Result<usize> {
         check_snapshot_name(name)?;
         let u = self.unlocked()?;
         let bytes = read_opt(&self.dir.join(SNAPSHOTS).join(name))?
@@ -830,9 +877,21 @@ impl Vault {
         }
         let plain = u.key.open(&snapshot_aad(name), &bytes[1..])?;
         let mut target: HashMap<String, Envelope> = HashMap::new();
+        let mut unreadable: Vec<String> = Vec::new();
+        let mut skipped = 0;
         for (file_id, data) in parse_snapshot(&plain)? {
-            let entry = u.open_item(&file_id, data)?;
-            target.insert(file_id, entry.envelope()?);
+            match is_file_id(&file_id)
+                .then(|| u.open_item(&file_id, data))
+                .and_then(Result::ok)
+            {
+                Some(entry) => {
+                    target.insert(file_id, entry.envelope()?);
+                }
+                None => {
+                    skipped += 1;
+                    unreadable.push(file_id);
+                }
+            }
         }
         // Validate everything before changing anything.
         self.snapshot()?;
@@ -840,7 +899,7 @@ impl Vault {
         let u = self.unlocked()?;
         let mut writes: Vec<(String, String, Value, bool)> = Vec::new();
         for (fid, e) in &u.index {
-            if !e.deleted && !target.contains_key(fid) {
+            if !e.deleted && !target.contains_key(fid) && !unreadable.contains(fid) {
                 writes.push((e.item_type.clone(), e.id.clone(), Value::Null, true));
             }
         }
@@ -856,12 +915,20 @@ impl Vault {
         for (item_type, id, payload, deleted) in writes {
             self.write_envelope(&item_type, &id, payload, deleted)?;
         }
-        Ok(())
+        Ok(skipped)
     }
 }
 
+/// Snapshot names are ours (`<digits>-[auto-]<hex>.snap`): allow only that alphabet, so no
+/// name can reach outside `snapshots/` (`..`, separators, Windows drive prefixes like `C:`).
 fn check_snapshot_name(name: &str) -> Result<()> {
-    if name.contains(['/', '\\']) || !name.ends_with(".snap") {
+    let ok = name.strip_suffix(".snap").is_some_and(|stem| {
+        !stem.is_empty()
+            && stem
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    });
+    if !ok {
         return Err(VaultError::Invalid(format!("bad snapshot name {name}")));
     }
     Ok(())
@@ -893,12 +960,63 @@ fn parse_snapshot(plain: &[u8]) -> Result<Vec<(String, &[u8])>> {
     let mut rest = plain.strip_prefix(SNAPSHOT_MAGIC).ok_or_else(bad)?;
     let mut out = Vec::new();
     while !rest.is_empty() {
-        let name = std::str::from_utf8(take_chunk(&mut rest)?).map_err(|_| bad())?;
-        if !is_file_id(name) {
-            return Err(bad());
-        }
+        // A bad name is the caller's to skip: snapshots from older versions may hold strays.
+        let name = String::from_utf8_lossy(take_chunk(&mut rest)?).into_owned();
         let data = take_chunk(&mut rest)?;
-        out.push((name.to_string(), data));
+        out.push((name, data));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::item::Setting;
+
+    fn chunk(plain: &mut Vec<u8>, bytes: &[u8]) {
+        plain.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        plain.extend_from_slice(bytes);
+    }
+
+    /// Snapshots written before invalid entries were left out may hold strays and damaged
+    /// files: restoring one skips those and never deletes the items behind them.
+    #[test]
+    fn restore_skips_entries_that_do_not_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut v, _) = Vault::create(dir.path(), "pw", KdfParams::insecure_fast()).unwrap();
+        let setting = |k: &str, n: i64| Setting {
+            key: k.into(),
+            value: serde_json::json!(n),
+        };
+        v.put(&setting("kept", 1)).unwrap();
+        v.put(&setting("damaged", 2)).unwrap();
+        let files = v.raw_files().unwrap();
+        let u = v.unlocked().unwrap();
+        let damaged_id = u.key.file_id(Setting::TYPE, "damaged");
+        let mut plain = SNAPSHOT_MAGIC.to_vec();
+        for f in files.iter().filter(|f| is_item_path(&f.path)) {
+            let id = &f.path[6..38];
+            chunk(&mut plain, id.as_bytes());
+            chunk(
+                &mut plain,
+                if id == damaged_id { b"junk" } else { &f.bytes },
+            );
+        }
+        chunk(&mut plain, b"stray (1)");
+        chunk(&mut plain, b"junk");
+        let name = "000000000000001-0badc0de.snap";
+        let mut bytes = vec![FORMAT_VERSION as u8];
+        bytes.extend(u.key.seal(&snapshot_aad(name), &plain).unwrap());
+        atomic_write(&dir.path().join(SNAPSHOTS).join(name), &bytes).unwrap();
+
+        v.put(&setting("kept", 10)).unwrap();
+        assert_eq!(v.restore_snapshot_counted(name).unwrap(), 2);
+        let get = |v: &Vault, k: &str| v.get::<Setting>(k).unwrap().map(|s| s.value);
+        assert_eq!(get(&v, "kept"), Some(serde_json::json!(1)));
+        assert_eq!(
+            get(&v, "damaged"),
+            Some(serde_json::json!(2)),
+            "not deleted"
+        );
+    }
 }

@@ -5,11 +5,26 @@
 //! root `/` lists the drives. Paths from the page must be absolute and contain no `..`.
 
 use crate::sftp::{as_text, FileEntry, Stamp, TextFile, MAX_TEXT};
+use crate::state::AppState;
 use aht_core::{Error, Result};
 use aht_ssh::FileStamp;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
+
+/// Like the other file panes, this one works only while the vault is unlocked.
+async fn unlocked(state: &AppState) -> Result<()> {
+    if state.vault.lock().await.status().locked {
+        return Err(Error::VaultLocked);
+    }
+    Ok(())
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?
+}
 
 /// A page path as a path on this computer. `windows` selects the Windows form (`/C:/x`);
 /// on Windows `/` itself is the drive list and has no path (`None`).
@@ -149,8 +164,9 @@ pub fn local_home(app: AppHandle) -> Result<String> {
 
 /// The entries of a folder (on Windows, `/` lists the drives).
 #[tauri::command(rename_all = "snake_case")]
-pub async fn local_list(path: String) -> Result<Vec<FileEntry>> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<FileEntry>> {
+pub async fn local_list(state: State<'_, AppState>, path: String) -> Result<Vec<FileEntry>> {
+    unlocked(&state).await?;
+    blocking(move || -> Result<Vec<FileEntry>> {
         let Some(dir) = native_in(&path, WINDOWS)? else {
             return Ok(drives());
         };
@@ -163,7 +179,6 @@ pub async fn local_list(path: String) -> Result<Vec<FileEntry>> {
         Ok(out)
     })
     .await
-    .map_err(|e| Error::Other(e.to_string()))?
 }
 
 /// The drives that exist (Windows); nowhere else is `/` without a path.
@@ -185,24 +200,30 @@ fn drives() -> Vec<FileEntry> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn local_mkdir(path: String) -> Result<()> {
-    std::fs::create_dir(native(&path)?).map_err(io(&path))
+pub async fn local_mkdir(state: State<'_, AppState>, path: String) -> Result<()> {
+    unlocked(&state).await?;
+    blocking(move || std::fs::create_dir(native(&path)?).map_err(io(&path))).await
 }
 
 /// Rename or move inside this computer. Never replaces anything: a taken name is `exists`.
 #[tauri::command(rename_all = "snake_case")]
-pub fn local_rename(from: String, to: String) -> Result<()> {
-    let (src, dst) = (native(&from)?, native(&to)?);
-    if std::fs::symlink_metadata(&dst).is_ok() {
-        return Err(Error::Busy(aht_ssh::sftp::EXISTS.into()));
-    }
-    std::fs::rename(src, dst).map_err(io(&from))
+pub async fn local_rename(state: State<'_, AppState>, from: String, to: String) -> Result<()> {
+    unlocked(&state).await?;
+    blocking(move || {
+        let (src, dst) = (native(&from)?, native(&to)?);
+        if std::fs::symlink_metadata(&dst).is_ok() {
+            return Err(Error::Busy(aht_ssh::sftp::EXISTS.into()));
+        }
+        std::fs::rename(src, dst).map_err(io(&from))
+    })
+    .await
 }
 
 /// Delete a file, a link (never what it points to), or a folder with what it holds.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn local_remove(path: String) -> Result<()> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<()> {
+pub async fn local_remove(state: State<'_, AppState>, path: String) -> Result<()> {
+    unlocked(&state).await?;
+    blocking(move || -> Result<()> {
         let p = native(&path)?;
         if p.parent().is_none() {
             return Err(Error::Invalid(format!("{path} cannot be deleted")));
@@ -223,18 +244,31 @@ pub async fn local_remove(path: String) -> Result<()> {
         r.map_err(io(&path))
     })
     .await
-    .map_err(|e| Error::Other(e.to_string()))?
 }
 
 /// A local text file, for the comparison before a copy replaces it.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn local_read_text(path: String) -> Result<TextFile> {
-    let p = native(&path)?;
-    let m = tokio::fs::metadata(&p).await.map_err(io(&path))?;
-    if m.len() > MAX_TEXT {
+pub async fn local_read_text(state: State<'_, AppState>, path: String) -> Result<TextFile> {
+    unlocked(&state).await?;
+    blocking(move || read_text(&path)).await
+}
+
+fn read_text(path: &str) -> Result<TextFile> {
+    use std::io::Read;
+    let p = native(path)?;
+    let file = std::fs::File::open(&p).map_err(io(path))?;
+    let m = file.metadata().map_err(io(path))?;
+    // A device or a pipe reports no size and never ends.
+    if !m.is_file() {
+        return Err(Error::Invalid(format!("{path} is not a regular file")));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_TEXT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io(path))?;
+    if bytes.len() as u64 > MAX_TEXT {
         return Err(Error::Invalid(format!("{path} is too large to show")));
     }
-    let bytes = tokio::fs::read(&p).await.map_err(io(&path))?;
     let info = stamp(&p).unwrap_or(FileStamp {
         size: m.len(),
         modified: None,
@@ -242,7 +276,7 @@ pub async fn local_read_text(path: String) -> Result<TextFile> {
     });
     Ok(TextFile {
         stamp: Stamp::of(info, &bytes),
-        text: as_text(&path, bytes)?,
+        text: as_text(path, bytes)?,
     })
 }
 
@@ -361,6 +395,24 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(p, PathBuf::from("D:\\work\\x.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_only_regular_files_within_the_limit() {
+        assert!(read_text("/dev/zero")
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("not a regular file"));
+        let dir = std::env::temp_dir().join(format!("aht-local-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.txt");
+        std::fs::write(&f, b"hello\n").unwrap();
+        assert_eq!(read_text(&ui_path(&f)).unwrap().text, "hello\n");
+        std::fs::write(&f, vec![b'a'; MAX_TEXT as usize + 1]).unwrap();
+        assert!(read_text(&ui_path(&f)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

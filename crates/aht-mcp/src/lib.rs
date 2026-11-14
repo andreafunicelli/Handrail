@@ -15,7 +15,7 @@ pub use auth::McpToken;
 /// The server name advertised to clients; tools appear as `mcp__handrail__<tool>`.
 pub const SERVER_NAME: &str = handler::SERVER_NAME;
 
-use aht_core::terminal::{Actor, TerminalTools};
+use aht_core::terminal::{Actor, TerminalTools, TOOL_CALL_TIMEOUT_S};
 use aht_core::Result;
 use auth::{GuardState, TokenStore};
 use handler::{AhtHandler, Shared};
@@ -34,10 +34,10 @@ pub struct McpOptions {
     /// Port on 127.0.0.1; `None` = pick a free one.
     pub port: Option<u16>,
     /// Server-side safety cap for one tool call (including time spent waiting for approval).
-    /// Must exceed the longest `run_command` wait you want to support. Default 20 min.
+    /// Default [`TOOL_CALL_TIMEOUT_S`]: the approval wait plus the longest run, with margin.
     pub tool_timeout: Duration,
     /// An MCP session with no traffic for this long is dropped. Must exceed `tool_timeout`, since
-    /// a long-running call produces no session events. Default 30 min.
+    /// a long-running call produces no session events. Default `tool_timeout` + 10 min.
     pub session_idle_timeout: Duration,
     /// SSE keep-alive ping interval; keeps idle HTTP connections open during long calls.
     pub sse_keep_alive: Duration,
@@ -47,8 +47,8 @@ impl Default for McpOptions {
     fn default() -> Self {
         Self {
             port: None,
-            tool_timeout: Duration::from_secs(20 * 60),
-            session_idle_timeout: Duration::from_secs(30 * 60),
+            tool_timeout: Duration::from_secs(TOOL_CALL_TIMEOUT_S),
+            session_idle_timeout: Duration::from_secs(TOOL_CALL_TIMEOUT_S + 10 * 60),
             sse_keep_alive: Duration::from_secs(15),
         }
     }

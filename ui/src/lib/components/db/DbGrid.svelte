@@ -34,7 +34,7 @@
   let scroller = $state<HTMLDivElement>();
   let scrollTop = $state(0);
   let height = $state(400);
-  let editing = $state<{ r: number; c: number; text: string } | null>(null);
+  let editing = $state<{ r: number; c: number; text: string; start: string; touched: boolean } | null>(null);
   let editInput = $state<HTMLInputElement>();
 
   const widths = $derived(columnWidths(result));
@@ -63,7 +63,9 @@
     // Binary values are shown as hex and cannot be typed back.
     if (v !== null && v !== undefined && typeof v !== "string") return;
     selected = { r, c };
-    editing = { r, c, text: v ?? "" };
+    // An editor closed untouched changes nothing (NULL stays NULL, a new row's DEFAULT stays);
+    // typing and clearing it again is a deliberate empty string.
+    editing = { r, c, text: v ?? "", start: v ?? "", touched: false };
     await tick();
     editInput?.focus();
     editInput?.select();
@@ -71,9 +73,9 @@
 
   function commit() {
     if (!editing || !edits) return;
-    const { r, c, text } = editing;
+    const { r, c, text, start, touched } = editing;
     editing = null;
-    setCell(r, c, text);
+    if (touched || text !== start) setCell(r, c, text);
     scroller?.focus();
   }
 
@@ -168,6 +170,7 @@
               style:width="{widths[c]}px"
               bind:this={editInput}
               bind:value={editing.text}
+              oninput={() => editing && (editing.touched = true)}
               aria-label={result.columns[c].name}
               onkeydown={(e) => {
                 if (e.key === "Enter") (e.preventDefault(), commit());

@@ -6,6 +6,7 @@ use crate::verify::{HostKeyDecision, HostKeyVerifier};
 use aht_core::terminal::{Transport, TransportEvent};
 use aht_core::{Error, Result};
 use async_trait::async_trait;
+use russh::client::AuthResult;
 use russh::client::{
     self, ChannelOpenHandle, DisconnectReason, Handle, KeyboardInteractiveAuthResponse, Msg,
     Session,
@@ -13,7 +14,7 @@ use russh::client::{
 use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::{Algorithm, HashAlg, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};
-use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
+use russh::{AgentAuthError, Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, MethodKind};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -38,7 +39,8 @@ pub struct SshParams {
     pub jump: Vec<JumpHop>,
     /// Keepalive interval; after 3 unanswered keepalives the connection is considered dead.
     pub keepalive: Option<Duration>,
-    /// Timeout per hop for TCP connect + handshake + auth.
+    /// Timeout per hop for TCP connect + handshake + auth, not counting time spent waiting on
+    /// the user (host key confirmation, password or code prompts).
     pub connect_timeout: Duration,
     pub term: String,
     pub cols: u16,
@@ -89,6 +91,51 @@ fn get<T: Clone>(slot: &SharedSlot<T>) -> Option<T> {
     slot.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// Time a connection attempt spent waiting on the user, so the connect timeout covers only the
+/// network: someone comparing a fingerprint or typing a password and an OTP is not a dead host.
+#[derive(Clone, Default)]
+pub(crate) struct UserWait(Arc<Mutex<(Duration, Option<tokio::time::Instant>)>>);
+
+impl UserWait {
+    /// Run `fut` (a prompt) with the connect deadline paused.
+    pub(crate) async fn around<F: std::future::Future>(&self, fut: F) -> F::Output {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).1 = Some(tokio::time::Instant::now());
+        let out = fut.await;
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(since) = g.1.take() {
+            g.0 += since.elapsed();
+        }
+        out
+    }
+
+    /// Total time waited so far, including a prompt still open.
+    fn waited(&self) -> Duration {
+        let g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.0 + g.1.map_or(Duration::ZERO, |s| s.elapsed())
+    }
+}
+
+/// Like `tokio::time::timeout`, but the clock stops while `user` is waiting on a prompt.
+pub(crate) async fn timeout_excluding_user<F: std::future::Future>(
+    limit: Duration,
+    user: &UserWait,
+    fut: F,
+) -> Option<F::Output> {
+    let start = tokio::time::Instant::now();
+    tokio::pin!(fut);
+    loop {
+        // While a prompt is open the deadline keeps moving, so this never fires during one.
+        let deadline = start + limit + user.waited();
+        if deadline <= tokio::time::Instant::now() {
+            return None;
+        }
+        tokio::select! {
+            r = &mut fut => return Some(r),
+            _ = tokio::time::sleep_until(deadline) => {}
+        }
+    }
+}
+
 pub(crate) struct ClientHandler {
     host: String,
     port: u16,
@@ -96,6 +143,7 @@ pub(crate) struct ClientHandler {
     decision: SharedSlot<HostKeyDecision>,
     lost: SharedSlot<String>,
     remote: RemoteForwards,
+    user: UserWait,
 }
 
 impl client::Handler for ClientHandler {
@@ -109,7 +157,10 @@ impl client::Handler for ClientHandler {
             PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
             PublicKeyOrCertificate::Certificate(c) => PublicKey::from(c.public_key().clone()),
         };
-        let d = self.verifier.verify(&self.host, self.port, &key).await;
+        let d = self
+            .user
+            .around(self.verifier.verify(&self.host, self.port, &key))
+            .await;
         let ok = matches!(
             d,
             HostKeyDecision::Accept | HostKeyDecision::ReplaceAndTrust
@@ -218,6 +269,7 @@ impl SshConnection {
             let config = config_for(ep);
             let decision: SharedSlot<HostKeyDecision> = Default::default();
             let lost: SharedSlot<String> = Default::default();
+            let user = UserWait::default();
             let handler = ClientHandler {
                 host: ep.host.clone(),
                 port: ep.port,
@@ -225,6 +277,7 @@ impl SshConnection {
                 decision: decision.clone(),
                 lost: lost.clone(),
                 remote: remote.clone(),
+                user: user.clone(),
             };
             let prev = handles.last();
             let attempt = async {
@@ -256,12 +309,12 @@ impl SshConnection {
                     }
                     _ => net(format!("{}:{}: {e}", ep.host, ep.port)),
                 })?;
-                authenticate(&mut h, ep).await?;
+                authenticate(&mut h, ep, &user).await?;
                 Ok::<_, Error>(h)
             };
-            let h = tokio::time::timeout(params.connect_timeout, attempt)
+            let h = timeout_excluding_user(params.connect_timeout, &user, attempt)
                 .await
-                .map_err(|_| net(format!("{}:{}: connect timed out", ep.host, ep.port)))??;
+                .ok_or_else(|| net(format!("{}:{}: connect timed out", ep.host, ep.port)))??;
             handles.push(h);
             last_lost = Some(lost);
         }
@@ -373,21 +426,60 @@ impl SshConnection {
 
     /// Run `command` on a fresh session channel and collect its output.
     pub async fn exec(&self, command: &str) -> Result<ExecOutput> {
-        let ch = self.handle.channel_open_session().await.map_err(net)?;
+        self.exec_limited(command, None, usize::MAX).await
+    }
+
+    /// [`Self::exec`] for background reads that must not hang or flood memory: fails (and
+    /// closes the channel) after `timeout`, or once stdout + stderr exceed `max_output` bytes.
+    pub async fn exec_bounded(
+        &self,
+        command: &str,
+        timeout: Duration,
+        max_output: usize,
+    ) -> Result<ExecOutput> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        self.exec_limited(command, Some(deadline), max_output).await
+    }
+
+    async fn exec_limited(
+        &self,
+        command: &str,
+        deadline: Option<tokio::time::Instant>,
+        max_output: usize,
+    ) -> Result<ExecOutput> {
+        let ch = until(deadline, self.handle.channel_open_session())
+            .await?
+            .map_err(net)?;
         let (mut read, write) = ch.split();
-        write.exec(true, command).await.map_err(net)?;
-        let mut out = ExecOutput::default();
-        while let Some(msg) = read.wait().await {
-            match msg {
-                ChannelMsg::Data { data } => out.stdout.extend_from_slice(&data),
-                ChannelMsg::ExtendedData { data, ext: 1 } => out.stderr.extend_from_slice(&data),
-                ChannelMsg::ExitStatus { exit_status } => out.exit_status = Some(exit_status),
-                ChannelMsg::Failure => return Err(Error::Denied("exec request refused".into())),
-                ChannelMsg::Close => break,
-                _ => {}
+        let result = async {
+            until(deadline, write.exec(true, command))
+                .await?
+                .map_err(net)?;
+            let mut out = ExecOutput::default();
+            while let Some(msg) = until(deadline, read.wait()).await? {
+                match msg {
+                    ChannelMsg::Data { data } => out.stdout.extend_from_slice(&data),
+                    ChannelMsg::ExtendedData { data, ext: 1 } => {
+                        out.stderr.extend_from_slice(&data)
+                    }
+                    ChannelMsg::ExitStatus { exit_status } => out.exit_status = Some(exit_status),
+                    ChannelMsg::Failure => {
+                        return Err(Error::Denied("exec request refused".into()))
+                    }
+                    ChannelMsg::Close => break,
+                    _ => {}
+                }
+                if out.stdout.len() + out.stderr.len() > max_output {
+                    return Err(Error::Other("command output too large".into()));
+                }
             }
+            Ok(out)
         }
-        Ok(out)
+        .await;
+        if result.is_err() {
+            let _ = write.close().await;
+        }
+        result
     }
 
     /// Politely disconnect.
@@ -396,6 +488,19 @@ impl SshConnection {
             .handle
             .disconnect(russh::Disconnect::ByApplication, "bye", "en")
             .await;
+    }
+}
+
+/// `fut`, failing with a network error once `deadline` (if any) passes.
+async fn until<F: std::future::Future>(
+    deadline: Option<tokio::time::Instant>,
+    fut: F,
+) -> Result<F::Output> {
+    match deadline {
+        Some(d) => tokio::time::timeout_at(d, fut)
+            .await
+            .map_err(|_| net("command timed out")),
+        None => Ok(fut.await),
     }
 }
 
@@ -499,7 +604,11 @@ async fn rsa_hash(h: &Handle<ClientHandler>, alg: &Algorithm) -> Option<HashAlg>
     }
 }
 
-async fn authenticate(h: &mut Handle<ClientHandler>, ep: &JumpHop) -> Result<()> {
+async fn authenticate(
+    h: &mut Handle<ClientHandler>,
+    ep: &JumpHop,
+    user_wait: &UserWait,
+) -> Result<()> {
     let user = ep.user.clone();
     let ok = match &ep.auth {
         AuthMaterial::Password(pw) => h
@@ -518,7 +627,7 @@ async fn authenticate(h: &mut Handle<ClientHandler>, ep: &JumpHop) -> Result<()>
         }
         AuthMaterial::Agent => agent_auth(h, &user).await?,
         AuthMaterial::KeyboardInteractive(handler) => {
-            interactive_auth(h, ep, handler.as_ref()).await?
+            interactive_auth(h, ep, handler.as_ref(), user_wait).await?
         }
     };
     if ok {
@@ -538,6 +647,7 @@ async fn interactive_auth(
     h: &mut Handle<ClientHandler>,
     ep: &JumpHop,
     handler: &dyn KeyboardInteractiveHandler,
+    user_wait: &UserWait,
 ) -> Result<bool> {
     for attempt in 0..LOGIN_TRIES {
         let notice = if attempt == 0 { "" } else { LOGIN_RETRY };
@@ -546,10 +656,12 @@ async fn interactive_auth(
             .await
             .map_err(net)?;
         let mut asked = false;
-        loop {
+        let remaining = loop {
             match resp {
                 KeyboardInteractiveAuthResponse::Success => return Ok(true),
-                KeyboardInteractiveAuthResponse::Failure { .. } => break,
+                KeyboardInteractiveAuthResponse::Failure {
+                    remaining_methods, ..
+                } => break remaining_methods,
                 KeyboardInteractiveAuthResponse::InfoRequest {
                     name,
                     instructions,
@@ -568,7 +680,9 @@ async fn interactive_auth(
                         (false, n, false) => format!("{n}\n{instructions}"),
                     };
                     asked = true;
-                    let Some(answers) = handler.respond(&name, &instructions, &prompts).await
+                    let Some(answers) = user_wait
+                        .around(handler.respond(&name, &instructions, &prompts))
+                        .await
                     else {
                         return Err(Error::Auth("login cancelled".into()));
                     };
@@ -579,10 +693,13 @@ async fn interactive_auth(
                         .map_err(net)?;
                 }
             }
-        }
+        };
         if !asked {
             // Rejected before asking anything: the server does not offer keyboard-interactive.
-            return password_auth(h, ep, handler).await;
+            if !offers(&remaining, MethodKind::Password) {
+                return Ok(false);
+            }
+            return password_auth(h, ep, handler, user_wait).await;
         }
     }
     Ok(false)
@@ -593,6 +710,7 @@ async fn password_auth(
     h: &mut Handle<ClientHandler>,
     ep: &JumpHop,
     handler: &dyn KeyboardInteractiveHandler,
+    user_wait: &UserWait,
 ) -> Result<bool> {
     let prompt = [KiPrompt {
         prompt: format!("{}@{}'s password: ", ep.user, ep.host),
@@ -600,19 +718,30 @@ async fn password_auth(
     }];
     for attempt in 0..LOGIN_TRIES {
         let notice = if attempt == 0 { "" } else { LOGIN_RETRY };
-        let Some(answers) = handler.respond("", notice, &prompt).await else {
+        let Some(answers) = user_wait.around(handler.respond("", notice, &prompt)).await else {
             return Err(Error::Auth("login cancelled".into()));
         };
         let pw = answers.first().map(|a| a.as_str()).unwrap_or_default();
-        if h.authenticate_password(ep.user.clone(), pw)
+        match h
+            .authenticate_password(ep.user.clone(), pw)
             .await
             .map_err(net)?
-            .success()
         {
-            return Ok(true);
+            AuthResult::Success => return Ok(true),
+            // No point asking again for a password the server will not take.
+            AuthResult::Failure {
+                remaining_methods, ..
+            } if !offers(&remaining_methods, MethodKind::Password) => return Ok(false),
+            AuthResult::Failure { .. } => {}
         }
     }
     Ok(false)
+}
+
+/// Whether the server's list of methods that can continue includes `m`. An empty list (some
+/// servers send none) is taken as "unknown", not "no".
+fn offers(methods: &[MethodKind], m: MethodKind) -> bool {
+    methods.is_empty() || methods.contains(&m)
 }
 
 type DynAgent = AgentClient<Box<dyn AgentStream + Send + Unpin + 'static>>;
@@ -656,8 +785,13 @@ async fn agent_auth(h: &mut Handle<ClientHandler>, user: &str) -> Result<bool> {
             .authenticate_publickey_with(user, key, hash, &mut agent)
             .await
         {
-            Ok(r) if r.success() => return Ok(true),
+            Ok(AuthResult::Success) => return Ok(true),
+            // Each offer counts against the server's MaxAuthTries: stop once it gives up on keys.
+            Ok(AuthResult::Failure {
+                remaining_methods, ..
+            }) if !offers(&remaining_methods, MethodKind::PublicKey) => break,
             Ok(_) => {}
+            Err(AgentAuthError::Send(e)) => return Err(net(e)),
             Err(e) => tracing::debug!("agent key rejected: {e}"),
         }
     }
@@ -668,6 +802,26 @@ async fn agent_auth(h: &mut Handle<ClientHandler>, user: &str) -> Result<bool> {
 mod tests {
     use super::*;
     use russh::keys::EcdsaCurve;
+
+    #[tokio::test]
+    async fn connect_timeout_does_not_count_user_prompts() {
+        let ms = Duration::from_millis;
+        let user = UserWait::default();
+        // 300 ms waiting on the user + 20 ms of work fits a 100 ms limit...
+        let slow_user = async {
+            user.around(tokio::time::sleep(ms(300))).await;
+            tokio::time::sleep(ms(20)).await;
+        };
+        assert!(timeout_excluding_user(ms(100), &user, slow_user)
+            .await
+            .is_some());
+        // ...300 ms of network does not.
+        let user = UserWait::default();
+        let slow_net = tokio::time::sleep(ms(300));
+        assert!(timeout_excluding_user(ms(100), &user, slow_net)
+            .await
+            .is_none());
+    }
 
     #[test]
     fn known_host_key_types_come_first() {

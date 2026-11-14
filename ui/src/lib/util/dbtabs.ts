@@ -1,5 +1,7 @@
 /** Query tabs and query history of a database connection, kept in the browser's local storage
  *  (per connection; SQL text only, never results). */
+import { t } from "../i18n";
+import { redact } from "./opslog";
 
 export interface QueryTabDoc {
   key: string;
@@ -49,7 +51,7 @@ export function loadTabs(store: Storage, conn: string, newKey: () => string): { 
   } catch {
     // Not readable: start empty.
   }
-  return { tabs: [{ key: newKey(), name: "Query 1", sql }], current: 0 };
+  return { tabs: [{ key: newKey(), name: t("db.queryName", { n: 1 }), sql }], current: 0 };
 }
 
 export function saveTabs(store: Storage, conn: string, tabs: QueryTabDoc[], current: number) {
@@ -59,8 +61,8 @@ export function saveTabs(store: Storage, conn: string, tabs: QueryTabDoc[], curr
 /** The next free "Query N" name. */
 export function nextTabName(tabs: QueryTabDoc[]): string {
   let n = tabs.length + 1;
-  while (tabs.some((t) => t.name === `Query ${n}`)) n++;
-  return `Query ${n}`;
+  while (tabs.some((x) => x.name === t("db.queryName", { n }))) n++;
+  return t("db.queryName", { n });
 }
 
 export function loadHistory(store: Storage, conn: string): HistoryEntry[] {
@@ -68,8 +70,18 @@ export function loadHistory(store: Storage, conn: string): HistoryEntry[] {
   return Array.isArray(list) ? list.filter((e) => typeof e?.sql === "string") : [];
 }
 
+/** Statements that may carry a password (CREATE/ALTER USER or ROLE, SET PASSWORD, IDENTIFIED BY). */
+const CREDENTIAL_SQL = /\bidentified\b|\bpassword\b/i;
+
+/** What history keeps of `sql`: the text, with passwords masked when it looks like it holds one
+ *  (history is plain local storage, outside the vault). */
+export function historySql(sql: string): string {
+  return CREDENTIAL_SQL.test(sql) ? redact(sql) : sql;
+}
+
 /** Newest first; running the same SQL again moves it to the top. */
 export function addHistory(store: Storage, conn: string, entry: HistoryEntry): HistoryEntry[] {
+  entry = { ...entry, sql: historySql(entry.sql) };
   const list = [entry, ...loadHistory(store, conn).filter((e) => e.sql !== entry.sql)].slice(0, HISTORY_MAX);
   write(store, historyKey(conn), list);
   return list;

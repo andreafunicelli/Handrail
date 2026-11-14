@@ -128,10 +128,13 @@ impl Builder {
                 passphrase: None,
             };
         }
-        let content = match std::fs::read(&p) {
+        // Key files are a few KiB; the cap stops a bogus path (e.g. a disk image) being slurped.
+        let content = match crate::text::read_capped(&p, 1024 * 1024) {
             Ok(b) => String::from_utf8_lossy(&b).into_owned(),
             Err(_) => {
-                self.warn(format!("{conn_name}: key file '{path}' not found"));
+                self.warn(format!(
+                    "{conn_name}: key file '{path}' not found or unreadable"
+                ));
                 note(notes);
                 return SshAuth::Prompt;
             }
@@ -193,6 +196,7 @@ impl Builder {
             notes,
             tunnels: Vec::new(),
             rdp_admin: false,
+            rdp_allow_tls_login: false,
             // Imported servers get an OS icon from their kind: SSH reads as Linux, RDP as
             // Windows. The user can change it in the editor.
             icon: Some("linux".into()),

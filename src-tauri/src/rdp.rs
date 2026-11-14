@@ -32,6 +32,9 @@ const ERROR: u8 = 0x13;
 const TERMINATED: u8 = 0x14;
 /// Input batches larger than this are refused (the helper allows 1 MiB per message).
 const MAX_INPUT: usize = 256 * 1024;
+/// Larger helper messages end the session: a full 8192×8192 frame (RDP's largest desktop) is
+/// 256 MiB, with a little room for the rectangles' headers.
+const MAX_HELPER_MESSAGE: usize = (256 << 20) + (1 << 20);
 
 #[derive(Default)]
 pub struct RdpHub {
@@ -247,6 +250,7 @@ pub async fn rdp_open(
             "height": size.height,
             "scale": size.scale,
             "admin": conn.rdp_admin,
+            "allow_tls_login": conn.rdp_allow_tls_login,
         })
         .to_string(),
     );
@@ -267,7 +271,12 @@ pub async fn rdp_open(
             if stdout.read_exact(&mut len).await.is_err() {
                 break;
             }
-            let mut msg = vec![0u8; u32::from_le_bytes(len) as usize];
+            let len = u32::from_le_bytes(len) as usize;
+            if len > MAX_HELPER_MESSAGE {
+                tracing::warn!("the RDP component sent a message of {len} bytes");
+                break;
+            }
+            let mut msg = vec![0u8; len];
             if msg.is_empty() || stdout.read_exact(&mut msg).await.is_err() {
                 break;
             }

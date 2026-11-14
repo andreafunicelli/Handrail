@@ -206,7 +206,12 @@ impl OpenAiDecoder {
     fn stop(&mut self, out: &mut Vec<ProviderEvent>) {
         let had_tools = self.had_tools;
         if let Some((input, output)) = self.usage.take() {
-            out.push(ProviderEvent::Usage { input, output });
+            out.push(ProviderEvent::Usage {
+                input,
+                output,
+                cache_read: 0,
+                cache_write: 0,
+            });
         }
         let reason = match self.finish.as_deref() {
             Some("tool_calls") | Some("function_call") => StopReason::ToolUse,

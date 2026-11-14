@@ -54,6 +54,8 @@ type Shared<T> = Arc<Mutex<Option<T>>>;
 pub struct LocalPty {
     master: Shared<Box<dyn MasterPty + Send>>,
     writer: Shared<Box<dyn Write + Send>>,
+    /// Writes queue here (tokio's mutex is FIFO) so they reach the PTY in call order.
+    write_turn: tokio::sync::Mutex<()>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
 }
 
@@ -137,6 +139,7 @@ pub fn spawn_local(spec: LocalShellSpec) -> Result<(LocalPty, mpsc::Receiver<Tra
         LocalPty {
             master,
             writer,
+            write_turn: tokio::sync::Mutex::new(()),
             killer: Mutex::new(killer),
         },
         rx,
@@ -146,11 +149,18 @@ pub fn spawn_local(spec: LocalShellSpec) -> Result<(LocalPty, mpsc::Receiver<Tra
 #[async_trait]
 impl Transport for LocalPty {
     async fn write(&self, data: &[u8]) -> Result<()> {
-        let mut g = self.writer.lock().unwrap_or_else(|e| e.into_inner());
-        let w = g.as_mut().ok_or_else(|| Error::Io("pty closed".into()))?;
-        w.write_all(data)?;
-        w.flush()?;
-        Ok(())
+        let _turn = self.write_turn.lock().await;
+        let (writer, data) = (self.writer.clone(), data.to_vec());
+        // A full PTY buffer (the program is not reading) blocks: keep that off the runtime.
+        tokio::task::spawn_blocking(move || {
+            let mut g = writer.lock().unwrap_or_else(|e| e.into_inner());
+            let w = g.as_mut().ok_or_else(|| Error::Io("pty closed".into()))?;
+            w.write_all(&data)?;
+            w.flush()?;
+            Ok(())
+        })
+        .await
+        .map_err(pty_err)?
     }
 
     async fn resize(&self, cols: u16, rows: u16) -> Result<()> {

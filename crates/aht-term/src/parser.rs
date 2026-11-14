@@ -25,16 +25,25 @@ pub enum TrackEvent {
     Kv(String, String),
 }
 
+/// Longest line the line model keeps; longer output is split into several lines. Cursor moves
+/// are clamped to it, so `CSI 65535 C` cannot make the next character pad a huge line.
+const MAX_LINE: usize = 4096;
+
 #[derive(Default)]
 struct Perf {
     events: Vec<TrackEvent>,
     line: Vec<char>,
     col: usize,
     alt: bool,
+    /// See [`Tracker::require_tags`].
+    tags: Option<Vec<String>>,
 }
 
 impl Perf {
     fn put_char(&mut self, c: char) {
+        if self.col >= MAX_LINE {
+            self.commit();
+        }
         if self.col < self.line.len() {
             self.line[self.col] = c;
         } else {
@@ -79,8 +88,7 @@ impl vte::Perform for Perf {
             b'\r' => self.col = 0,
             0x08 => self.col = self.col.saturating_sub(1),
             b'\t' => {
-                let next = (self.col / 8 + 1) * 8;
-                while self.col < next {
+                for _ in 0..8 - self.col % 8 {
                     self.put_char(' ');
                 }
             }
@@ -123,10 +131,10 @@ impl vte::Perform for Perf {
                 }
                 _ => self.line.clear(),
             },
-            'C' => self.col += param(params, 0, 1),
+            'C' => self.col = (self.col + param(params, 0, 1)).min(MAX_LINE),
             'D' => self.col = self.col.saturating_sub(param(params, 0, 1)),
-            'G' => self.col = param(params, 0, 1) - 1,
-            'H' | 'f' => self.col = param(params, 1, 1) - 1,
+            'G' => self.col = (param(params, 0, 1) - 1).min(MAX_LINE),
+            'H' | 'f' => self.col = (param(params, 1, 1) - 1).min(MAX_LINE),
             'P' => {
                 let n = param(params, 0, 1);
                 if self.col < self.line.len() {
@@ -135,11 +143,11 @@ impl vte::Perform for Perf {
                 }
             }
             '@' => {
-                let n = param(params, 0, 1);
+                let n = param(params, 0, 1).min(MAX_LINE);
                 if self.col < self.line.len() {
-                    for _ in 0..n {
-                        self.line.insert(self.col, ' ');
-                    }
+                    self.line
+                        .splice(self.col..self.col, std::iter::repeat_n(' ', n));
+                    self.line.truncate(MAX_LINE);
                 }
             }
             'X' => {
@@ -156,12 +164,20 @@ impl vte::Perform for Perf {
         let Some(&first) = params.first() else {
             return;
         };
+        // Our hooks append `;aht=<nonce>` as the last parameter of their marks and facts.
+        let tag = params.last().and_then(|p| p.strip_prefix(b"aht="));
+        let params = &params[..params.len() - usize::from(tag.is_some())];
+        let tag_ok = match &self.tags {
+            None => true,
+            Some(ok) => tag.is_some_and(|t| ok.iter().any(|n| n.as_bytes() == t)),
+        };
         let text = |i: usize| {
             params
                 .get(i)
                 .map(|p| String::from_utf8_lossy(p).into_owned())
         };
         match first {
+            b"133" | b"633" if !tag_ok => {}
             b"133" | b"633" => match params.get(1).and_then(|p| p.first()) {
                 Some(b'A') => self.events.push(TrackEvent::PromptStart),
                 Some(b'B') => self.events.push(TrackEvent::PromptEnd),
@@ -192,7 +208,7 @@ impl vte::Perform for Perf {
                     self.events.push(TrackEvent::SentinelBegin(n.to_string()));
                 } else if let Some(n) = rest.strip_prefix("AhtEnd=") {
                     self.events.push(TrackEvent::SentinelEnd(n.to_string()));
-                } else if let Some(kv) = rest.strip_prefix("AhtKV=") {
+                } else if let Some(kv) = rest.strip_prefix("AhtKV=").filter(|_| tag_ok) {
                     if let Some((k, v)) = kv.split_once('=') {
                         self.events
                             .push(TrackEvent::Kv(k.to_string(), v.trim().to_string()));
@@ -268,6 +284,13 @@ impl Tracker {
 
     pub fn in_alt_screen(&self) -> bool {
         self.perf.alt
+    }
+
+    /// `Some(nonces)`: OSC 133/633 marks and `AhtKV` facts count only when tagged `;aht=<n>`
+    /// with one of `nonces`, so program output cannot forge them. `None`: untagged ones count
+    /// too (a shell with its own OSC 133 integration that we did not hook).
+    pub fn require_tags(&mut self, nonces: Option<Vec<String>>) {
+        self.perf.tags = nonces;
     }
 }
 
@@ -461,6 +484,26 @@ mod tests {
     }
 
     #[test]
+    fn hostile_cursor_moves_and_long_lines_stay_bounded() {
+        let mut t = Tracker::new();
+        let mut ev = Vec::new();
+        for _ in 0..10_000 {
+            ev.extend(t.feed(b"\x1b[65535Cx\x1b[65535@"));
+        }
+        ev.extend(t.feed(b"\x1b[9999;65535Hy\t"));
+        assert!(t.current_line().chars().count() <= MAX_LINE);
+        assert!(ev.iter().all(|e| match e {
+            TrackEvent::Line(l) => l.chars().count() <= MAX_LINE,
+            _ => true,
+        }));
+        // A line with no newline is split, not grown without bound; nothing is lost.
+        let mut t = Tracker::new();
+        let ev = t.feed("a".repeat(MAX_LINE * 2 + 5).as_bytes());
+        assert_eq!(ev.len(), 2);
+        assert_eq!(t.current_line(), "aaaaa");
+    }
+
+    #[test]
     fn private_sentinels() {
         let ev = feed_split(b"\x1b]1337;AhtBegin=n1\x07\x1b]1337;AhtKV=os=Ubuntu 22.04; LTS\x07\x1b]1337;AhtEnd=n1\x07");
         assert_eq!(
@@ -469,6 +512,26 @@ mod tests {
                 TrackEvent::SentinelBegin("n1".into()),
                 TrackEvent::Kv("os".into(), "Ubuntu 22.04; LTS".into()),
                 TrackEvent::SentinelEnd("n1".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn tagged_marks() {
+        let data = b"\x1b]133;D;0\x07\x1b]133;D;2;aht=n1\x07\x1b]133;A;aht=zz\x07\x1b]1337;AhtKV=os=x; y;aht=n1\x07\x1b]1337;AhtKV=os=fake\x07";
+        let mut t = Tracker::new();
+        assert_eq!(
+            t.feed(data).len(),
+            5,
+            "untagged accepted without require_tags"
+        );
+        let mut t = Tracker::new();
+        t.require_tags(Some(vec!["n1".into()]));
+        assert_eq!(
+            t.feed(data),
+            vec![
+                TrackEvent::CommandEnd(Some(2)),
+                TrackEvent::Kv("os".into(), "x; y".into()),
             ]
         );
     }

@@ -3,8 +3,7 @@
   import { t, type MessageKey } from "../../i18n";
   import { agent, type ChatItem } from "../../stores/agent.svelte";
   import type { CommandResult } from "../../api/types";
-  import { sessions } from "../../stores/sessions.svelte";
-  import { terminals } from "../../terminal/host";
+  import { fmtMs, jumpToTerminal } from "./target";
 
   let { item, sessionId }: { item: Extract<ChatItem, { kind: "tool" }>; sessionId: string } = $props();
   let open = $state(false);
@@ -22,13 +21,6 @@
     result ? result.output : item.output == null ? "" : typeof item.output === "string" ? item.output : JSON.stringify(item.output, null, 2),
   );
 
-  function fmtMs(ms: number) {
-    return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
-  }
-  function jump() {
-    sessions.focusSession(sessionId);
-    requestAnimationFrame(() => terminals.peek(sessionId)?.jumpTo(command));
-  }
 </script>
 
 <div class="tool" class:running={status === "running"}>
@@ -53,7 +45,7 @@
         </button>
       {/if}
       {#if isCommand}
-        <button class="link" onclick={jump}><Icon name="jump" size={11} />{t("tool.jump")}</button>
+        <button class="link" onclick={() => jumpToTerminal(sessionId, command)}><Icon name="jump" size={11} />{t("tool.jump")}</button>
       {/if}
     </div>
   {:else if !isCommand && item.done && outputText}

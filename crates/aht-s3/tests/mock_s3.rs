@@ -161,3 +161,17 @@ async fn exists_and_streams_without_files() {
     let put = got.iter().find(|r| r.method.as_str() == "PUT").unwrap();
     assert_eq!(put.body, b"from a server");
 }
+
+#[tokio::test]
+async fn listing_stops_at_the_page_limit() {
+    let server = MockServer::start().await;
+    // A server that never stops paginating.
+    Mock::given(method("GET"))
+        .and(path("/b"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(PAGE1))
+        .expect(100)
+        .mount(&server)
+        .await;
+    let l = client(&server).list("b", "logs/").await.unwrap();
+    assert!(l.truncated);
+}

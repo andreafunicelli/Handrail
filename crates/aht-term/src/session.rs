@@ -157,6 +157,8 @@ struct Inner {
     last_output: Instant,
     started: Instant,
     learned_prompt: Option<String>,
+    /// The line as drawn at the last `133;B` (end of prompt), before anything was typed.
+    prompt_line: Option<String>,
     user_dirty: bool,
     pending_user: Vec<u8>,
     capture: Option<Capture>,
@@ -315,6 +317,30 @@ impl Inner {
         self.capture.as_ref().is_some_and(|c| !c.done)
     }
 
+    /// The foreground program is one an agent's `run_command` started and the user has not
+    /// taken over. False at a shell prompt (Limited mode: a prompt-looking line counts as one,
+    /// since the capture ends only after quiescence).
+    fn agent_owns_foreground(&self) -> bool {
+        let running = self
+            .capture
+            .as_ref()
+            .is_some_and(|c| !c.done && !matches!(c.status, CapStatus::Interrupted(_)));
+        running
+            && !(self.info.integration != IntegrationMode::Full
+                && !self.tracker.in_alt_screen()
+                && self.prompt_matches(&self.tracker.current_line()))
+    }
+
+    /// The user has typed part of a line at the prompt (more than the bare prompt).
+    fn prompt_dirty(&self) -> bool {
+        let cur = self.tracker.current_line();
+        let bare = [&self.prompt_line, &self.learned_prompt]
+            .into_iter()
+            .flatten()
+            .any(|p| p.trim_end() == cur.trim_end());
+        self.user_dirty && !bare
+    }
+
     fn on_line(&mut self, sh: &Shared, line: String, writes: &mut Vec<Vec<u8>>) {
         if let Init::Probing { .. } = self.init {
             if let Some(kind) = hooks::parse_probe(&line) {
@@ -331,6 +357,7 @@ impl Inner {
                             nonce,
                             deadline: Instant::now() + sh.cfg.detect_timeout,
                         };
+                        self.sync_tags();
                         let mut w = hook.into_bytes();
                         w.push(b'\r');
                         writes.push(w);
@@ -361,9 +388,14 @@ impl Inner {
         match ev {
             TrackEvent::Line(l) => self.on_line(sh, l, writes),
             TrackEvent::PromptStart | TrackEvent::PromptEnd => {
+                if ev == TrackEvent::PromptEnd {
+                    self.prompt_line = Some(self.tracker.current_line());
+                }
                 if self.init == Init::WaitPrompt {
                     // The shell already has OSC 133 integration (e.g. fish 4, user's own rc).
+                    // Its marks carry no nonce: an untagged context keeps them accepted.
                     self.init = Init::Done;
+                    self.push_ctx(None);
                     self.set_integration(sh, IntegrationMode::Full);
                 }
                 if !self.hidden() && !self.tracker.in_alt_screen() {
@@ -437,8 +469,9 @@ impl Inner {
                 }
             }
             TrackEvent::Cwd(p) => {
-                if self.info.cwd.as_deref() != Some(&p) {
-                    self.info.cwd = Some(p);
+                let p = fact(&p, 512, |c| !c.is_control());
+                if self.info.cwd != p {
+                    self.info.cwd = p;
                     self.info_changed(sh);
                 }
             }
@@ -479,17 +512,19 @@ impl Inner {
                 }
             }
             TrackEvent::Kv(k, v) => {
-                let v = (!v.is_empty()).then_some(v);
+                // Session facts come only from our hook, which prints them nonce-tagged inside
+                // its hidden window; any other output claiming them is ignored. They reach the
+                // agent's system prompt, so only short, single-line, plain values are kept.
+                let injecting = matches!(self.init, Init::Injecting { .. });
+                let name = |c: char| c.is_alphanumeric() || "._-@+$".contains(c);
                 match k.as_str() {
-                    "os" => self.info.os = v,
-                    "user" => self.info.user = v,
-                    "host" => self.info.host = v,
-                    "shell" => self.info.shell = v,
-                    "ctx" => {
-                        if let Some(n) = v {
-                            self.on_ctx(sh, &n);
-                        }
+                    "os" if injecting => {
+                        self.info.os = fact(&v, 128, |c| name(c) || " /(),:".contains(c))
                     }
+                    "user" if injecting => self.info.user = fact(&v, 128, |c| name(c) || c == ' '),
+                    "host" if injecting => self.info.host = fact(&v, 128, name),
+                    "shell" if injecting => self.info.shell = fact(&v, 32, name),
+                    "ctx" if !v.is_empty() => self.on_ctx(sh, &v),
                     _ => {}
                 }
             }
@@ -516,6 +551,7 @@ impl Inner {
         } else if self.info.integration != IntegrationMode::Full {
             self.set_integration(sh, IntegrationMode::Limited);
         }
+        self.sync_tags();
         self.set_state(sh, SessionState::Idle);
         self.info_changed(sh);
         if !self.pending_user.is_empty() {
@@ -631,6 +667,21 @@ impl Inner {
             os: self.info.os.clone(),
             learned_prompt: self.learned_prompt.clone(),
         });
+        self.sync_tags();
+    }
+
+    /// Nonces the tracker requires on OSC 133 marks and session facts: every shell we hooked on
+    /// the stack plus the one being hooked. While a shell we did not hook is on the stack (its own
+    /// OSC 133 integration, or a nested shell the hook failed in), it cannot know a nonce, so
+    /// untagged marks are accepted, as they are before any hook.
+    fn sync_tags(&mut self) {
+        let mut tags: Option<Vec<String>> =
+            self.ctx_stack.iter().map(|c| c.nonce.clone()).collect();
+        if let (Some(t), Init::Injecting { nonce, .. }) = (&mut tags, &self.init) {
+            t.push(nonce.clone());
+        }
+        self.tracker
+            .require_tags(tags.filter(|t: &Vec<String>| !t.is_empty()));
     }
 
     /// A hooked shell printed its prompt tag. If it is an outer shell, the user left the nested
@@ -647,6 +698,7 @@ impl Inner {
             return;
         }
         self.ctx_stack.truncate(pos + 1);
+        self.sync_tags();
         let c = self.ctx_stack[pos].clone();
         self.shell = c.shell;
         self.info.shell = c.shell_name;
@@ -694,7 +746,7 @@ impl TermSession {
             host: None,
             integration: IntegrationMode::Unknown,
             state: SessionState::Connecting,
-            approval_mode: cfg.policy.mode,
+            approval_mode: cfg.policy.effective_mode(),
             ended: None,
         };
         let inner = Inner {
@@ -707,6 +759,7 @@ impl TermSession {
             last_output: now,
             started: now,
             learned_prompt: None,
+            prompt_line: None,
             user_dirty: false,
             pending_user: Vec::new(),
             capture: None,
@@ -765,7 +818,7 @@ impl TermSession {
 
     pub fn set_policy(&self, policy: Policy) {
         let mut g = self.s.inner.lock().unwrap();
-        g.info.approval_mode = policy.mode;
+        g.info.approval_mode = policy.effective_mode();
         g.info.env = policy.env;
         g.policy = policy;
     }
@@ -828,19 +881,7 @@ impl TermSession {
     /// Send control keys on behalf of an agent (only [`ControlKey`] bytes can be sent).
     pub async fn send_keys(&self, actor: &Actor, keys: &[ControlKey]) -> Result<()> {
         self.check_agent(actor)?;
-        // At an idle prompt, Enter/Up/Down/Tab could submit half-typed input or re-run history
-        // without approval. Keys are for interrupting or steering a running program only.
-        let submits = keys.iter().any(|k| {
-            matches!(
-                k,
-                ControlKey::Enter | ControlKey::Up | ControlKey::Down | ControlKey::Tab
-            )
-        });
-        if submits && self.state() == SessionState::Idle {
-            return Err(Error::Denied(
-                "the shell is at a prompt; use run_command to run commands".into(),
-            ));
-        }
+        check_keys(keys, self.s.inner.lock().unwrap().agent_owns_foreground())?;
         let bytes: Vec<u8> = keys
             .iter()
             .flat_map(|k| k.bytes().iter().copied())
@@ -894,11 +935,14 @@ impl TermSession {
         let _guard = self.s.agent_lock.try_lock().map_err(|_| {
             Error::Busy("another agent command is already running in this session".into())
         })?;
-        let timeout = Duration::from_secs(req.timeout_s.unwrap_or(60).clamp(1, 600));
-        let started = Instant::now();
+        let timeout = Duration::from_secs(
+            req.timeout_s
+                .unwrap_or(60)
+                .clamp(1, aht_core::terminal::MAX_COMMAND_TIMEOUT_S),
+        );
 
         let policy = self.policy();
-        let verdict = policy.evaluate(&original);
+        let verdict = policy.evaluate_for(self.s.inner.lock().unwrap().shell, &original);
         let command = if verdict.needs_approval {
             let ar = ApprovalRequest {
                 approval_id: ApprovalId::new(),
@@ -923,7 +967,7 @@ impl TermSession {
                         output: String::new(),
                         truncated: false,
                         output_id: None,
-                        duration_ms: started.elapsed().as_millis() as u64,
+                        duration_ms: 0,
                         command: original,
                         note: Some(message.unwrap_or_else(|| "the user denied the command".into())),
                     });
@@ -933,9 +977,9 @@ impl TermSession {
             original.clone()
         };
 
-        // Wait for the shell to be at a prompt.
-        let deadline = Instant::now() + timeout;
-        self.wait_until(deadline, |g| {
+        // The timeout covers waiting for the prompt and the run, not the user's approval.
+        let started = Instant::now();
+        self.wait_until(started + timeout, |g| {
             g.info.state == SessionState::Disconnected
                 || g.info.state == SessionState::FullScreen
                 || (g.init == Init::Done && g.info.state == SessionState::Idle)
@@ -952,7 +996,25 @@ impl TermSession {
                         "a full-screen program is active in the terminal".into(),
                     ))
                 }
-                SessionState::Idle if g.init == Init::Done => {}
+                SessionState::Idle if g.init == Init::Done => {
+                    if g.prompt_dirty() {
+                        // Typing after the user's partial line would run `<their text><command>`.
+                        return Ok(CommandResult {
+                            state: CommandState::NeedsUser,
+                            exit_code: None,
+                            output: String::new(),
+                            truncated: false,
+                            output_id: None,
+                            duration_ms: started.elapsed().as_millis() as u64,
+                            command,
+                            note: Some(
+                                "the user is typing at the prompt; ask them to finish or clear \
+the line, then run the command again"
+                                    .into(),
+                            ),
+                        });
+                    }
+                }
                 _ => {
                     let screen = g.tracker.current_line();
                     let screen = screen.trim();
@@ -1076,6 +1138,61 @@ the last line on screen is {screen:?}. Ask the user before interrupting it."
     }
 }
 
+/// `v` if it is non-empty, at most `max` chars and made only of `ok` characters (never control or
+/// Unicode format characters); else `None`.
+fn fact(v: &str, max: usize, ok: impl Fn(char) -> bool) -> Option<String> {
+    let v = v.trim();
+    (!v.is_empty()
+        && v.chars().count() <= max
+        && v.chars()
+            .all(|c| ok(c) && !c.is_control() && !is_format_char(c)))
+    .then(|| v.to_string())
+}
+
+/// Unicode general category Cf (format): bidi controls, zero-width characters, tag characters
+/// and the like. They render invisibly and can make a command look different from what runs.
+fn is_format_char(c: char) -> bool {
+    matches!(c as u32,
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2
+        | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+        | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F
+        | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
+/// Keys an agent may send. Enter, Ctrl-D, Up/Down (shell history) and Tab could run or change a
+/// line at a shell prompt without approval, so they only go to a program the agent's own
+/// command started, and never after Ctrl-C/Ctrl-Z/Ctrl-D in the same call (that program may be
+/// gone by then and the prompt back), nor Enter right after Up/Down (re-running history).
+fn check_keys(keys: &[ControlKey], agent_owns: bool) -> Result<()> {
+    use ControlKey::*;
+    let submits = |k: &ControlKey| matches!(k, Enter | CtrlD | Up | Down | Tab);
+    if !agent_owns && keys.iter().any(submits) {
+        return Err(Error::Denied(
+            "enter, ctrl_d, up, down and tab only go to a program started by your own run_command, and none is running; use run_command to run commands"
+                .into(),
+        ));
+    }
+    let mut ended = false;
+    let mut history = false;
+    for k in keys {
+        if ended && submits(k) {
+            return Err(Error::Denied(
+                "keys after ctrl_c, ctrl_z or ctrl_d may reach the shell prompt; send them in a separate call once the program is still running"
+                    .into(),
+            ));
+        }
+        if history && *k == Enter {
+            return Err(Error::Denied(
+                "up/down followed by enter could re-run shell history; send them in separate calls"
+                    .into(),
+            ));
+        }
+        ended |= matches!(k, CtrlC | CtrlZ | CtrlD);
+        history |= matches!(k, Up | Down);
+    }
+    Ok(())
+}
+
 fn validate_command(cmd: &str) -> Result<()> {
     if cmd.is_empty() {
         return Err(Error::Invalid("empty command".into()));
@@ -1084,6 +1201,13 @@ fn validate_command(cmd: &str) -> Result<()> {
         return Err(Error::Invalid(
             "command must be a single line without control characters".into(),
         ));
+    }
+    if let Some(c) = cmd.chars().find(|&c| is_format_char(c)) {
+        return Err(Error::Invalid(format!(
+            "command contains an invisible formatting character (U+{:04X}: bidi control or \
+zero-width); remove it",
+            c as u32
+        )));
     }
     Ok(())
 }

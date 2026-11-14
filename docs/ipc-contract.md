@@ -34,7 +34,9 @@ Commands:
   device pixels, scale in percent.
 - `rdp_input({ id, events: RdpInput[] }) -> void`: `{t:"move",x,y}`, `{t:"down"|"up",button}`
   (DOM numbering), `{t:"wheel",vertical,units}` (120 = a notch, positive = up/right),
-  `{t:"key",code,down}` (set-1 scancode, extended keys `0xE0xx`), `{t:"release_all"}`
+  `{t:"key",code,down}` (set-1 scancode, extended keys `0xE0xx`), `{t:"release_all"}`,
+  `{t:"clipboard",text}` (text pasted into the session, offered to the server before the input
+  that follows; not used on Windows, where the clipboard is shared natively)
 - `rdp_resize({ id, size }) -> void`, `rdp_close({ id }) -> void`
 
 ## Connections & groups
@@ -44,12 +46,29 @@ Commands:
 - `save_secret({ secret }) -> SecretId` (value never returned by any list command)
 - `list_secrets() -> { id, kind, label }[]` (no values), `update_secret({ id, label?, value? })`
   (rename, or replace the value for every connection using it),
-  `delete_secret({ id })` (`invalid` while a connection, S3 account or provider uses it)
+  `delete_secret({ id })` (`invalid` while a connection, identity, S3 account or provider uses it)
+- `list_identities() -> Identity[]`, `save_identity({ identity }) -> Identity`,
+  `delete_identity({ id })`. `Identity`: `{ id, label, user, auth }`, `auth` a `SshAuth`
+  (`password`, `key` or `agent`, never `prompt`; `invalid` without a label or user, `not_found`
+  when its secret is gone). `Connection.identity?`: log in as that identity (its user and auth
+  replace the connection's at connect time). `delete_identity` is `invalid` while a connection
+  uses it; its secrets stay in the vault.
+- `connection_test({ connection, password?, key?, passphrase? }) -> { status, message?, host?,
+  fingerprint?, elapsed_ms }`: logs in to `connection` as edited (need not be saved) and closes
+  again; nothing runs on the server. Typed secrets replace the saved ones for this test only.
+  `status`: `success` | `reachable` (RDP: answered, credentials not checked) | `auth_failed` |
+  `unreachable` | `timeout` (15 s for the whole test) | `host_key_unknown` (never accepted here;
+  `host` is `host:port`, with `fingerprint`) | `host_key_mismatch` | `needs_password` | `error`.
+  Never rejects for a failed login.
 - `Connection.tunnels`: `{ kind: "local"|"remote"|"dynamic", bind_host, bind_port, dest_host,
   dest_port, enabled }[]` (ssh -L / -R / -D; `bind_port` 0 = any free port)
 
 ## Sessions
-- `open_session({ connection_id, cols, rows }) -> SessionInfo`
+- `open_session({ connection_id, cols, rows, prompt_ref? }) -> SessionInfo`: with `prompt_ref`,
+  a connection without saved credentials asks for them while logging in: event
+  `session://auth_prompt` `{ request_id, prompt_ref, name, instructions, prompts: { prompt, echo
+  }[] }`, answered with `auth_prompt_answer({ request_id, answers: string[] | null })` (`null`
+  cancels the login, as does no answer within 5 min)
 - `open_local_session({ shell?, cols, rows }) -> SessionInfo`
 - `session_write({ session_id, data_b64 })`, `session_resize({ session_id, cols, rows })`,
   `close_session({ session_id })`, `list_sessions() -> SessionInfo[]`
@@ -63,41 +82,61 @@ Commands:
   itself (SSH with a saved password, key or agent; never on login or host key errors).
 - Events: `session://data` `{ session_id, data_b64 }`, `session://state` `SessionInfo`,
   `session://agent_mark` `{ session_id, command, actor_label }`,
-  `session://host_key` `{ request_id, host, fingerprint, kind: "new" | "changed" }` →
+  `session://host_key` `{ request_id, host, port, fingerprint, old_fingerprint?, kind: "new" |
+  "changed" }` →
   answer with `host_key_decision({ request_id, accept: bool })`
 
 ## Approvals
-- Event `approval://requested` `ApprovalRequest`; answer `approval_decide({ approval_id, decision })`
+- Event `approval://requested` `ApprovalRequest`; answer `approval_decide({ approval_id, decision })`.
+  `approval://resolved` (approval id) when a request ended without an answer (timed out, run
+  cancelled): denied.
 - `set_approval_mode({ session_id, mode })`
 
 ## Files (SFTP)
 SFTP runs on the SSH connection of an open SSH session (no second login); local sessions refuse.
 - `sftp_home({ session_id }) -> string`, `sftp_list({ session_id, path }) -> FileEntry[]`
-  (`{ name, path, kind: "dir"|"file"|"symlink"|"other", size, modified, permissions }`, folders first)
+  (`{ name, path, kind: "dir"|"file"|"symlink"|"other", link, size, modified, permissions }`,
+  folders first; `link`: a symlink, `kind` is then its target's, `symlink` when that is missing)
 - `sftp_mkdir({ session_id, path })`, `sftp_rename({ session_id, from, to })`,
   `sftp_remove({ session_id, path, is_dir })` (empty folders only)
 - `sftp_download({ session_id, path, transfer_id }) -> local path` (into Downloads, never
   overwrites), `sftp_upload({ session_id, local_path, dir, transfer_id }) -> remote path`
 - `copy_between({ from, path, to, to_dir, overwrite, transfer_id }) -> new path`, where a place is
-  `{ kind: "sftp", session_id, root? }` or `{ kind: "s3", account_id }`: server to server (files
-  and folders, permission bits kept), S3 to a server and a server to S3 (files); streamed, nothing
-  saved locally; `busy`/`exists` when the name is taken and not `overwrite` (files replaced,
-  folders merged)
+  `{ kind: "sftp", session_id, root? }`, `{ kind: "s3", account_id }` or `{ kind: "local" }`
+  (this computer, see below): server to server (files and folders, permission bits kept), S3 to
+  a server and a server to S3 (files; streamed, nothing saved locally); files between this
+  computer and a server or S3, and inside this computer. S3 to S3 is `invalid`. `busy`/`exists`
+  when the name is taken and not `overwrite` (files replaced, folders merged; a replaced file on
+  a server keeps its permissions)
 - Event `transfer://progress` (SFTP and S3) `{ transfer_id, done, total }` (at most ten a second, plus the last)
 - Every `sftp_*` command takes `root?: bool`: use the session's root server, started by
   `sftp_sudo({ session_id, password? })` (sudo on its own channel: `sudo -n`, then the connection's
   saved login password, else it rejects with `auth`/`sudo_password_required` and the UI asks; the
-  password is used once and never stored)
-- Editor: `sftp_read_text({ session_id, path, root? }) -> { text, stamp: { size, modified } }`
-  (UTF-8 up to 5 MB), `sftp_write_text({ session_id, path, text, expected, backup, root? }) ->
-  stamp` (in place; `busy`/`changed_on_server` when the file changed since `expected`; `backup`
-  copies it to `<path>.bak` first)
+  password is used once and never stored); `sftp_root_off({ session_id })` when the file browser
+  leaves root mode (agent proposals go back to the login user; the root server stays for editors
+  opened as root)
+- Editor: `sftp_read_text({ session_id, path, root? }) -> { text, stamp: { size, modified, hash }
+  }` (UTF-8 up to 5 MB, binaries refused; `hash` is the SHA-256 of the contents, hex),
+  `sftp_write_text({ session_id, path, text, expected, backup, root? }) -> stamp` (in place;
+  `expected` null for a new file; `busy`/`changed_on_server` when the file changed since
+  `expected`, compared by `hash`; `backup` copies it to `<path>.bak` first)
 - Agent tool `propose_file_edit { session_id, path, content, reason? }` (built-in agent and MCP):
   event `edit://proposal` `{ proposal_id, session_id, path, root, original, stamp, proposed,
   reason, actor_label }`, answered with `edit_proposal_decide({ proposal_id, outcome:
   "saved"|"rejected"|"failed", note? })` after the UI saved it; `edit://resolved` (id) when the
   agent stopped waiting
 - Upload paths come from the native file dialog (`tauri-plugin-dialog`, `dialog:allow-open` only).
+
+## This computer (local files)
+The file manager's local pane. Paths use slashes in both directions: the native path on macOS and
+Linux, `/C:/Users/me` for `C:\Users\me` on Windows, whose `/` lists the drives. Paths must be
+absolute and hold no `..` (`invalid`).
+- `local_home() -> string`, `local_list({ path }) -> FileEntry[]`, `local_mkdir({ path })`
+- `local_rename({ from, to })` (never replaces: a taken name is `busy`/`exists`)
+- `local_remove({ path })` (a folder goes with everything it holds; a link removes only the link)
+- `local_read_text({ path }) -> { text, stamp }` (UTF-8 up to 5 MB, for the comparison before a
+  copy replaces a file)
+- Copies to and from this computer go through `copy_between` with `{ kind: "local" }`.
 
 ## S3
 Accounts are vault items; the secret access key is a vault secret and never comes back over IPC.
@@ -108,8 +147,86 @@ Accounts are vault items; the secret access key is a vault secret and never come
   `s3_rename({ account_id, from, to, is_dir })` (files only: copy + delete),
   `s3_remove({ account_id, path, is_dir })` (empty folders only), `s3_download`, `s3_upload`
   (single PUT, up to 5 GiB) with the same arguments and progress events as SFTP.
+- `s3_read_text({ account_id, path }) -> { text, stamp: { size, modified: null, hash } }`: an
+  object as text for the editor, read-only (S3 has no in-place edits); same 5 MB and text checks
+  as SFTP.
 - SigV4-signed requests to AWS (virtual-hosted, bucket region discovered with HEAD) or any
   S3-compatible endpoint (path-style optional).
+
+## Databases
+MySQL/MariaDB and PostgreSQL tabs. Each tab (`id`) holds two connections (one runs the user's
+statements, so `BEGIN`, `USE`, `SET` carry over between runs; the other reads the schema and
+cancels) and, for a connection with jump hosts, an SSH tunnel; all close with the tab. Values
+arrive as text: a `Value` is `null`, a string, or `{ hex }` for bytes that are not UTF-8. A
+`ResultSet` is `{ columns: { name, type_name }[], rows: Value[][], rows_affected, truncated }`.
+- `db_open({ connection_id, password? }) -> { id, kind: "mysql"|"postgres", version, database? }`
+  (`password`: typed at the prompt of a connection that saves none; without it such a connection
+  rejects `{ kind: "auth", message: "password_required" }`), `db_close({ id })` (also denies the
+  tab's pending agent SQL and stops its exports and imports)
+- `db_databases({ id }) -> string[]` (PostgreSQL: the ones a new tab could open),
+  `db_namespaces({ id }) -> string[]` (databases on MySQL, schemas on PostgreSQL)
+- `db_tables({ id, namespace }) -> { name, view, materialized, rows?, size?, engine?, comment?
+  }[]` (`rows`: the server's estimate), `db_columns({ id, namespace, table }) -> { name,
+  data_type, nullable, default?, primary_key }[]`
+- `db_query({ id, sql, max_rows? }) -> { results: ResultSet[], error?, elapsed_ms }` (one or more
+  statements; `max_rows` per result, default 1000, at most 100 000), `db_cancel({ id })` (stops
+  the running statement)
+- `db_table_rows({ id, namespace, table, max_rows?, offset?, order_by?, desc?, filter? })` →
+  same output: a page of one table, sorted by a column and filtered by a `WHERE` condition
+- `db_table_structure({ id, namespace, table }) -> { columns: { name, data_type, nullable,
+  default?, primary_key, extra?, comment?, collation? }[], indexes: { name, columns, unique,
+  primary, kind }[], foreign_keys: { name, columns, ref_namespace, ref_table, ref_columns,
+  on_update, on_delete }[] }`, `db_table_ddl({ id, namespace, table }) -> string` (the `CREATE`
+  of a table or view)
+- `db_apply_edits({ id, namespace, table, edits }) -> number` (rows changed): grid edits in one
+  transaction, rows found by primary key (a table without one is refused). An edit is `{ op:
+  "update", key, set }`, `{ op: "insert", values }` or `{ op: "delete", key }`, each a list of
+  `[column, string | null]` pairs.
+- Server panel: `db_server_info({ id, what: "processes"|"variables"|"status"|"users" }) ->
+  ResultSet`, `db_kill({ id, pid, connection })` (stop the process's statement, or close its
+  connection), `db_grants({ id, user, host? }) -> ResultSet`
+- Accounts: `db_account_preview({ id, change }) -> string[]` (the statements, password masked),
+  `db_account({ id, change })`. `change` is `{ op: "create"|"password", user, host?, password }`,
+  `{ op: "drop", user, host? }` or `{ op: "grant"|"revoke", user, host?, privileges: string[],
+  namespace? }` (`host`: MySQL's account host, `%` when empty; `namespace` null: everything,
+  MySQL only). Only known privilege names are accepted.
+- Export: `db_export_file({ file_name, contents }) -> path | null` (rows already rendered by the
+  UI, written to a file picked in a save dialog; `file_name` is only the suggested name),
+  `db_dump({ id, namespace, options: { tables?, structure, data, drop? }, transfer_id }) -> {
+  path, summary } | null` (an SQL file picked in a save dialog; `tables` empty: all; null when the
+  dialog is cancelled; a stopped export returns `path: ""` and a failed one rejects, neither
+  leaving a file)
+- Import: `db_pick_file({ kind: "sql"|"csv" }) -> { token, name, size } | null` (the page holds the
+  token, never the path; an import that completes uses it up, a failed one keeps it for a retry),
+  `db_csv_preview({ token, delimiter }) -> string[][]` (first records),
+  `db_import_sql({ id, token, namespace?, options: { stop_on_error }, transfer_id }) -> Summary`
+  (a file that is not UTF-8 is refused before any of it runs; on PostgreSQL `stop_on_error` runs
+  the file in one transaction), `db_import_csv({ id, token,
+  namespace, table, options: { delimiter, header, null?, columns: (string|null)[], replace? },
+  transfer_id }) -> Summary` (`columns`: the column of each field, null skips it; `replace`
+  deletes the rows first; all of it or nothing)
+- `Summary`: `{ progress, errors: { line, statement, message }[] (the first 50), cancelled,
+  rolled_back }`; `progress`: `{ table?, tables_done, tables, rows, statements, bytes, errors }`.
+  Event `db://transfer` `{ transfer_id, progress }` (at most five a second);
+  `db_transfer_cancel({ transfer_id })` stops an export, import or backup indexing.
+- SQL backups without a server: `db_backup_open({ kind?: "mysql"|"postgres", transfer_id }) -> {
+  token, name, size, compressed, index } | null` (picks a `.sql` or `.sql.gz` file and indexes it;
+  no `kind`: the file's first lines decide; a `pg_dump` custom archive is `invalid`), `index`:
+  `{ kind, tables: { schema?, name, view, columns, rows, create? }[], statements, bytes }`;
+  `db_backup_reindex({ token, kind, transfer_id }) -> index` (read again as the other dialect);
+  `db_backup_rows({ token, table, from, limit?, filter?, column? }) -> { columns, rows: Value[][],
+  positions, next? }` (`table`: position in `index.tables`; `limit` default 500, at most 10 000;
+  `filter`: rows holding that text, in `column` or any); `db_backup_export({ token, table, format:
+  "csv"|"json"|"sql", filter?, column?, transfer_id }) -> { path, rows } | null` (save dialog);
+  `db_backup_close({ token })`
+- Agents: `db_share({ id, shared })` (off by default; agents can then read the tab's schema and
+  query it through a connection of their own; unsharing denies its pending SQL). Agent SQL is
+  classified `read`/`write`/`destructive`: destructive always waits, writes wait unless the mode
+  is `auto` (always on production), reads wait only under `confirm_all`. Event `db://approval` `{
+  approval_id, database_id, actor_label, sql, reason?, risk, statements, policy_note }`, answered
+  with `db_approval_decide({ approval_id, decision })` (`not_found` once resolved; an edited
+  approval counts as a denial); `db://approval-resolved` (approval id) when the wait ended for any
+  reason (no answer within 15 min denies).
 
 ## Snippets
 - `list_snippets()`, `save_snippet({ snippet })` (name and command required), `delete_snippet({ id })`.
@@ -122,10 +239,15 @@ Accounts are vault items; the secret access key is a vault secret and never come
 - `detect_harnesses() -> { kind, path?, version?, logged_in?: bool }[]`
 - `list_harness_profiles()`, `save_harness_profile({ profile })`, `delete_harness_profile({ id })`
 - `list_harness_extensions({ kind }) -> { skills: {name, path}[], plugins: {name, path}[] }`
-- `agent_send({ session_id, brain, message }) -> { run_id }`, `agent_cancel({ run_id })`
+- `agent_send({ session_id, brain, message }) -> { run_id }`, `agent_cancel({ run_id })`,
+  `agent_reset({ session_id })` (forgets the tab's built-in agent conversation)
 - Event `agent://event` `{ run_id, session_id, event: AgentEvent }`
 - `harness_open_native({ session_id, profile_id, cols, rows }) -> SessionInfo` (CLI TUI in a PTY tab)
 - `harness_login({ kind, cols, rows }) -> SessionInfo` (runs the CLI's own login in a local tab)
+- `openchamber_open({ session_id, profile_id }) -> void`: an OpenCode profile (`invalid`
+  otherwise) in OpenChamber, its web UI: a private OpenChamber server on 127.0.0.1 with a random
+  password and Handrail's tools, shown in a window of its own. Closing the window stops the
+  server and revokes the tools' token.
 
 ## Import & sync
 - `import_detect() -> { id, tool, path?, count_hint? }[]`
@@ -161,6 +283,10 @@ Accounts are vault items; the secret access key is a vault secret and never come
 ## App & updates
 - `app_version() -> string` (workspace `Cargo.toml` version; release builds stamp `<major>.<minor>.<build>`)
 - `restart_app()` (after an installed update on macOS/Linux)
+- `nightly_build() -> { version, page_url, published_at?, download?: { name, url, size } } | null`:
+  the newest Handrail Nightly prerelease (found through `nightly-latest/latest.json`), with the
+  installer for this system if it has one; `null` when none is published. Only offered for
+  download in the browser, never installed by the app.
 - Updates use `@tauri-apps/plugin-updater` (`updater:default` capability) against
   `https://github.com/andreafunicelli/Handrail/releases/latest/download/latest.json`.
 

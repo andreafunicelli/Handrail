@@ -6,6 +6,8 @@ import { api } from "../api";
 import { strToB64 } from "../util/b64";
 
 export const MONO_STACK = '"JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace';
+/** Most output (bytes) kept for a terminal whose view has not opened yet. */
+const EARLY_MAX = 1 << 20;
 
 interface AgentMark {
   command: string;
@@ -23,6 +25,7 @@ export class TermHost {
   private webgl: { dispose(): void } | null = null;
   /** Output received before the view opened (handed over when a reconnect adopts this host). */
   private early: Uint8Array[] = [];
+  private earlyBytes = 0;
   /** Where the shell's prompt ended (OSC 133;B): the command line starts there. */
   private promptEnd: { marker: IMarker; col: number } | null = null;
   /** Typed input not yet answered by output, and output not yet drawn: the screen may lag. */
@@ -82,6 +85,7 @@ export class TermHost {
     this.term.open(this.el);
     this.opened = true;
     this.early = [];
+    this.earlyBytes = 0;
     for (const m of this.marks) this.decorate(m);
     // Touch devices use the DOM renderer: WebGL rendered blank under mobile emulation in testing.
     if (typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches) return;
@@ -103,7 +107,12 @@ export class TermHost {
   }
 
   write(bytes: Uint8Array) {
-    if (!this.opened) this.early.push(bytes);
+    if (!this.opened) {
+      this.early.push(bytes);
+      this.earlyBytes += bytes.length;
+      // A view that never opens must not grow without bound: keep the newest output.
+      while (this.earlyBytes > EARLY_MAX && this.early.length > 1) this.earlyBytes -= this.early.shift()!.length;
+    }
     this.lastOutput = performance.now();
     this.drawing++;
     this.term.write(bytes, () => this.drawing--);
@@ -138,6 +147,7 @@ export class TermHost {
   takeEarly(): Uint8Array[] {
     const e = this.early;
     this.early = [];
+    this.earlyBytes = 0;
     return e;
   }
 
@@ -199,6 +209,8 @@ const writeTo: InputRouter = (sessionId, dataB64) => void api.sessionWrite(sessi
 
 class TermRegistry {
   private hosts = new Map<string, TermHost>();
+  /** Sessions whose terminal was disposed: late output for them must not make a new one. */
+  private gone = new Set<string>();
   opts = { fontSize: 13, theme: {} as ITheme };
   /** Where typing goes: its own session, unless the sessions store mirrors it (typing in all panes). */
   input: InputRouter = writeTo;
@@ -217,6 +229,11 @@ class TermRegistry {
       this.hosts.set(sessionId, h);
     }
     return h;
+  }
+  /** The terminal backend output goes to: made on first output (it can beat the open call's
+   *  reply), but never again for a session already disposed. */
+  incoming(sessionId: string): TermHost | undefined {
+    return this.gone.has(sessionId) ? undefined : this.get(sessionId);
   }
   peek(sessionId: string) {
     return this.hosts.get(sessionId);
@@ -240,6 +257,7 @@ class TermRegistry {
   dispose(sessionId: string) {
     this.hosts.get(sessionId)?.dispose();
     this.hosts.delete(sessionId);
+    this.gone.add(sessionId);
   }
   configure(fontSize: number, theme: ITheme) {
     this.opts = { fontSize, theme };

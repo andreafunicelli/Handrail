@@ -21,6 +21,12 @@ use tokio_util::sync::CancellationToken;
 /// Default cap, in bytes, on a single tool result fed back to the model.
 pub const DEFAULT_MAX_TOOL_RESULT_BYTES: usize = 12 * 1024;
 
+/// Default budget, in bytes, for the history sent with each model call (roughly 75k tokens).
+pub const DEFAULT_HISTORY_BUDGET_BYTES: usize = 300 * 1024;
+
+/// What an old tool result is replaced with once the history outgrows its budget.
+pub const DROPPED_OUTPUT: &str = "[output dropped to save context]";
+
 #[derive(Clone, Debug)]
 pub struct AgentConfig {
     pub model: String,
@@ -31,6 +37,9 @@ pub struct AgentConfig {
     /// Appended to the built-in system prompt (user/profile instructions).
     pub system_extra: Option<String>,
     pub max_tool_result_bytes: usize,
+    /// When the history grows past this, the oldest tool results are dropped (see
+    /// [`trim_history`]).
+    pub history_budget_bytes: usize,
 }
 
 /// Model calls per message unless the user sets another limit.
@@ -84,6 +93,7 @@ impl AgentConfig {
             temperature: None,
             system_extra: None,
             max_tool_result_bytes: DEFAULT_MAX_TOOL_RESULT_BYTES,
+            history_budget_bytes: DEFAULT_HISTORY_BUDGET_BYTES,
         }
     }
 }
@@ -199,6 +209,7 @@ impl Agent {
             if cancel.is_cancelled() {
                 return Ok(());
             }
+            trim_history(&mut self.history, self.cfg.history_budget_bytes);
             let req = ChatRequest {
                 model: self.cfg.model.clone(),
                 system: Some(system.clone()),
@@ -371,10 +382,21 @@ impl Agent {
                     turn.cut_tool = Some(name);
                     None
                 }
-                ProviderEvent::Usage { input, output } => Some(AgentEvent::Usage {
+                ProviderEvent::Usage {
+                    input,
+                    output,
+                    cache_read,
+                    cache_write,
+                } => Some(AgentEvent::Usage {
                     input_tokens: input,
                     output_tokens: output,
-                    cost_usd: estimate_cost(&self.cfg.model, input, output),
+                    cost_usd: estimate_cost(
+                        &self.cfg.model,
+                        input,
+                        output,
+                        cache_read,
+                        cache_write,
+                    ),
                 }),
                 ProviderEvent::Stop { reason } => {
                     turn.stop = reason;
@@ -469,6 +491,45 @@ may still be running in the terminal.";
     }
 }
 
+fn history_bytes(history: &[Message]) -> usize {
+    history
+        .iter()
+        .flat_map(|m| &m.content)
+        .map(|p| match p {
+            Part::Text { text } | Part::Reasoning { text } => text.len(),
+            Part::ToolUse { name, input, .. } => name.len() + input.to_string().len(),
+            Part::ToolResult { content, .. } => content.len(),
+        })
+        .sum()
+}
+
+/// Keep the history sent to the model under `budget` bytes: once it is over, replace the content
+/// of the oldest tool results with [`DROPPED_OUTPUT`] until it is under 3/4 of the budget (so
+/// that the next calls append to an unchanged prefix instead of trimming every step). Only the
+/// content changes, so every tool call keeps its result. The last message (results the model has
+/// not seen yet) is never trimmed.
+pub fn trim_history(history: &mut [Message], budget: usize) {
+    let mut size = history_bytes(history);
+    if size <= budget {
+        return;
+    }
+    let target = budget / 4 * 3;
+    let keep = history.len().saturating_sub(1);
+    for m in &mut history[..keep] {
+        for p in &mut m.content {
+            if size <= target {
+                return;
+            }
+            if let Part::ToolResult { content, .. } = p {
+                if content.len() > DROPPED_OUTPUT.len() {
+                    size -= content.len() - DROPPED_OUTPUT.len();
+                    *content = DROPPED_OUTPUT.into();
+                }
+            }
+        }
+    }
+}
+
 struct Turn {
     text: String,
     reasoning: String,
@@ -491,5 +552,71 @@ impl Default for Turn {
             receiver_gone: false,
             cancelled: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn step(id: &str, out: &str) -> [Message; 2] {
+        [
+            Message {
+                role: Role::Assistant,
+                content: vec![Part::ToolUse {
+                    id: id.into(),
+                    name: "run_command".into(),
+                    input: json!({"command": "ls"}),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![Part::ToolResult {
+                    tool_use_id: id.into(),
+                    content: out.into(),
+                    is_error: false,
+                }],
+            },
+        ]
+    }
+
+    #[test]
+    fn trim_drops_oldest_tool_results_and_keeps_pairs() {
+        let big = "x".repeat(1000);
+        let mut h = vec![Message::user_text("hi")];
+        for i in 0..10 {
+            h.extend(step(&format!("t{i}"), &big));
+        }
+        let before = h.clone();
+        trim_history(&mut h, 100_000);
+        assert_eq!(h, before, "under budget: unchanged");
+
+        trim_history(&mut h, 6000);
+        assert!(history_bytes(&h) <= 4500);
+        let results: Vec<(&str, &str)> = h
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|p| match p {
+                Part::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } => Some((tool_use_id.as_str(), content.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 10, "every call keeps its result");
+        assert_eq!(results[0], ("t0", DROPPED_OUTPUT), "oldest first");
+        assert_eq!(results[9].1, big, "newest results kept");
+        // Calls, ids and order are untouched: only result contents changed.
+        for (a, b) in h.iter().zip(&before) {
+            assert_eq!(a.role, b.role);
+            assert_eq!(a.content.len(), b.content.len());
+        }
+        // Even over budget, the newest message (not yet seen by the model) is never trimmed.
+        let mut h = vec![Message::user_text("hi")];
+        h.extend(step("only", &big));
+        trim_history(&mut h, 10);
+        assert!(matches!(&h[2].content[0], Part::ToolResult { content, .. } if *content == big));
     }
 }

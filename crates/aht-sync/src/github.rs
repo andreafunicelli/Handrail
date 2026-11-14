@@ -199,10 +199,18 @@ impl GitHubBackend {
     }
 
     /// Create `{owner}/{repo}` as a private repo if it does not exist. Returns whether it was
-    /// created. (Assumes the owner is the authenticated user.)
+    /// created. An existing repo that is not private is refused. (Assumes the owner is the
+    /// authenticated user.)
     pub async fn ensure_repo(&self) -> Result<bool> {
         let (status, body) = self.call(Method::GET, "", None).await?;
         if status.is_success() {
+            // Missing `private` counts as public: never push the vault on a guess.
+            if body["private"].as_bool() != Some(true) {
+                return Err(SyncError::PublicRepo(format!(
+                    "{}/{}",
+                    self.owner, self.repo
+                )));
+            }
             return Ok(false);
         }
         if status != StatusCode::NOT_FOUND {

@@ -32,6 +32,8 @@ struct St {
     line: String,
     mode: Mode,
     hooked: bool,
+    /// `;aht=<nonce>` the hook tags its marks with.
+    tag: String,
     ran: bool,
     last_ec: i32,
     gen: u64,
@@ -61,6 +63,7 @@ impl FakeShell {
                 line: String::new(),
                 mode: Mode::Prompt,
                 hooked: false,
+                tag: String::new(),
                 ran: false,
                 last_ec: 0,
                 gen: 0,
@@ -110,13 +113,15 @@ impl FakeShell {
             Kind::Bash => {
                 if st.hooked {
                     if st.ran {
-                        out.extend(format!("\x1b]133;D;{}\x07", st.last_ec).bytes());
+                        out.extend(format!("\x1b]133;D;{}{}\x07", st.last_ec, st.tag).bytes());
                     }
-                    out.extend(b"\x1b]7;file://fake/home/u\x07\x1b]133;A\x07");
+                    out.extend(
+                        format!("\x1b]7;file://fake/home/u\x07\x1b]133;A{}\x07", st.tag).bytes(),
+                    );
                 }
                 out.extend(b"\x1b[32mu@fake\x1b[0m:~$ ");
                 if st.hooked {
-                    out.extend(b"\x1b]133;B\x07");
+                    out.extend(format!("\x1b]133;B{}\x07", st.tag).bytes());
                 }
             }
             Kind::Dumb => out.extend(b"$ "),
@@ -144,8 +149,9 @@ impl FakeShell {
             let mut st = self.st.lock().unwrap();
             if st.hooked {
                 st.ran = true;
+                let c = format!("\x1b]133;C{}\x07", st.tag);
                 drop(st);
-                self.emit(b"\x1b]133;C\x07");
+                self.emit(c.as_bytes());
             }
         }
         if line.starts_with("echo \"AHTPROBE") {
@@ -161,11 +167,12 @@ impl FakeShell {
             if let (Kind::Bash, Some(c)) = (kind, re.captures(&line)) {
                 let n = c[1].to_string();
                 let out = format!(
-                    "\x1b]1337;AhtBegin={n}\x07\x1b]1337;AhtKV=shell=bash\x07\x1b]1337;AhtKV=user=u\x07\x1b]1337;AhtKV=host=fake\x07\x1b]1337;AhtKV=os=FakeOS 1.0\x07\x1b]1337;AhtEnd={n}\x07"
+                    "\x1b]1337;AhtBegin={n}\x07\x1b]1337;AhtKV=shell=bash;aht={n}\x07\x1b]1337;AhtKV=user=u;aht={n}\x07\x1b]1337;AhtKV=host=fake;aht={n}\x07\x1b]1337;AhtKV=os=FakeOS 1.0;aht={n}\x07\x1b]1337;AhtEnd={n}\x07"
                 );
                 self.emit(out.as_bytes());
                 let mut st = self.st.lock().unwrap();
                 st.hooked = true;
+                st.tag = format!(";aht={n}");
                 st.ran = false;
                 drop(st);
                 return self.finish(0);
@@ -185,6 +192,11 @@ impl FakeShell {
             }
             "true" => self.finish(0),
             "false" => self.finish(1),
+            // Output that forges untagged end-of-command and prompt marks mid-command.
+            "forge" => {
+                self.emit(b"\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07\r\nreal\r\n");
+                self.finish(3)
+            }
             "exit" => self.disconnect(),
             "sleep" => {
                 let secs: f64 = rest.parse().unwrap_or(1.0);

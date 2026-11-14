@@ -22,13 +22,18 @@ pub enum SyncError {
     InvalidPath(String),
     #[error("http error: {0}")]
     Http(String),
+    /// The sync repository exists but is not private; the vault is never pushed to it.
+    #[error("GitHub repository {0} is public; make it private before syncing the vault to it")]
+    PublicRepo(String),
     #[error("unexpected response: {0}")]
     Protocol(String),
     #[error("vault error: {0}")]
     Vault(#[from] aht_vault::VaultError),
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("gave up after repeated concurrent changes on the remote")]
+    #[error(
+        "gave up after repeated concurrent changes (on the remote, or local edits during the sync)"
+    )]
     TooManyRetries,
 }
 
@@ -45,6 +50,7 @@ impl From<SyncError> for aht_core::Error {
             SyncError::Auth(s) => E::Auth(s),
             SyncError::NotFound(s) => E::NotFound(s),
             SyncError::NoRemoteVault => E::NotFound(e.to_string()),
+            SyncError::PublicRepo(_) => E::Invalid(e.to_string()),
             SyncError::Http(_) | SyncError::RateLimited { .. } => E::Network(e.to_string()),
             SyncError::Io(io) => E::Io(io.to_string()),
             SyncError::Vault(aht_vault::VaultError::Locked) => E::VaultLocked,

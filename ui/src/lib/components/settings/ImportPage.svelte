@@ -2,7 +2,7 @@
   import BusyButton from "../common/BusyButton.svelte";
   import ConnIcon from "../common/ConnIcon.svelte";
   import Icon from "../icons/Icon.svelte";
-  import { t } from "../../i18n";
+  import { t, tn } from "../../i18n";
   import { api } from "../../api";
   import type { Connection, ImportPreview, ImportPreviewArgs, ImportSource } from "../../api/types";
   import { connections } from "../../stores/connections.svelte";
@@ -153,7 +153,7 @@
         <div class="list-row">
           <span class="tool">{toolLabel(s.tool)}</span>
           <span class="path mono" title={s.path ?? ""}>{s.path ?? ""}</span>
-          {#if s.count_hint != null}<span class="pill">{t("imp.found", { count: s.count_hint })}</span>{/if}
+          {#if s.count_hint != null}<span class="pill">{tn("imp.found", s.count_hint)}</span>{/if}
           <button class="btn sm" onclick={() => open(s)} disabled={busy}>{t("imp.preview")}</button>
         </div>
       {/each}

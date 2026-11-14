@@ -91,6 +91,7 @@ impl DbHub {
     pub async fn close_all(&self) {
         // Dropping the senders denies the SQL still waiting for approval.
         self.approvals.lock().unwrap().clear();
+        self.picked.lock().unwrap().clear();
         let all: Vec<_> = self.sessions.lock().await.drain().map(|(_, s)| s).collect();
         for s in all {
             s.shut().await;
@@ -642,10 +643,28 @@ fn picked_path(state: &AppState, token: &str) -> Result<std::path::PathBuf> {
 }
 
 fn open_picked(state: &AppState, token: &str) -> Result<std::io::BufReader<std::fs::File>> {
+    open_path(&picked_path(state, token)?)
+}
+
+fn open_path(path: &std::path::Path) -> Result<std::io::BufReader<std::fs::File>> {
     Ok(std::io::BufReader::with_capacity(
         1 << 20,
-        std::fs::File::open(picked_path(state, token)?)?,
+        std::fs::File::open(path)?,
     ))
+}
+
+/// An import ran to its end: its file token is not needed any more (one that failed keeps it,
+/// so the dialog can try again).
+fn forget_picked(state: &AppState, token: &str, done: &Result<Summary>) {
+    if done.is_ok() {
+        state.db.picked.lock().unwrap().remove(token);
+    }
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?
 }
 
 /// The first records of a picked CSV file.
@@ -655,7 +674,8 @@ pub async fn db_csv_preview(
     token: String,
     delimiter: char,
 ) -> Result<Vec<Vec<String>>> {
-    aht_db::transfer::csv_preview(open_picked(&state, &token)?, delimiter, 6)
+    let path = picked_path(&state, &token)?;
+    blocking(move || aht_db::transfer::csv_preview(open_path(&path)?, delimiter, 6)).await
 }
 
 /// Run a picked SQL file in `namespace` (or where the file says).
@@ -670,10 +690,17 @@ pub async fn db_import_sql(
     transfer_id: String,
 ) -> Result<Summary> {
     let s = session(&state, &id).await?;
-    let mut input = open_picked(&state, &token)?;
+    let path = picked_path(&state, &token)?;
+    // Registered before the scan: a cancel during it stops the import at its first statement.
     let running = Running::new(&state.db, &id, &transfer_id);
+    // A file that is not UTF-8 is refused before any of it runs.
+    let mut input = blocking(move || {
+        aht_db::transfer::check_sql_file(&mut open_path(&path)?)?;
+        open_path(&path)
+    })
+    .await?;
     let mut report = transfer_reporter(&app, &transfer_id);
-    aht_db::transfer::import_sql(
+    let done = aht_db::transfer::import_sql(
         &s.client,
         namespace.as_deref(),
         &mut input,
@@ -681,7 +708,9 @@ pub async fn db_import_sql(
         &mut report,
         &running.stop,
     )
-    .await
+    .await;
+    forget_picked(&state, &token, &done);
+    done
 }
 
 /// Insert a picked CSV file's records into a table.
@@ -701,7 +730,7 @@ pub async fn db_import_csv(
     let mut input = open_picked(&state, &token)?;
     let running = Running::new(&state.db, &id, &transfer_id);
     let mut report = transfer_reporter(&app, &transfer_id);
-    aht_db::transfer::import_csv(
+    let done = aht_db::transfer::import_csv(
         &s.client,
         &namespace,
         &table,
@@ -710,7 +739,9 @@ pub async fn db_import_csv(
         &mut report,
         &running.stop,
     )
-    .await
+    .await;
+    forget_picked(&state, &token, &done);
+    done
 }
 
 /// Stop an export or import (between rows or statements).
@@ -789,7 +820,7 @@ struct DbApprovalRequest {
     policy_note: &'static str,
 }
 
-const APPROVAL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(aht_core::terminal::APPROVAL_TIMEOUT_S);
 
 /// Removes a pending approval when its wait ends for any reason; the tab then drops its card.
 struct PendingGuard<'a> {

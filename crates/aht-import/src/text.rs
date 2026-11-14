@@ -3,11 +3,32 @@
 use aht_core::{Error, Result};
 use std::path::{Path, PathBuf};
 
+/// Largest config file an importer will read; real exports are far smaller.
+pub const MAX_IMPORT_FILE: u64 = 32 * 1024 * 1024;
+
+/// Read a whole file, refusing anything larger than `max` bytes.
+pub fn read_capped(path: &Path, max: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let io = |e: std::io::Error| Error::Io(format!("cannot read {}: {e}", path.display()));
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(io)?
+        .take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    if bytes.len() as u64 > max {
+        return Err(Error::Invalid(format!(
+            "{} is larger than {} MiB",
+            path.display(),
+            max / (1024 * 1024)
+        )));
+    }
+    Ok(bytes)
+}
+
 /// Read a text file, honouring UTF-8/UTF-16 BOMs; invalid UTF-8 falls back to Latin-1.
 pub fn read_text(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| Error::Io(format!("cannot read {}: {e}", path.display())))?;
-    Ok(decode_bytes(&bytes))
+    Ok(decode_bytes(&read_capped(path, MAX_IMPORT_FILE)?))
 }
 
 pub fn decode_bytes(bytes: &[u8]) -> String {

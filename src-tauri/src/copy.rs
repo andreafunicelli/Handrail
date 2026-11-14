@@ -130,47 +130,12 @@ pub async fn copy_between(
             if !overwrite && dst.exists(&dest).await {
                 return Err(Error::Busy(EXISTS.into()));
             }
-            // Written beside the destination first: a failed upload never truncates a file
-            // being replaced. A replaced file keeps its permissions (an executable script stays
-            // executable, a private file stays private).
-            let tmp = temp_sibling(&dest);
-            let mode = match overwrite {
-                true => dst.stamp(&dest).await.ok().and_then(|s| s.permissions),
-                false => None,
-            };
-            let mut file = dst.create_mode(&tmp, mode).await?;
-            let mut progress = progress;
-            let copied = async {
-                let io = |e: std::io::Error| Error::Other(format!("{path}: {e}"));
-                let mut src = tokio::fs::File::open(&local).await.map_err(io)?;
-                let total = src.metadata().await.map_err(io)?.len();
-                let mut buf = vec![0u8; 256 * 1024];
-                let mut done = 0u64;
-                progress(0, total);
-                loop {
-                    let n = src.read(&mut buf).await.map_err(io)?;
-                    if n == 0 {
-                        break;
-                    }
-                    file.write_all(&buf[..n])
-                        .await
-                        .map_err(|e| Error::Other(format!("SFTP: {e}")))?;
-                    done += n as u64;
-                    progress(done, total);
-                }
-                file.shutdown()
-                    .await
-                    .map_err(|e| Error::Other(format!("SFTP: {e}")))
-            }
-            .await;
-            if let Err(e) = copied {
-                let _ = dst.remove(&tmp, false).await;
-                return Err(e);
-            }
-            dst.replace_with(&tmp, &dest).await?;
+            upload_replacing(&dst, &local, &dest, progress).await?;
             Ok(dest)
         }
         (Place::Sftp { session_id, root }, Place::Local) => {
+            // The same file name a download gets: valid on this OS (no `\` or `:` on Windows).
+            let name = crate::sftp::local_name(&path)?;
             let (dest, tmp, ui) = local_fs::dest_file(&to_dir, &name, overwrite)?;
             let src = sftp(&state, session_id, Some(root)).await?;
             let done = src.download(&path, &tmp, progress).await;
@@ -195,6 +160,7 @@ pub async fn copy_between(
         }
         (Place::S3 { account_id }, Place::Local) => {
             let (bucket, key) = crate::s3::object(&path)?;
+            let name = crate::sftp::local_name(&path)?;
             let (dest, tmp, ui) = local_fs::dest_file(&to_dir, &name, overwrite)?;
             let s3 = crate::s3::client(&state, &account_id).await?;
             let done = s3.download(&bucket, &key, &tmp, progress).await;
@@ -212,6 +178,48 @@ pub async fn copy_between(
             Ok(ui)
         }
     }
+}
+
+/// Upload the local file `local` to `dest`, written beside it first: a failed upload never
+/// truncates a file being replaced. A replaced file keeps its permissions (an executable
+/// script stays executable, a private file stays private).
+pub(crate) async fn upload_replacing(
+    dst: &aht_ssh::Sftp,
+    local: &std::path::Path,
+    dest: &str,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<()> {
+    let tmp = temp_sibling(dest);
+    let mode = dst.stamp(dest).await.ok().and_then(|s| s.permissions);
+    let mut file = dst.create_mode(&tmp, mode).await?;
+    let copied = async {
+        let io = |e: std::io::Error| Error::Other(format!("{}: {e}", local.display()));
+        let mut src = tokio::fs::File::open(local).await.map_err(io)?;
+        let total = src.metadata().await.map_err(io)?.len();
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut done = 0u64;
+        progress(0, total);
+        loop {
+            let n = src.read(&mut buf).await.map_err(io)?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buf[..n])
+                .await
+                .map_err(|e| Error::Other(format!("SFTP: {e}")))?;
+            done += n as u64;
+            progress(done, total);
+        }
+        file.shutdown()
+            .await
+            .map_err(|e| Error::Other(format!("SFTP: {e}")))
+    }
+    .await;
+    if let Err(e) = copied {
+        let _ = dst.remove(&tmp, false).await;
+        return Err(e);
+    }
+    dst.replace_with(&tmp, dest).await
 }
 
 #[cfg(test)]

@@ -1,3 +1,5 @@
 [toolchain]
-channel = "stable"
+# Pinned, so a new Rust release cannot break `clippy -D warnings` on main. To bump it, see
+# CONTRIBUTING.md (the workflows pass the same version to dtolnay/rust-toolchain).
+channel = "1.99.0"
 components = ["rustfmt", "clippy"]

@@ -94,9 +94,12 @@ pub enum ProviderEvent {
     ToolUseCut {
         name: String,
     },
+    /// `input` counts every input token, `cache_read` and `cache_write` ones included.
     Usage {
         input: u64,
         output: u64,
+        cache_read: u64,
+        cache_write: u64,
     },
     Stop {
         reason: StopReason,

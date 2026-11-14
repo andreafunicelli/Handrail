@@ -24,7 +24,7 @@ import { backups } from "./backups.svelte";
 import { ui } from "./ui.svelte";
 import { toasts } from "./toasts.svelte";
 import { RECONNECT_ATTEMPTS, reconnectDelay, retryable, shouldAutoReconnect } from "../util/reconnect";
-import { t } from "../i18n";
+import { t, tn } from "../i18n";
 import { s3 } from "./s3.svelte";
 import { mostSensitiveEnv } from "../util/sessionContext";
 
@@ -200,7 +200,7 @@ export class Sessions {
   async init() {
     if (this.started) return;
     this.started = true;
-    await api.on("session://data", (e) => terminals.get(e.session_id).write(b64ToBytes(e.data_b64)));
+    await api.on("session://data", (e) => terminals.incoming(e.session_id)?.write(b64ToBytes(e.data_b64)));
     terminals.input = (sessionId, data) => {
       for (const target of this.inputTargets(sessionId)) terminals.write(target, data);
     };
@@ -214,7 +214,7 @@ export class Sessions {
     // Back online (wake from sleep, Wi-Fi again): try at once instead of waiting out the backoff.
     if (typeof window !== "undefined") window.addEventListener("online", () => this.wakers.forEach((wake) => wake()));
     await api.on("session://agent_mark", (e) => {
-      terminals.get(e.session_id).mark(e.command, e.actor_label);
+      terminals.incoming(e.session_id)?.mark(e.command, e.actor_label);
       this.lastActor[e.session_id] = e.actor_label;
     });
     await api.on("session://host_key", (e) => this.hostKeys.push(e));
@@ -245,8 +245,9 @@ export class Sessions {
     try {
       const info = await api.openSession(connectionId, COLS, ROWS, ref);
       if (!this.pending[ref]) {
-        // The pane was closed while logging in.
+        // The pane was closed while logging in (its first output may have made a terminal).
         void api.closeSession(info.session_id).catch(() => {});
+        terminals.dispose(info.session_id);
         return null;
       }
       this.infos[info.session_id] = info;
@@ -317,6 +318,7 @@ export class Sessions {
         const next = await api.openSession(connectionId, term?.cols ?? COLS, term?.rows ?? ROWS, uuid());
         if (!this.reconnects[sessionId]?.running || !this.infos[sessionId]) {
           void api.closeSession(next.session_id).catch(() => {});
+          terminals.dispose(next.session_id);
           return;
         }
         this.adopt(sessionId, next);
@@ -356,6 +358,7 @@ export class Sessions {
     agent.moveSession(old, next.session_id);
     if (this.lastActor[old]) this.lastActor[next.session_id] = this.lastActor[old];
     delete this.lastActor[old];
+    delete this.homes[old];
     delete this.reconnects[old];
     void api.closeSession(old).catch(() => {});
     delete this.infos[old];
@@ -427,6 +430,8 @@ export class Sessions {
     const info = await api.openLocalSession(null, COLS, ROWS);
     this.infos[info.session_id] = info;
     this.swapSession(sessionId, info.session_id);
+    // The conversation stays with the pane (as an SSH reconnect keeps it).
+    agent.moveSession(sessionId, info.session_id);
     this.dropSession(sessionId);
   }
 
@@ -574,8 +579,11 @@ export class Sessions {
     delete this.reconnects[sessionId];
     void api.closeSession(sessionId).catch(() => {});
     terminals.dispose(sessionId);
+    agent.release(sessionId);
     delete this.infos[sessionId];
     delete this.tunnels[sessionId];
+    delete this.homes[sessionId];
+    delete this.lastActor[sessionId];
   }
 
   closeTab(id: string) {
@@ -664,7 +672,7 @@ export class Sessions {
   /** Title of the pane holding `leafSession`. */
   paneTitle(leafSession: string): string {
     if (isPending(leafSession)) return this.pending[pendingRef(leafSession)]?.label ?? "…";
-    if (isFiles(leafSession)) return `Files · ${this.infos[filesSession(leafSession)]?.title ?? "…"}`;
+    if (isFiles(leafSession)) return t("files.paneTitle", { name: this.infos[filesSession(leafSession)]?.title ?? "…" });
     if (isS3(leafSession)) return `S3 · ${s3.byId(s3AccountOf(leafSession))?.name ?? "…"}`;
     if (isView(leafSession)) return connections.byId.get(viewConnectionOf(leafSession))?.name ?? "…";
     if (isBackup(leafSession)) return `${t("backup.title")} · ${backups.names[leafSession] ?? "…"}`;
@@ -792,7 +800,7 @@ export class Sessions {
       // Each pane logs in on its own (and may ask for a password).
       for (const [ref, conn] of logins) void this.connect(ref, conn);
     }
-    if (skipped) toasts.info(t("ws.skipped", { n: skipped }));
+    if (skipped) toasts.info(tn("ws.skipped", skipped));
   }
 }
 

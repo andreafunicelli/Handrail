@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from "../icons/Icon.svelte";
-  import { t } from "../../i18n";
+  import { t, tn } from "../../i18n";
   import { sessions } from "../../stores/sessions.svelte";
   import { updates } from "../../stores/updates.svelte";
 
@@ -20,14 +20,14 @@
         {t("update.failed", { error: updates.error ?? "" })}
       {:else}
         {t("update.available", { version: updates.info.version })}
-        {#if open}<span class="hint">{t("update.sessionsWarning", { count: open })}</span>{/if}
+        {#if open}<span class="hint">{tn("update.sessionsWarning", open)}</span>{/if}
       {/if}
     </span>
     {#if updates.phase === "downloading" && pct != null}
       <span class="meter" aria-hidden="true"><span style:width="{pct}%"></span></span>
     {/if}
     {#if updates.phase === "available" || updates.phase === "error"}
-      <button class="btn sm primary" onclick={() => updates.install()}>{t(updates.phase === "error" ? "update.retry" : "update.install")}</button>
+      <button class="btn sm primary" onclick={() => updates.installAsking(open)}>{t(updates.phase === "error" ? "update.retry" : "update.install")}</button>
       <button class="icon-btn" aria-label={t("update.later")} title={t("update.later")} onclick={() => updates.dismiss()}><Icon name="x" size={13} /></button>
     {/if}
   </div>

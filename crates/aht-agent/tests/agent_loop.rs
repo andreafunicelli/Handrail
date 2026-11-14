@@ -288,6 +288,8 @@ async fn multi_step_loop_runs_tools_and_finishes() {
             ProviderEvent::Usage {
                 input: 10,
                 output: 5,
+                cache_read: 0,
+                cache_write: 0,
             },
         ]),
         calls(vec![tool(
@@ -348,6 +350,8 @@ async fn usage_event_carries_estimated_cost() {
         ProviderEvent::Usage {
             input: 1_000_000,
             output: 0,
+            cache_read: 0,
+            cache_write: 0,
         },
         stop(StopReason::EndTurn),
     ])]);
@@ -366,7 +370,7 @@ async fn usage_event_carries_estimated_cost() {
         }
         _ => None,
     });
-    assert_eq!(cost, Some(Some(3.0)));
+    assert_eq!(cost, Some(Some(2.0)));
 }
 
 #[tokio::test]

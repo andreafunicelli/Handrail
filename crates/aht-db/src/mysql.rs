@@ -451,8 +451,11 @@ impl Client {
                         Ok(None) => break,
                         Err(e) => {
                             lost = broken(&e);
-                            // After a cut the statement ends with "interrupted": not an error.
-                            if !(stopped && out.truncated()) || lost {
+                            // After a cut the statement ends with "interrupted": not an error in itself,
+                            // but the rest of the run did not happen.
+                            if stopped && out.truncated() && !lost {
+                                out.stopped_after_cut(crate::DbKind::Mysql, sql);
+                            } else {
                                 out.fail(map_err(e).to_string());
                             }
                             break;
@@ -495,7 +498,8 @@ impl Client {
     }
 
     /// Run `statements` in one transaction on the side connection: all or nothing. An update or
-    /// delete meant for one row that would change several rolls everything back.
+    /// delete meant for one row that would change several rolls everything back; so does one
+    /// that finds no row (changed or deleted meanwhile).
     pub(crate) fn apply_edits<'a>(
         &'a self,
         statements: &'a [EditStatement],
@@ -530,6 +534,18 @@ impl Client {
                                 Error::Invalid(format!(
                                     "an edit would change {n} rows instead of one; nothing was saved"
                                 )),
+                                false,
+                            ));
+                            break;
+                        }
+                        // sqlx connects with CLIENT_FOUND_ROWS, so an UPDATE that sets the same
+                        // values still counts its matched row: 0 means the row is gone.
+                        if st.single_row && n == 0 {
+                            failure = Some((
+                                Error::Invalid(
+                                    "a row was changed or deleted meanwhile; nothing was saved"
+                                        .into(),
+                                ),
                                 false,
                             ));
                             break;

@@ -53,7 +53,7 @@
       <h2>{t(ed.isNew ? "snip.newTitle" : "snip.editTitle")}</h2>
       <label class="field">
         <span class="label">{t("snip.name")}</span>
-        <input class="input" bind:value={ed.snippet.name} placeholder="Disk usage" data-autofocus />
+        <input class="input" bind:value={ed.snippet.name} placeholder={t("snip.namePlaceholder")} data-autofocus />
       </label>
       <label class="field">
         <span class="label">{t("snip.command")}</span>

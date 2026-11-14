@@ -170,7 +170,7 @@ Keep the Emergency Kit somewhere safe. Vault encryption protects stored and sync
 
 ## Development
 
-The app uses **Svelte 5**, **Tauri 2**, and **Rust**. Install Node.js 22, Rust stable, and the [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform, including WebView2 and the C++ build tools on Windows.
+The app uses **Svelte 5**, **Tauri 2**, and **Rust**. Install Node.js 22, Rust through rustup (`rust-toolchain.toml` pins the version), and the [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform, including WebView2 and the C++ build tools on Windows.
 
 ```bash
 git clone https://github.com/andreafunicelli/Handrail.git
@@ -198,7 +198,11 @@ After installing dependencies and building the helper:
 npm run check
 npm run test
 npm run build
-cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo fmt --manifest-path rdp-helper/Cargo.toml -- --check
+cargo clippy --manifest-path rdp-helper/Cargo.toml --all-targets --locked -- -D warnings
 cargo test --manifest-path rdp-helper/Cargo.toml --locked
 ```
 
@@ -236,6 +240,7 @@ The local MCP server listens on `127.0.0.1` with a per-launch bearer token and H
 | `aht-sync` | GitHub, cloud-drive, and folder sync |
 | `aht-import` | Connection importers |
 | `aht-s3` | S3-compatible storage |
+| `aht-db` | MySQL/MariaDB and PostgreSQL client, SQL dumps and backups, statement risk classification |
 
 See the [IPC contract](docs/ipc-contract.md) and the [original design specification](docs/superpowers/specs/2026-10-10-aihubterm-design.md), written under the earlier name AIHubTerm.
 

@@ -67,6 +67,7 @@ class OpsLog {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private writing: Promise<void> | null = null;
   private settingsLoaded = false;
+  private unloadHooked = false;
 
   get key() {
     return `opslog.${deviceId()}`;
@@ -74,6 +75,11 @@ class OpsLog {
 
   /** Read the settings early so the first records already follow them. Never throws. */
   async init() {
+    if (!this.unloadHooked && typeof window !== "undefined") {
+      // Quitting or reloading: write what is batched now (best effort, the page is going away).
+      this.unloadHooked = true;
+      window.addEventListener("pagehide", () => void this.flush());
+    }
     if (this.settingsLoaded) return;
     try {
       this.settings = parseSettings(await api.getSetting(OPSLOG_SETTINGS_KEY));

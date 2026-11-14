@@ -29,7 +29,7 @@ pub const POINTER_BITMAP: u8 = 3;
 
 /// First message: where to connect and as whom. Sent over stdin so the password never shows
 /// up in a process listing.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct Start {
     pub host: String,
     pub port: u16,
@@ -45,6 +45,28 @@ pub struct Start {
     /// Connect to the console (administrative) session, like `mstsc /admin`.
     #[serde(default)]
     pub admin: bool,
+    /// Also accept a server without Network Level Authentication (TLS security, the password
+    /// typed into the login screen). Off: the server's certificate is not checked, and without
+    /// NLA the password would go to whoever answers; with NLA (CredSSP) it is only sent once
+    /// the server proved it can check it.
+    #[serde(default)]
+    pub allow_tls_login: bool,
+}
+
+impl std::fmt::Debug for Start {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Start")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("domain", &self.domain)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("scale", &self.scale)
+            .field("admin", &self.admin)
+            .field("allow_tls_login", &self.allow_tls_login)
+            .finish_non_exhaustive()
+    }
 }
 
 fn default_scale() -> u32 {
@@ -155,6 +177,20 @@ mod tests {
         assert!(read(&mut bad).await.is_err());
         let mut zero = &0u32.to_le_bytes()[..];
         assert!(read(&mut zero).await.is_err());
+    }
+
+    #[test]
+    fn start_hides_the_password_and_requires_nla() {
+        let s: Start = serde_json::from_str(
+            r#"{"host":"h","port":3389,"username":"u","password":"hunter2","width":800,"height":600}"#,
+        )
+        .unwrap();
+        assert!(!s.allow_tls_login);
+        let shown = format!("{s:?}");
+        assert!(
+            !shown.contains("hunter2") && shown.contains("\"h\""),
+            "{shown}"
+        );
     }
 
     #[test]

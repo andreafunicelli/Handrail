@@ -6,6 +6,7 @@
   import { errorMessage } from "../../api/errors";
   import { t } from "../../i18n";
   import { toasts } from "../../stores/toasts.svelte";
+  import { setUnsaved } from "../../stores/vault.svelte";
   import { formatBytes } from "../../util/time";
 
   /** Export a namespace to an SQL file, or import an SQL or CSV file. The backend reads and
@@ -38,6 +39,12 @@
   } = $props();
 
   let phase = $state<"setup" | "running" | "done">("setup");
+  // A running import or export holds off the auto-lock (locking closes the connection).
+  const unsavedKey = `dbxfer:${crypto.randomUUID()}`;
+  $effect(() => {
+    setUnsaved(unsavedKey, phase === "running");
+    return () => setUnsaved(unsavedKey, false);
+  });
   let error = $state<string | null>(null);
   let progress = $state<DbTransferProgress | null>(null);
   let summary = $state<DbTransferSummary | null>(null);

@@ -44,6 +44,8 @@ export interface Connection {
   tunnels: Tunnel[];
   /** RDP: connect to the console (administrative) session, like `mstsc /admin`. */
   rdp_admin?: boolean;
+  /** RDP: also log in to a server without Network Level Authentication. */
+  rdp_allow_tls_login?: boolean;
   /** Shown before the name: a built-in icon name or a single emoji. */
   icon?: string | null;
   /** Databases: the database to open (the server's default when empty). */

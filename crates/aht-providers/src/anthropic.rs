@@ -123,15 +123,26 @@ pub(crate) fn build_body(req: &ChatRequest) -> Value {
         "stream": true,
         "messages": messages,
     });
+    // Prompt caching for Claude models: the tools and system prompt are the same on every call
+    // of a run. Other models behind Anthropic-compatible APIs get the plain request.
+    let cache = req.model.to_ascii_lowercase().contains("claude");
     if let Some(s) = req.system.as_ref().filter(|s| !s.is_empty()) {
-        body["system"] = json!(s);
+        body["system"] = if cache {
+            json!([{"type":"text","text":s,"cache_control":{"type":"ephemeral"}}])
+        } else {
+            json!(s)
+        };
     }
     if !req.tools.is_empty() {
-        body["tools"] = req
+        let mut tools: Vec<Value> = req
             .tools
             .iter()
             .map(|t| json!({"name":t.name,"description":t.description,"input_schema":t.input_schema}))
             .collect();
+        if let (true, Some(last)) = (cache, tools.last_mut()) {
+            last["cache_control"] = json!({"type":"ephemeral"});
+        }
+        body["tools"] = Value::Array(tools);
     }
     if let Some(t) = req.temperature {
         body["temperature"] = json!(t);
@@ -154,6 +165,8 @@ pub(crate) struct AnthropicDecoder {
     blocks: HashMap<u64, Block>,
     input_tokens: u64,
     output_tokens: u64,
+    cache_read: u64,
+    cache_write: u64,
     stop: Option<StopReason>,
     done: bool,
     /// A tool block whose JSON did not parse: (tool name, parse error). The stop reason comes
@@ -187,9 +200,10 @@ impl Decoder for AnthropicDecoder {
         match kind {
             "message_start" => {
                 let u = &v["message"]["usage"];
-                self.input_tokens = u["input_tokens"].as_u64().unwrap_or(0)
-                    + u["cache_creation_input_tokens"].as_u64().unwrap_or(0)
-                    + u["cache_read_input_tokens"].as_u64().unwrap_or(0);
+                self.cache_write = u["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+                self.cache_read = u["cache_read_input_tokens"].as_u64().unwrap_or(0);
+                self.input_tokens =
+                    u["input_tokens"].as_u64().unwrap_or(0) + self.cache_write + self.cache_read;
                 self.output_tokens = u["output_tokens"].as_u64().unwrap_or(0);
             }
             "content_block_start" => {
@@ -255,8 +269,14 @@ impl Decoder for AnthropicDecoder {
                 if let Some(o) = u["output_tokens"].as_u64() {
                     self.output_tokens = o;
                 }
+                if let Some(w) = u["cache_creation_input_tokens"].as_u64() {
+                    self.cache_write = w;
+                }
+                if let Some(r) = u["cache_read_input_tokens"].as_u64() {
+                    self.cache_read = r;
+                }
                 if let Some(i) = u["input_tokens"].as_u64().filter(|i| *i > 0) {
-                    self.input_tokens = i;
+                    self.input_tokens = i + self.cache_write + self.cache_read;
                 }
             }
             "message_stop" => {
@@ -271,6 +291,8 @@ impl Decoder for AnthropicDecoder {
                 out.push(ProviderEvent::Usage {
                     input: self.input_tokens,
                     output: self.output_tokens,
+                    cache_read: self.cache_read,
+                    cache_write: self.cache_write,
                 });
                 out.push(ProviderEvent::Stop {
                     reason: self.stop.unwrap_or(StopReason::EndTurn),
@@ -383,13 +405,39 @@ mod tests {
             temperature: None,
         };
         let b = build_body(&req);
-        assert_eq!(b["system"], "sys");
+        assert_eq!(
+            b["system"], "sys",
+            "no caching markup for non-Claude models"
+        );
         assert_eq!(b["messages"][1]["content"][0]["type"], "tool_use");
         assert_eq!(b["messages"][1]["content"].as_array().unwrap().len(), 1);
         assert_eq!(b["messages"][2]["content"][0]["type"], "tool_result");
         assert_eq!(b["messages"][2]["content"][0]["is_error"], true);
         assert_eq!(b["messages"][2]["content"][1]["type"], "text");
         assert!(b.get("tools").is_none());
+    }
+
+    #[test]
+    fn claude_requests_cache_system_and_tools() {
+        let tool = |n: &str| ToolDef {
+            name: n.into(),
+            description: "d".into(),
+            input_schema: json!({"type":"object"}),
+        };
+        let req = ChatRequest {
+            model: "claude-opus-5-5".into(),
+            system: Some("sys".into()),
+            messages: vec![Message::user_text("hi")],
+            tools: vec![tool("a"), tool("b")],
+            max_tokens: 100,
+            temperature: None,
+        };
+        let b = build_body(&req);
+        let eph = json!({"type":"ephemeral"});
+        assert_eq!(b["system"][0]["text"], "sys");
+        assert_eq!(b["system"][0]["cache_control"], eph);
+        assert!(b["tools"][0].get("cache_control").is_none());
+        assert_eq!(b["tools"][1]["cache_control"], eph);
     }
 
     #[test]

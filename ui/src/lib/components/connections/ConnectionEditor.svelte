@@ -153,7 +153,13 @@
     c.kind = kind;
   }
 
+  /** Everything the form holds, to tell whether closing would lose something. */
+  const formKey = () =>
+    JSON.stringify([$state.snapshot(c), tagsText, emojiDraft, authType, identityId, password, keyText, passphrase, passwordId, keyId]);
+  let initial = "";
+
   onMount(() => {
+    initial = formKey();
     sheet.querySelector<HTMLInputElement>("input")?.focus();
     void credentials.load().catch(() => {});
   });
@@ -162,8 +168,22 @@
     ui.editing = null;
   }
 
+  /** Close on the user's request (Esc, Cancel, outside click): asks first when edits would be lost. */
+  async function requestClose() {
+    if (formKey() !== initial && !(await ui.ask(t("editor.discardTitle"), { body: t("editor.discardBody"), confirmLabel: t("editor.discard"), danger: true }))) return;
+    close();
+  }
+
+  /** Secrets this form already stored, by kind and value: a save tried again after a failure
+   *  reuses them instead of storing a second copy. */
+  const stored = new Map<string, string>();
   async function secret(kind: SecretKind, value: string, label: string) {
-    return api.saveSecret({ id: uuid(), kind, label, value });
+    const k = `${kind}\0${value}`;
+    const known = stored.get(k);
+    if (known) return known;
+    const id = await api.saveSecret({ id: uuid(), kind, label, value });
+    stored.set(k, id);
+    return id;
   }
 
   async function save(connectAfter = false) {
@@ -184,6 +204,7 @@
         out.approval_mode = null;
       } else {
         out.rdp_admin = false;
+        out.rdp_allow_tls_login = false;
       }
       if (out.kind === "mysql" || out.kind === "postgres") {
         out.database = out.database?.trim() || null;
@@ -220,8 +241,9 @@
       } else {
         out.auth = { type: authType };
       }
-      password = keyText = passphrase = testPassword = "";
       const saved = await connections.save(out);
+      // Only now: a failed save keeps what was typed for another try.
+      password = keyText = passphrase = testPassword = "";
       toasts.success(t("editor.saved", { name: saved.name }));
       close();
       if (connectAfter) await sessions.open(saved.id);
@@ -240,7 +262,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="scrim" onmousedown={close}></div>
+<div class="scrim" onmousedown={requestClose}></div>
 <div
   class="sheet"
   tabindex="-1"
@@ -251,14 +273,14 @@
   onkeydown={(e) => {
     if (e.key === "Escape") {
       e.stopPropagation();
-      close();
+      void requestClose();
     }
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) save();
   }}
 >
   <header>
     <h2>{isNew ? t("editor.new") : t("editor.edit")}</h2>
-    <button class="icon-btn" aria-label={t("common.close")} onclick={close}><Icon name="x" /></button>
+    <button class="icon-btn" aria-label={t("common.close")} onclick={requestClose}><Icon name="x" /></button>
   </header>
 
   <form class="body" onsubmit={(e) => (e.preventDefault(), save())}>
@@ -440,6 +462,10 @@
             <input type="checkbox" bind:checked={c.rdp_admin} />
             <span>{t("editor.rdpAdmin")}<span class="hint">{t("editor.rdpAdminHint")}</span></span>
           </label>
+          <label class="check admin">
+            <input type="checkbox" bind:checked={c.rdp_allow_tls_login} />
+            <span>{t("editor.rdpNoNla")}<span class="hint">{t("editor.rdpNoNlaHint")}</span></span>
+          </label>
         {/if}
 
         <fieldset class="field" hidden={c.kind !== "ssh"}>
@@ -560,7 +586,7 @@
   </div>
 
   <footer>
-    <button class="btn ghost" onclick={close}>{t("editor.cancel")}</button>
+    <button class="btn ghost" onclick={requestClose}>{t("editor.cancel")}</button>
     <span class="grow"></span>
     <button class="btn" disabled={!valid || busy} onclick={() => save(true)}>{t("editor.saveConnect")}</button>
     <button class="btn primary" disabled={!valid || busy} onclick={() => save()}>{t("editor.save")}</button>

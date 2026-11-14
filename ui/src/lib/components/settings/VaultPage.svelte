@@ -16,7 +16,7 @@
   }
   async function lock() {
     ui.settingsPage = null;
-    await vault.lock().catch(toasts.error);
+    await vault.lockAsking();
   }
 </script>
 

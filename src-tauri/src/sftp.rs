@@ -438,7 +438,10 @@ pub async fn sftp_download(
     Ok(local.display().to_string())
 }
 
-/// Upload a local file (picked in the file dialog) into `dir`; returns the remote path.
+/// Upload a local file (picked in the file dialog) into `dir`; returns the remote path. A file
+/// of the same name is replaced (the page compares and asks first), only once the upload is
+/// complete; `overwrite: false` rejects with `exists` instead.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sftp_upload(
     app: AppHandle,
@@ -448,12 +451,15 @@ pub async fn sftp_upload(
     local_path: PathBuf,
     dir: String,
     transfer_id: String,
+    overwrite: Option<bool>,
 ) -> Result<String> {
     let name = picked_name(&local_path)?;
     let s = client(&state, session_id, root).await?;
     let remote = aht_ssh::sftp::join(&dir, &name);
-    s.upload(&local_path, &remote, reporter(&app, transfer_id))
-        .await?;
+    if overwrite == Some(false) && s.exists(&remote).await {
+        return Err(Error::Busy(aht_ssh::sftp::EXISTS.into()));
+    }
+    crate::copy::upload_replacing(&s, &local_path, &remote, reporter(&app, transfer_id)).await?;
     Ok(remote)
 }
 

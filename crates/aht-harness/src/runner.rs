@@ -5,8 +5,9 @@
 //! open for follow-ups via [`HeadlessRun::send_user_message`]); Codex reads the prompt from stdin
 //! (spec ends with `-`) and stdin is closed; OpenCode takes the prompt as its final argv entry.
 //!
-//! The channel always ends with exactly one terminal `Done` per process lifetime unless the
-//! parser already produced one; a non-zero exit (not caused by `cancel`) is reported as `Error`.
+//! Every turn (the first prompt and each follow-up) ends with a `Done`: when the process exits
+//! while a turn is still open, the runner sends it, after an `Error` for a non-zero exit (not
+//! caused by `cancel`).
 
 use crate::detect::{command_for, resolve_program};
 use crate::launch::LaunchSpec;
@@ -17,14 +18,17 @@ use aht_core::{Error, Result};
 use serde_json::json;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::ChildStdin;
 use tokio::sync::{mpsc, watch, Mutex, Notify};
 
 /// Max stderr lines forwarded as `Error` events per run (noisy CLIs).
 const MAX_STDERR_EVENTS: usize = 200;
+/// Longest stdout/stderr line read from a harness; a longer one ends the stream with an error.
+const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 const EVENT_CHANNEL: usize = 256;
 
 /// A CLI that exits before reading its prompt (bad flag, not signed in) closes its stdin. Its
@@ -41,6 +45,8 @@ fn tolerate_exit(r: std::io::Result<()>) -> std::io::Result<()> {
 #[derive(Clone)]
 pub struct HeadlessRun {
     kind: HarnessKind,
+    /// Turns not yet ended by `Done` (see `spawn`).
+    open_turns: Arc<AtomicUsize>,
     stdin: Arc<Mutex<Option<ChildStdin>>>,
     cancel: Arc<Notify>,
     finished: watch::Receiver<bool>,
@@ -72,7 +78,7 @@ impl HeadlessRun {
         let mut cmd = command_for(&program);
         cmd.args(&spec.args);
         if spec.kind == HarnessKind::OpenCode {
-            cmd.arg(prompt);
+            cmd.arg(opencode_prompt_arg(prompt));
         }
         for k in &spec.env_remove {
             cmd.env_remove(k);
@@ -120,11 +126,20 @@ impl HeadlessRun {
         let (fin_tx, fin_rx) = watch::channel(false);
         let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+        // Turns asked for and not yet ended by a `Done`: the first prompt, plus one per
+        // follow-up. A process that exits with one open owes that turn its Error + Done.
+        let open_turns = Arc::new(AtomicUsize::new(1));
         let stdout = child.stdout.take().expect("piped");
         let stderr = child.stderr.take().expect("piped");
-        let out_task = tokio::spawn(pump_stdout(stdout, parser_for(spec.kind), tx.clone()));
+        let out_task = tokio::spawn(pump_stdout(
+            stdout,
+            parser_for(spec.kind),
+            tx.clone(),
+            open_turns.clone(),
+        ));
         let err_task = tokio::spawn(pump_stderr(stderr, tx.clone()));
 
+        let turns_handle = open_turns.clone();
         let waiter_cancel = cancel.clone();
         let waiter_cancelled = cancelled.clone();
         tokio::spawn(async move {
@@ -138,11 +153,9 @@ impl HeadlessRun {
                 }
             };
             // Let readers drain; a grandchild holding the pipes open must not hang us.
-            let done_seen = match tokio::time::timeout(Duration::from_secs(3), out_task).await {
-                Ok(Ok(d)) => d,
-                _ => false,
-            };
+            let _ = tokio::time::timeout(Duration::from_secs(3), out_task).await;
             let _ = tokio::time::timeout(Duration::from_secs(1), err_task).await;
+            let done_seen = open_turns.load(Ordering::SeqCst) == 0;
             let was_cancelled = waiter_cancelled.load(std::sync::atomic::Ordering::SeqCst);
             if !was_cancelled && !done_seen {
                 if let Some(s) = status.filter(|s| !s.success()) {
@@ -165,6 +178,7 @@ impl HeadlessRun {
         Ok((
             HeadlessRun {
                 kind: spec.kind,
+                open_turns: turns_handle,
                 stdin: Arc::new(Mutex::new(stdin)),
                 cancel,
                 finished: fin_rx,
@@ -185,7 +199,11 @@ impl HeadlessRun {
         let si = guard
             .as_mut()
             .ok_or_else(|| Error::Busy("harness stdin is closed".into()))?;
-        si.write_all(user_message_line(text).as_bytes()).await?;
+        self.open_turns.fetch_add(1, Ordering::SeqCst);
+        if let Err(e) = si.write_all(user_message_line(text).as_bytes()).await {
+            end_turn(&self.open_turns);
+            return Err(e.into());
+        }
         si.flush().await?;
         Ok(())
     }
@@ -211,6 +229,17 @@ impl HeadlessRun {
     }
 }
 
+/// OpenCode takes the prompt as a positional argument. A prompt starting with `-` would be read
+/// as an option, so it gets a leading space (harmless to the model).
+// shortcut: not `--`, since whether `opencode run` accepts it is unverified; switch once checked.
+fn opencode_prompt_arg(prompt: &str) -> String {
+    if prompt.starts_with('-') {
+        format!(" {prompt}")
+    } else {
+        prompt.to_string()
+    }
+}
+
 /// One Claude stream-json user message (`--input-format stream-json`), newline terminated.
 /// Shape from the Agent SDK streaming-input docs [U: verify with --replay-user-messages].
 pub fn user_message_line(text: &str) -> String {
@@ -223,29 +252,79 @@ pub fn user_message_line(text: &str) -> String {
     s
 }
 
+/// One open turn ended (never below zero: a stray `Done` must not hide a later turn).
+fn end_turn(open: &AtomicUsize) {
+    let mut cur = open.load(Ordering::SeqCst);
+    while cur > 0 {
+        match open.compare_exchange(cur, cur - 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return,
+            Err(now) => cur = now,
+        }
+    }
+}
+
+/// Read one `\n`-terminated line of at most [`MAX_LINE_BYTES`] (invalid UTF-8 replaced).
+/// `Ok(None)` at EOF; an error for an overlong line or a read failure.
+async fn next_line<R: tokio::io::AsyncBufRead + Unpin>(
+    r: &mut R,
+) -> std::io::Result<Option<String>> {
+    let mut buf = Vec::new();
+    // `take` bounds what one call may buffer; +1 tells a full line from an overlong one.
+    let n = (&mut *r)
+        .take(MAX_LINE_BYTES as u64 + 1)
+        .read_until(b'\n', &mut buf)
+        .await?;
+    if n == 0 {
+        return Ok(None);
+    }
+    if buf.len() > MAX_LINE_BYTES {
+        return Err(std::io::Error::other(format!(
+            "output line longer than {} MB",
+            MAX_LINE_BYTES / (1024 * 1024)
+        )));
+    }
+    while matches!(buf.last(), Some(b'\n' | b'\r')) {
+        buf.pop();
+    }
+    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+}
+
 async fn pump_stdout(
     out: tokio::process::ChildStdout,
     mut parser: Box<dyn StreamParser>,
     tx: mpsc::Sender<AgentEvent>,
-) -> bool {
-    let mut done = false;
-    let mut lines = BufReader::new(out).lines();
-    // Invalid UTF-8 would end `lines()` with an error; treat that as EOF.
-    while let Ok(Some(line)) = lines.next_line().await {
+    open_turns: Arc<AtomicUsize>,
+) {
+    let mut out = BufReader::new(out);
+    loop {
+        let line = match next_line(&mut out).await {
+            Ok(Some(l)) => l,
+            Ok(None) => return,
+            Err(e) => {
+                let _ = tx
+                    .send(AgentEvent::Error {
+                        message: format!("harness output unreadable: {e}"),
+                        retryable: false,
+                    })
+                    .await;
+                return;
+            }
+        };
         for ev in parser.feed_line(&line) {
-            done |= ev == AgentEvent::Done;
+            if ev == AgentEvent::Done {
+                end_turn(&open_turns);
+            }
             if tx.send(ev).await.is_err() {
-                return done; // receiver dropped
+                return; // receiver dropped
             }
         }
     }
-    done
 }
 
 async fn pump_stderr(err: tokio::process::ChildStderr, tx: mpsc::Sender<AgentEvent>) {
-    let mut lines = BufReader::new(err).lines();
+    let mut err = BufReader::new(err);
     let mut sent = 0;
-    while let Ok(Some(line)) = lines.next_line().await {
+    while let Ok(Some(line)) = next_line(&mut err).await {
         let line = line.trim();
         if line.is_empty() || sent >= MAX_STDERR_EVENTS {
             continue;
@@ -322,6 +401,29 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(l.trim()).unwrap();
         assert_eq!(v["type"], "user");
         assert_eq!(v["message"]["content"][0]["text"], "hi \"there\"\nline2");
+    }
+
+    #[test]
+    fn opencode_prompt_never_looks_like_an_option() {
+        assert_eq!(opencode_prompt_arg("check disk"), "check disk");
+        assert_eq!(opencode_prompt_arg("--help me"), " --help me");
+        assert_eq!(opencode_prompt_arg("-rf"), " -rf");
+    }
+
+    #[tokio::test]
+    async fn next_line_caps_line_length() {
+        let data = b"one\r\ntwo\n\xff\n".to_vec();
+        let mut r = &data[..];
+        assert_eq!(next_line(&mut r).await.unwrap().as_deref(), Some("one"));
+        assert_eq!(next_line(&mut r).await.unwrap().as_deref(), Some("two"));
+        assert_eq!(
+            next_line(&mut r).await.unwrap().as_deref(),
+            Some("\u{fffd}")
+        );
+        assert_eq!(next_line(&mut r).await.unwrap(), None);
+        let long = vec![b'a'; MAX_LINE_BYTES + 10];
+        let mut r = &long[..];
+        assert!(next_line(&mut r).await.is_err());
     }
 
     #[test]

@@ -1,6 +1,8 @@
 import { api } from "../api";
 import type { UpdateInfo } from "../api/types";
 import { errorMessage } from "../api/errors";
+import { t, tn } from "../i18n";
+import { ui } from "./ui.svelte";
 
 /** First check shortly after start, then every 6 hours while the app runs. */
 const FIRST_CHECK_MS = 15_000;
@@ -61,6 +63,13 @@ class Updates {
       this.phase = "error";
       this.error = errorMessage(e);
     }
+  }
+
+  /** Install after asking, when the restart would close `openSessions` sessions. */
+  async installAsking(openSessions: number) {
+    const body = openSessions ? tn("update.sessionsWarning", openSessions) : undefined;
+    if (body && !(await ui.ask(t("update.confirmTitle"), { body, confirmLabel: t("update.install"), danger: true }))) return;
+    await this.install();
   }
 
   dismiss() {

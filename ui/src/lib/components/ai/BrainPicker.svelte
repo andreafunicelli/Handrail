@@ -50,7 +50,7 @@
     </button>
     {#if current.brain.type === "built_in" && models[current.brain.provider]?.length}
       {@const pid = current.brain.provider}
-      <select class="model mono" aria-label="Model" value={current.brain.model} onchange={(e) => agent.setModel(pid, (e.currentTarget as HTMLSelectElement).value)}>
+      <select class="model mono" aria-label={t("ai.model")} value={current.brain.model} onchange={(e) => agent.setModel(pid, (e.currentTarget as HTMLSelectElement).value)}>
         {#each models[pid] as m (m)}<option value={m}>{m}</option>{/each}
       </select>
     {/if}

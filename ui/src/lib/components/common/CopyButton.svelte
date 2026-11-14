@@ -2,7 +2,7 @@
   import { onDestroy } from "svelte";
   import Icon from "../icons/Icon.svelte";
   import { t } from "../../i18n";
-  import { copyText } from "../../util/clipboard";
+  import { clearClipboardLater, copyText } from "../../util/clipboard";
 
   /**
    * Copies `text` and says so in place: the icon and label swap to "Copied" (or "Copy failed")
@@ -14,13 +14,15 @@
     label = t("copy.copy"),
     doneLabel = t("copy.done"),
     class: cls = "btn sm",
-  }: { text: string; label?: string; doneLabel?: string; class?: string } = $props();
+    secret = false,
+  }: { text: string; label?: string; doneLabel?: string; class?: string; /** Clear the clipboard after a minute. */ secret?: boolean } = $props();
 
   let status = $state<"idle" | "copied" | "error">("idle");
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   async function copy() {
     const ok = await copyText(text);
+    if (ok && secret) clearClipboardLater(text);
     clearTimeout(timer);
     status = ok ? "copied" : "error";
     timer = setTimeout(() => (status = "idle"), ok ? 1600 : 2400);

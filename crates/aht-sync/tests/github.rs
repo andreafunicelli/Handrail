@@ -280,6 +280,20 @@ async fn ensure_repo_creates_private_repo_when_missing() {
     assert!(!backend(&s).ensure_repo().await.unwrap());
 }
 
+#[tokio::test]
+async fn ensure_repo_refuses_a_public_repo() {
+    let s = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/me/vault"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"private": false})))
+        .mount(&s)
+        .await;
+    assert!(matches!(
+        backend(&s).ensure_repo().await,
+        Err(SyncError::PublicRepo(_))
+    ));
+}
+
 /// A vault already in sync with the remote makes zero write calls.
 #[tokio::test]
 async fn up_to_date_sync_makes_no_writes() {
@@ -316,8 +330,9 @@ async fn up_to_date_sync_makes_no_writes() {
         .mount(&s)
         .await;
     let b = backend(&s);
-    let r1 = sync_once(&mut vault, &b, &mut state).await.unwrap();
-    let r2 = sync_once(&mut vault, &b, &mut state).await.unwrap();
+    let vault = tokio::sync::Mutex::new(vault);
+    let r1 = sync_once(&vault, &b, &mut state).await.unwrap();
+    let r2 = sync_once(&vault, &b, &mut state).await.unwrap();
     assert_eq!((r1.pulled, r1.pushed), (0, 0));
     assert_eq!((r2.pulled, r2.pushed), (0, 0));
 }

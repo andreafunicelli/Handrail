@@ -5,6 +5,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { Api } from "./api";
 import type { ApprovalSettings } from "./types";
 import { errorMessage } from "./errors";
+import { tn } from "../i18n";
 
 export const APPROVALS_KEY = "approvals";
 export const DEFAULT_APPROVALS: ApprovalSettings = { default_mode: "confirm_all", deny_list: [] };
@@ -152,7 +153,7 @@ export function createTauriApi(): Api {
       const t0 = performance.now();
       try {
         const models = await invoke<string[]>("list_models", { provider_id });
-        return { ok: true, message: `${models.length} models · ${Math.round(performance.now() - t0)} ms` };
+        return { ok: true, message: tn("prov.testOk", models.length, { ms: Math.round(performance.now() - t0) }) };
       } catch (e) {
         return { ok: false, message: errorMessage(e) };
       }

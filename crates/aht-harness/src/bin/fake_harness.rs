@@ -8,7 +8,8 @@
 //! * `--hang`              after replay, sleep forever (cancel test)
 //! * `--spawn-child`       spawn a sleeping grandchild (this binary with `--hang` and no fixture)
 //! * `--claude-echo`       ignore the fixture; for each stdin JSON line print an assistant event
-//!   echoing the user text plus a result event; exit at stdin EOF
+//!   echoing the user text plus a result event; exit at stdin EOF. The text `crash` makes it
+//!   exit with code 2 instead, mid-turn
 //! * `--print-env=<NAME>`  print `{"type":"error","message":"ENV <NAME>=<value|unset>"}` first
 
 use std::io::{BufRead, Write};
@@ -27,6 +28,9 @@ fn main() {
         for line in std::io::stdin().lock().lines().map_while(Result::ok) {
             let v: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
             let text = v["message"]["content"][0]["text"].as_str().unwrap_or("?");
+            if text == "crash" {
+                std::process::exit(2);
+            }
             let ev = serde_json::json!({"type":"assistant","message":{"content":[
                 {"type":"text","text":format!("echo: {text}")}]}});
             let res = serde_json::json!({"type":"result","subtype":"success","is_error":false,

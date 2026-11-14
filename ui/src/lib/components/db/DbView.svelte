@@ -11,12 +11,15 @@
   import { api } from "../../api";
   import type { DbColumnInfo, DbOpened, DbQueryOutput, DbTableInfo, DbTableStructure } from "../../api/types";
   import { errorMessage, isIpcError } from "../../api/errors";
-  import { t } from "../../i18n";
+  import { fmtNumber, t, tn } from "../../i18n";
   import { connections } from "../../stores/connections.svelte";
   import { dbApprovals } from "../../stores/dbApprovals.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { copyText } from "../../util/clipboard";
-  import { createSqlEditor, type SqlEditorHandle } from "../../util/codemirror";
+  import type { SqlEditorHandle } from "../../util/codemirror";
+  import HoldButton from "../common/HoldButton.svelte";
+  import { revealHidden } from "../../util/approval";
+  import { setUnsaved } from "../../stores/vault.svelte";
   import { buildEdits, editCount, noEdits, primaryResult, resultSummary, tableOverview, tableStats, toCsv, toInserts, toJson, type GridEdits } from "../../util/db";
   import { addHistory, clearHistory, loadHistory, loadTabs, nextTabName, saveTabs, type HistoryEntry, type QueryTabDoc } from "../../util/dbtabs";
   import { statementAt } from "../../util/sqltext";
@@ -38,7 +41,7 @@
   import { load as loadPref, save as savePref } from "../../util/storage";
 
   /** A database in a pane: schema on the left, SQL editor over the results on the right. */
-  let { connectionId, focused }: { connectionId: string; focused: boolean } = $props();
+  let { connectionId, leaf = "", focused }: { connectionId: string; leaf?: string; focused: boolean } = $props();
 
   const conn = $derived(connections.byId.get(connectionId));
   const ROW_CHOICES = [100, 1000, 10000];
@@ -54,6 +57,8 @@
   /** Shared with agents (off for every new connection). */
   let shared = $state(false);
   let denyNote = $state<Record<string, string>>({});
+  /** Hold-to-approve buttons of destructive requests, reset when an answer fails. */
+  let holds = $state<Record<string, HoldButton>>({});
   const asks = $derived(dbApprovals.forTab(tabId));
 
   let namespaces = $state<string[]>([]);
@@ -146,7 +151,7 @@
   })();
   // A view belongs to one connection for its whole life.
   const connKey = untrack(() => connectionId);
-  const initial = store ? loadTabs(store, connKey, () => crypto.randomUUID()) : { tabs: [{ key: "q1", name: "Query 1", sql: "" }], current: 0 };
+  const initial = store ? loadTabs(store, connKey, () => crypto.randomUUID()) : { tabs: [{ key: "q1", name: t("db.queryName", { n: 1 }), sql: "" }], current: 0 };
   let qtabs = $state<QueryTabDoc[]>(initial.tabs);
   let qcur = $state(initial.current);
   type View = {
@@ -247,6 +252,7 @@
       if (closed) return void api.dbClose(opened.id).catch(() => {});
       id = opened.id;
       tabId = opened.id;
+      dbApprovals.tabs[opened.id] = { leaf, name: conn?.name ?? opened.database ?? "" };
       shared = false;
       info = opened;
       phase = "live";
@@ -792,7 +798,7 @@
     try {
       const n = await api.dbApplyEdits(id, target.ns, target.table, list);
       if (closed) return;
-      toasts.success(t("db.saved", { n }));
+      toasts.success(tn("db.saved", n));
       edits = noEdits();
       await openTable(target.ns, target.table, true, true);
     } catch (e) {
@@ -832,10 +838,10 @@
     }
   }
 
-  function decide(approvalId: string, approve: boolean) {
+  async function decide(approvalId: string, approve: boolean) {
     const note = denyNote[approvalId]?.trim();
-    delete denyNote[approvalId];
-    void dbApprovals.decide(approvalId, approve ? { type: "approve" } : { type: "deny", message: note || null });
+    if (await dbApprovals.decide(approvalId, approve ? { type: "approve" } : { type: "deny", message: note || null })) delete denyNote[approvalId];
+    else holds[approvalId]?.reset();
   }
 
   async function stop() {
@@ -845,7 +851,7 @@
   async function copyCsv() {
     const r = output?.results[active];
     if (!r) return;
-    if (await copyText(toCsv(r))) toasts.success(t("db.csvCopied", { rows: r.rows.length }));
+    if (await copyText(toCsv(r))) toasts.success(tn("db.csvCopied", r.rows.length));
   }
 
   /** Save the rows shown to a file (CSV, JSON or INSERT statements into the table shown). */
@@ -857,7 +863,7 @@
     const contents = format === "csv" ? toCsv(r) : format === "json" ? toJson(r) : toInserts(r, path, info?.kind ?? "mysql");
     try {
       const saved = await api.dbExportFile(`${base}.${format}`, contents);
-      if (saved) toasts.success(t("db.exported", { rows: r.rows.length, path: saved }));
+      if (saved) toasts.success(tn("db.exported", r.rows.length, { path: saved }));
     } catch (e) {
       toasts.error(e);
     }
@@ -882,20 +888,38 @@
     if (focused && phase === "live") editor?.focus();
   });
 
+  // The editor (CodeMirror) loads on first use, so it stays out of the app's entry chunk.
+  let loadingEditor = false;
   $effect(() => {
-    if (phase !== "live" || !editorHost || editor) return;
-    editor = createSqlEditor(editorHost, {
-      doc: qtabs[qcur]?.sql ?? "",
-      dialect: info?.kind ?? "mysql",
-      onRun: () => void run(),
-      onRunCurrent: () => void runCurrent(),
-      onChange: (text) => {
-        if (!qtabs[qcur]) return;
-        qtabs[qcur].sql = text;
-        persistTabs();
-      },
-    });
-    updateCompletion();
+    if (phase !== "live" || !editorHost || editor || loadingEditor) return;
+    const host = editorHost;
+    loadingEditor = true;
+    void import("../../util/codemirror")
+      .then(({ createSqlEditor }) => {
+        if (closed || editor || !host.isConnected) return;
+        editor = createSqlEditor(host, {
+          doc: qtabs[qcur]?.sql ?? "",
+          dialect: info?.kind ?? "mysql",
+          onRun: () => void run(),
+          onRunCurrent: () => void runCurrent(),
+          onChange: (text) => {
+            if (!qtabs[qcur]) return;
+            qtabs[qcur].sql = text;
+            persistTabs();
+          },
+        });
+        updateCompletion();
+        if (focused) editor.focus();
+      })
+      .catch(toasts.error)
+      .finally(() => (loadingEditor = false));
+  });
+
+  // Unsaved grid or structure edits: locking (which closes this pane) would lose them.
+  const unsavedKey = `db:${crypto.randomUUID()}`;
+  $effect(() => {
+    setUnsaved(unsavedKey, pending > 0 || editStatements.length > 0);
+    return () => setUnsaved(unsavedKey, false);
   });
 
   onMount(() => {
@@ -906,6 +930,7 @@
       closed = true;
       editor?.destroy();
       editor = null;
+      if (tabId) dbApprovals.forget(tabId);
       if (id) void api.dbClose(id).catch(() => {});
       id = null;
     };
@@ -1007,7 +1032,7 @@
         <label class="rows">
           {t("db.maxRows")}
           <select bind:value={maxRows}>
-            {#each ROW_CHOICES as n (n)}<option value={n}>{n.toLocaleString()}</option>{/each}
+            {#each ROW_CHOICES as n (n)}<option value={n}>{fmtNumber(n)}</option>{/each}
           </select>
         </label>
         <span class="spacer"></span>
@@ -1069,7 +1094,7 @@
             <button type="submit" class="btn sm" disabled={running}>{t("db.filterApply")}</button>
             <span class="pager">
               <button type="button" class="icon-btn" disabled={running || browse.offset === 0} title={t("db.pagePrev")} aria-label={t("db.pagePrev")} onclick={() => page(-1)}>‹</button>
-              <span class="mono">{shown ? `${(browse.offset + 1).toLocaleString()}–${(browse.offset + shown).toLocaleString()}` : "0"}</span>
+              <span class="mono">{shown ? `${fmtNumber(browse.offset + 1)}–${fmtNumber(browse.offset + shown)}` : "0"}</span>
               <button type="button" class="icon-btn" disabled={running || !hasMore} title={t("db.pageNext")} aria-label={t("db.pageNext")} onclick={() => page(1)}>›</button>
             </span>
             {:else}
@@ -1095,21 +1120,32 @@
           </div>
         {/if}
         {#each asks as a (a.approval_id)}
+          {@const sql = revealHidden(a.sql)}
+          {@const failed = dbApprovals.failed[a.approval_id]}
           <div class="ask risk-{a.risk}" role="alertdialog" aria-label={t("db.askTitle", { who: a.actor_label })}>
             <div class="ask-head">
               <Icon name="sparkle" size={13} />
               <strong>{t("db.askTitle", { who: a.actor_label })}</strong>
+              {#if prod}<span class="env-prod-badge" title={t("env.prod")}>{t("ai.prodBadge")}</span>{/if}
               <span class="pill">{t(`db.risk.${a.risk}`)}</span>
-              <span class="note">{a.policy_note}{a.statements > 1 ? ` · ${t("db.statements", { n: a.statements })}` : ""}</span>
+              <span class="note">{a.policy_note} · {tn("db.statements", a.statements)}</span>
             </div>
             {#if a.reason}<p class="why">{a.reason}</p>{/if}
-            <pre class="sql">{a.sql}</pre>
+            <pre class="sql">{sql.text}</pre>
+            {#if sql.found}<p class="askwarn" role="note"><Icon name="alert" size={12} />{t("approval.invisible")}</p>{/if}
+            {#if prod}<p class="askwarn" role="note"><Icon name="alert" size={12} />{t("db.askProdWarn")}</p>{/if}
+            {#if failed}<p class="askwarn fail" role="alert"><Icon name="alert" size={12} />{t("db.askFailed", { error: failed })}</p>{/if}
             <div class="ask-actions">
               <input class="input" placeholder={t("db.denyNote")} bind:value={denyNote[a.approval_id]} aria-label={t("db.denyNote")} />
               <button class="btn sm" onclick={() => decide(a.approval_id, false)}>{t("db.deny")}</button>
-              <button class="btn sm primary" class:danger={a.risk === "destructive"} onclick={() => decide(a.approval_id, true)}
-                >{t("db.approve")}</button
-              >
+              {#if a.risk === "destructive"}
+                <!-- As for terminal commands: destructive SQL is approved by holding, never by one click. -->
+                <HoldButton bind:this={holds[a.approval_id]} size="sm" onconfirm={() => void decide(a.approval_id, true)} confirmLabel={t("approval.approved")} title={t("approval.holdHint")}
+                  >{t("approval.holdApprove")}</HoldButton
+                >
+              {:else}
+                <button class="btn sm primary" onclick={() => decide(a.approval_id, true)}>{t("db.approve")}</button>
+              {/if}
             </div>
           </div>
         {/each}
@@ -1139,7 +1175,7 @@
                 {#each output.results as r, i (i)}
                   {@const s = resultSummary(r)}
                   <button role="tab" class:on={i === active} aria-selected={i === active} onclick={() => (active = i)}>
-                    {i + 1} · {s.isQuery ? t("db.rows", { n: s.rows }) : t("db.affected", { n: s.affected })}
+                    {i + 1} · {s.isQuery ? tn("db.rows", s.rows) : tn("db.affected", s.affected)}
                   </button>
                 {/each}
               </div>
@@ -1158,10 +1194,7 @@
             {#if current}
               {@const s = resultSummary(current)}
               <span class="sum">
-                {#if s.isQuery}{t("db.rows", { n: s.rows })}{#if s.truncated}<span class="pill warn">{t("db.truncated", { n: s.rows })}</span>{/if}{:else}{t(
-                    "db.affected",
-                    { n: s.affected },
-                  )}{/if}
+                {#if s.isQuery}{tn("db.rows", s.rows)}{#if s.truncated}<span class="pill warn">{t("db.truncated", { n: s.rows })}</span>{/if}{:else}{tn("db.affected", s.affected)}{/if}
                 · {output.elapsed_ms} ms
               </span>
               {#if s.isQuery && s.rows}<button class="btn sm ghost" onclick={openExport} aria-haspopup="menu"><Icon name="download" size={12} />{t("db.export")}</button>{/if}
@@ -1632,8 +1665,10 @@
   }
   .ask .sql {
     margin: 0;
-    max-height: 160px;
+    /* Tall enough that a batch is read, not skimmed; longer ones scroll inside (count above). */
+    max-height: min(55vh, 520px);
     overflow: auto;
+    scrollbar-gutter: stable;
     padding: 8px;
     border-radius: 6px;
     background: var(--bg);
@@ -1641,6 +1676,21 @@
     font-size: var(--fs-meta);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  .askwarn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: var(--env-prod-soft);
+    color: var(--env-prod);
+    font-size: var(--fs-small);
+  }
+  .askwarn.fail {
+    background: var(--danger-soft);
+    color: var(--danger);
   }
   .ask-actions {
     display: flex;

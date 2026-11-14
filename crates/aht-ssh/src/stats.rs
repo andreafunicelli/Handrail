@@ -3,6 +3,7 @@
 
 use crate::client::SshConnection;
 use aht_core::Result;
+use std::time::Duration;
 
 /// Values the server did not give (another OS, an unreadable file) are `None`.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -35,7 +36,14 @@ const SCRIPT: &str = "export LC_ALL=C; \
 impl SshConnection {
     /// Sample the server's load (takes about half a second).
     pub async fn stats(&self) -> Result<ServerStats> {
-        let out = self.exec(&format!("sh -c '{SCRIPT}'")).await?;
+        // Polled for the status bar: a stuck or chatty server must not pile up waiting calls.
+        let out = self
+            .exec_bounded(
+                &format!("sh -c '{SCRIPT}'"),
+                Duration::from_secs(10),
+                64 * 1024,
+            )
+            .await?;
         Ok(ServerStats::parse(&String::from_utf8_lossy(&out.stdout)))
     }
 }

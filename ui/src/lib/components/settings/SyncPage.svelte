@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import Icon from "../icons/Icon.svelte";
-  import { t, type MessageKey } from "../../i18n";
+  import { fmtDateTime, t, type MessageKey } from "../../i18n";
   import { api } from "../../api";
   import type { ConflictView, FolderPreset, SnapshotInfo, SyncStatus } from "../../api/types";
   import GithubConnect from "./GithubConnect.svelte";
@@ -50,16 +50,21 @@
       toasts.error(e);
     }
   }
+  let destroyed = false;
   onMount(async () => {
-    unlisten = await api.on("sync://status", (s) => {
+    const off = await api.on("sync://status", (s) => {
       const finished = status?.syncing && !s.syncing;
       status = s;
       // A finished sync may have taken a snapshot or recorded conflicts.
       if (finished) void loadHistory();
     });
+    // Left the page before the subscription was made: undo it now.
+    if (destroyed) return off();
+    unlisten = off;
     await Promise.all([loadStatus(), loadHistory(), api.syncFolderPresets().then((p) => (presets = p), toasts.error)]);
   });
   onDestroy(() => {
+    destroyed = true;
     unlisten?.();
     clearInterval(clock);
     if (armTimer) clearTimeout(armTimer);
@@ -121,7 +126,7 @@
     if (!confirm(`snap:${s.name}`)) return;
     void run(
       async () => (await api.vaultSnapshotRestore(s.name), await Promise.all([loadHistory(), reloadVaultData()])),
-      t("sync.restored", { when: new Date(s.created_ms).toLocaleString() }),
+      t("sync.restored", { when: fmtDateTime(s.created_ms) }),
     );
   }
   function keepConflict(c: ConflictView) {
@@ -237,7 +242,7 @@
   {#each snapshots as s (s.name)}
     <div class="list-row">
       <Icon name="clock" size={14} />
-      <span class="grow">{new Date(s.created_ms).toLocaleString()} <span class="hint">· {ago(s.created_ms)} · {formatBytes(s.size)}</span></span>
+      <span class="grow">{fmtDateTime(s.created_ms)} <span class="hint">· {ago(s.created_ms)} · {formatBytes(s.size)}</span></span>
       <button class="btn sm" class:danger={armed === `snap:${s.name}`} onclick={() => restoreSnapshot(s)} disabled={busy}>
         {armed === `snap:${s.name}` ? t("sync.restoreConfirm") : t("sync.restore")}
       </button>

@@ -11,7 +11,8 @@ class Toasts {
   items = $state<Toast[]>([]);
   private n = 0;
 
-  push(kind: ToastKind, message: string, ms = kind === "error" ? 6000 : 3200) {
+  /** Errors stay until dismissed: one missed while looking away would be lost. */
+  push(kind: ToastKind, message: string, ms = kind === "error" ? 0 : 3200) {
     const id = ++this.n;
     this.items.push({ id, kind, message });
     if (ms > 0) setTimeout(() => this.dismiss(id), ms);
