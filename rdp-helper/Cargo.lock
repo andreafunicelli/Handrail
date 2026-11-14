@@ -1379,9 +1379,9 @@ checksum = "2e548d9fd162558a5a8aaed72e528556ce88e77773634e3722b8d01d6f170388"
 
 [[package]]
 name = "ironrdp-cfg"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebbd21a7fb8d7c034550c515a11c861621f135493a0f81a015472bdf769a6d4f"
+checksum = "5385f4dd000d6997bfaa6b5e692fb932e7f0fd09ba375dda0657137ae272fd4b"
 dependencies = [
  "ironrdp-propertyset",
 ]
