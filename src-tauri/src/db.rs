@@ -690,14 +690,15 @@ pub async fn db_import_sql(
     transfer_id: String,
 ) -> Result<Summary> {
     let s = session(&state, &id).await?;
-    // A file that is not UTF-8 is refused before any of it runs.
     let path = picked_path(&state, &token)?;
+    // Registered before the scan: a cancel during it stops the import at its first statement.
+    let running = Running::new(&state.db, &id, &transfer_id);
+    // A file that is not UTF-8 is refused before any of it runs.
     let mut input = blocking(move || {
         aht_db::transfer::check_sql_file(&mut open_path(&path)?)?;
         open_path(&path)
     })
     .await?;
-    let running = Running::new(&state.db, &id, &transfer_id);
     let mut report = transfer_reporter(&app, &transfer_id);
     let done = aht_db::transfer::import_sql(
         &s.client,
