@@ -19,6 +19,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 const CHUNK: usize = 256 * 1024;
 /// Largest single PUT S3 accepts (multipart uploads are not supported).
 const MAX_PUT: u64 = 5 * 1024 * 1024 * 1024;
+/// Pages (up to 1000 keys each) one folder listing fetches before it stops, so a huge folder or
+/// a server that keeps returning a continuation token cannot run forever.
+const MAX_LIST_PAGES: usize = 100;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct S3Config {
@@ -63,6 +66,8 @@ pub struct ObjectInfo {
 pub struct Listing {
     pub folders: Vec<String>,
     pub objects: Vec<ObjectInfo>,
+    /// The folder holds more than `MAX_LIST_PAGES` pages; only the first ones are listed.
+    pub truncated: bool,
 }
 
 #[derive(Debug)]
@@ -206,12 +211,18 @@ impl S3Client {
                     .and_then(|v| v.to_str().ok())
                     .map(str::to_string)
             });
-        let region = found.unwrap_or(configured);
-        self.regions
-            .lock()
-            .expect("regions")
-            .insert(bucket.to_string(), region.clone());
-        region
+        // Only a region AWS named is cached: a failed lookup (offline, denied) is retried next time
+        // instead of pinning the bucket to the configured region for the session.
+        match found {
+            Some(region) => {
+                self.regions
+                    .lock()
+                    .expect("regions")
+                    .insert(bucket.to_string(), region.clone());
+                region
+            }
+            None => configured,
+        }
     }
 
     /// Sign and send one request; the response may be an error status.
@@ -345,7 +356,7 @@ impl S3Client {
     pub async fn list(&self, bucket: &str, prefix: &str) -> Result<Listing> {
         let mut out = Listing::default();
         let mut token: Option<String> = None;
-        loop {
+        for page in 1.. {
             let mut query = vec![("list-type", "2"), ("delimiter", "/"), ("prefix", prefix)];
             if let Some(t) = &token {
                 query.push(("continuation-token", t.as_str()));
@@ -392,6 +403,10 @@ impl S3Client {
             token = xml::first(&body, "NextContinuationToken")
                 .filter(|_| xml::first(&body, "IsTruncated").as_deref() == Some("true"));
             if token.is_none() {
+                break;
+            }
+            if page >= MAX_LIST_PAGES {
+                out.truncated = true;
                 break;
             }
         }

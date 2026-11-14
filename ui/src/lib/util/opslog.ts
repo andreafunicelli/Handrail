@@ -70,6 +70,8 @@ const RULES: [RegExp, string | ((...m: string[]) => string)][] = [
   // SQL: IDENTIFIED BY 'x', PASSWORD 'x'.
   [/\b(identified\s+(?:with\s+\S+\s+)?by\s+)('[^']*'|"[^"]*"|\S+)/gi, `$1'${MASK}'`],
   [/\b(password\s*\(?\s*)('[^']*'|"[^"]*")/gi, `$1'${MASK}'`],
+  // SET PASSWORD [FOR user] = 'x'.
+  [/\b(set\s+password\b[^=;]*=\s*)('[^']*'|"[^"]*")/gi, `$1'${MASK}'`],
   // Cloud and service keys.
   [/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, `$1${MASK}`],
   [/\b(gh[pousr]_)[A-Za-z0-9]{20,}\b/g, `$1${MASK}`],

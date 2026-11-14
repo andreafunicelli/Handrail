@@ -165,12 +165,12 @@
         {#if connections.byId.get(cid)?.kind === "rdp"}
           <RdpView connectionId={cid} {focused} />
         {:else}
-          <DbView connectionId={cid} {focused} />
+          <DbView connectionId={cid} leaf={node.sessionId} {focused} />
         {/if}
       {:else if isPending(node.sessionId)}
         <ConnectingPane ref={pendingRef(node.sessionId)} {focused} onclose={() => sessions.closePane(tabId, node.id)} />
       {:else}
-        <TerminalView sessionId={node.sessionId} {focused} />
+        {#key node.sessionId}<TerminalView sessionId={node.sessionId} {focused} />{/key}
       {/if}
     </div>
     {#if zone}

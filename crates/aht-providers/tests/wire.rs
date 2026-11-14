@@ -62,7 +62,7 @@ fn openai(server: &MockServer) -> OpenAiChatProvider {
 // ---------------------------------------------------------------- Anthropic
 
 const ANTHROPIC_TOOL_STREAM: &str = r#"event: message_start
-data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-5-5","stop_reason":null,"usage":{"input_tokens":25,"output_tokens":1}}}
+data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-sonnet-5-5","stop_reason":null,"usage":{"input_tokens":25,"cache_creation_input_tokens":100,"cache_read_input_tokens":900,"output_tokens":1}}}
 
 event: content_block_start
 data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
@@ -125,8 +125,9 @@ async fn anthropic_streams_text_thinking_and_split_tool_call() {
         .and(header("x-api-key", "sk-ant"))
         .and(header("anthropic-version", "2023-06-01"))
         .and(body_partial_json(json!({
-            "model": "claude-sonnet-5-5", "stream": true, "max_tokens": 256, "system": "be brief",
-            "tools": [{"name": "run_command"}]
+            "model": "claude-sonnet-5-5", "stream": true, "max_tokens": 256,
+            "system": [{"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}],
+            "tools": [{"name": "run_command", "cache_control": {"type": "ephemeral"}}]
         })))
         .respond_with(sse(ANTHROPIC_TOOL_STREAM))
         .expect(1)
@@ -145,8 +146,10 @@ async fn anthropic_streams_text_thinking_and_split_tool_call() {
                 input: json!({"session_id":"abc","command":"ls -la"}),
             },
             ProviderEvent::Usage {
-                input: 25,
-                output: 42
+                input: 1025,
+                output: 42,
+                cache_read: 900,
+                cache_write: 100,
             },
             ProviderEvent::Stop {
                 reason: StopReason::ToolUse
@@ -241,7 +244,8 @@ async fn anthropic_persistent_429_surfaces_retry_after_when_too_long() {
         .await;
     match stream_err(&anthropic(&server), req("m")).await {
         Error::RateLimited { retry_after, .. } => {
-            assert_eq!(retry_after, Some(Duration::from_secs(120)))
+            // Clamped to 60 s, still above the 30 s automatic-retry cap.
+            assert_eq!(retry_after, Some(Duration::from_secs(60)))
         }
         e => panic!("{e:?}"),
     }
@@ -367,7 +371,9 @@ async fn openai_streams_text_reasoning_and_usage() {
             ProviderEvent::TextDelta("lo!".into()),
             ProviderEvent::Usage {
                 input: 11,
-                output: 4
+                output: 4,
+                cache_read: 0,
+                cache_write: 0,
             },
             ProviderEvent::Stop {
                 reason: StopReason::EndTurn
@@ -399,7 +405,9 @@ async fn openai_accumulates_interleaved_tool_calls_by_index() {
             },
             ProviderEvent::Usage {
                 input: 100,
-                output: 30
+                output: 30,
+                cache_read: 0,
+                cache_write: 0,
             },
             ProviderEvent::Stop {
                 reason: StopReason::ToolUse

@@ -331,7 +331,7 @@ impl Drop for PendingGuard<'_> {
     }
 }
 
-const APPROVAL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(aht_core::terminal::APPROVAL_TIMEOUT_S);
 
 #[async_trait]
 impl Approver for UiApprover {
@@ -923,6 +923,59 @@ impl TerminalTools for Tools {
     }
 
     async fn open_session(&self, actor: &Actor, connection: ConnectionId) -> Result<SessionInfo> {
+        // A new session joins the agent's scope, so opening one always needs the user's
+        // approval, whatever the approval mode. The card shows in the agent's own tab.
+        let ask_in = actor
+            .session_scope
+            .as_ref()
+            .and_then(|s| s.first().copied())
+            .ok_or_else(|| {
+                Error::Denied("opening a session needs a tab to ask the user in".into())
+            })?;
+        let conn = load_connection(&self.app.state::<AppState>(), connection).await?;
+        if conn.kind != ConnectionKind::Ssh {
+            return Err(Error::Invalid(format!(
+                "{:?} connections are not supported yet",
+                conn.kind
+            )));
+        }
+        let req = ApprovalRequest {
+            approval_id: ApprovalId::new(),
+            session_id: ask_in,
+            actor_label: actor.label.clone(),
+            command: format!(
+                "Open a session to {} ({}@{})",
+                conn.name, conn.user, conn.host
+            ),
+            reason: None,
+            risk: if conn.env == aht_core::model::Environment::Prod {
+                aht_core::agent::RiskClass::Destructive
+            } else {
+                aht_core::agent::RiskClass::Write
+            },
+            policy_note: Some(
+                "opening a new session always needs your approval; the agent can then run \
+                 commands in it"
+                    .into(),
+            ),
+        };
+        let approver = UiApprover {
+            app: self.app.clone(),
+        };
+        match approver.request(req).await {
+            ApprovalDecision::Approve => {}
+            // An edited "command" means nothing here: only a plain approval opens it.
+            ApprovalDecision::ApproveEdited { .. } => {
+                return Err(Error::Denied(
+                    "the user edited the request instead of approving it".into(),
+                ))
+            }
+            ApprovalDecision::Deny { message } => {
+                return Err(Error::Denied(
+                    message.unwrap_or_else(|| "the user denied opening the session".into()),
+                ))
+            }
+        }
         let info = open_ssh(&self.app, connection, 120, 32, None).await?;
         hub(&self.app)
             .grants
@@ -1030,7 +1083,7 @@ impl TerminalTools for Tools {
 
 /// Largest file an agent may propose.
 const MAX_PROPOSED_FILE: usize = 1024 * 1024;
-const EDIT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const EDIT_TIMEOUT: Duration = Duration::from_secs(aht_core::terminal::FILE_EDIT_TIMEOUT_S);
 
 /// Shown in the editor as a diff against the current file.
 #[derive(Clone, Serialize)]

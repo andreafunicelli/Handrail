@@ -277,3 +277,63 @@ async fn spawn_failure_cleans_files() {
     assert!(HeadlessRun::start(s, "p").await.is_err());
     assert!(!f.exists());
 }
+
+#[tokio::test]
+async fn claude_follow_up_that_crashes_still_ends_its_turn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = spec(
+        HarnessKind::ClaudeCode,
+        vec!["--claude-echo".into()],
+        tmp.path(),
+    );
+    let (run, mut rx) = HeadlessRun::start(s, "first").await.unwrap();
+    loop {
+        let e = tokio::time::timeout(Duration::from_secs(20), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("closed early");
+        if e == AgentEvent::Done {
+            break;
+        }
+    }
+    run.send_user_message("crash").await.unwrap();
+    let rest = collect(rx).await;
+    assert!(
+        rest.iter().any(|e| matches!(
+            e,
+            AgentEvent::Error {
+                retryable: true,
+                ..
+            }
+        )),
+        "{rest:?}"
+    );
+    assert_eq!(rest.last(), Some(&AgentEvent::Done), "{rest:?}");
+    assert_eq!(rest.iter().filter(|e| **e == AgentEvent::Done).count(), 1);
+}
+
+#[tokio::test]
+async fn opencode_prompt_starting_with_a_dash_is_not_an_option() {
+    let tmp = tempfile::tempdir().unwrap();
+    let args_file = tmp.path().join("args.txt");
+    let s = spec(
+        HarnessKind::OpenCode,
+        vec![
+            fixture("opencode_run.jsonl"),
+            format!("--args-to={}", args_file.display()),
+        ],
+        tmp.path(),
+    );
+    let (run, rx) = HeadlessRun::start(s, "--exit=7").await.unwrap();
+    let ev = collect(rx).await;
+    run.wait().await;
+    let args = std::fs::read_to_string(&args_file).unwrap();
+    assert_eq!(args.lines().last(), Some(" --exit=7"));
+    assert!(!ev.iter().any(|e| matches!(
+        e,
+        AgentEvent::Error {
+            retryable: true,
+            ..
+        }
+    )));
+}

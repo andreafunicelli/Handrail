@@ -11,9 +11,10 @@
   import AgentStatusChip from "./AgentStatusChip.svelte";
   import ActivityView from "./ActivityView.svelte";
   import SummaryView from "./SummaryView.svelte";
-  import { t, type MessageKey } from "../../i18n";
+  import { fmtNumber, t, type MessageKey } from "../../i18n";
   import { api } from "../../api";
-  import { agent } from "../../stores/agent.svelte";
+  import { agent, chatBusy } from "../../stores/agent.svelte";
+  import { dbApprovals } from "../../stores/dbApprovals.svelte";
   import { sessions } from "../../stores/sessions.svelte";
   import { settings } from "../../stores/settings.svelte";
   import { toasts } from "../../stores/toasts.svelte";
@@ -39,7 +40,7 @@
   /** The harness runs outside this sidebar (a pane or the OpenChamber window). */
   const native = $derived(brain?.harness?.display === "native" || chamber);
   let opening = $state(false);
-  const running = $derived(!!chat?.runId);
+  const running = $derived(chatBusy(chat));
   const target = $derived(sid ? targetOf(sid) : null);
   const status = $derived(agentStatus(chat?.items ?? [], running, chat?.cancelled ?? false));
   const pending = $derived(sid ? agent.pendingApprovals(sid) : []);
@@ -48,6 +49,11 @@
     const by = new Map<string, number>();
     for (const p of agent.allPending) if (p.sessionId !== sid) by.set(p.sessionId, (by.get(p.sessionId) ?? 0) + 1);
     return [...by].map(([sessionId, n]) => ({ sessionId, n, name: targetOf(sessionId)?.name ?? sessionId }));
+  });
+  /** Agent SQL waiting in database tabs, one line per tab (the request itself is in the tab). */
+  const dbWaiting = $derived.by(() => {
+    const ids = new Set(dbApprovals.items.map((i) => i.database_id));
+    return [...ids].flatMap((id) => (dbApprovals.tabs[id] ? [{ id, ...dbApprovals.tabs[id] }] : []));
   });
 
   // svelte-ignore state_referenced_locally
@@ -216,16 +222,23 @@
     </div>
   {/if}
 
-  {#if session && brain && (pending.length || elsewhere.length)}
+  {#if (session && brain && (pending.length || elsewhere.length)) || dbWaiting.length}
     <div class="banners">
-      {#if pending.length}
+      {#each dbWaiting as d (d.id)}
+        <div class="banner other">
+          <Icon name="database" size={12} />
+          <span>{t("ai.pending.db", { name: d.name })}</span>
+          <button class="btn sm" onclick={() => sessions.focusSession(d.leaf)}>{t("ai.pending.goDb")}</button>
+        </div>
+      {/each}
+      {#if session && brain && pending.length}
         <div class="banner" role="alert">
           <Icon name="shield" size={13} />
           <span>{pending.length === 1 ? t("ai.pending.one") : t("ai.pending.many", { n: pending.length })}</span>
           <button class="btn sm primary" onclick={review}>{t("ai.pending.review")}</button>
         </div>
       {/if}
-      {#each elsewhere as o (o.sessionId)}
+      {#each session && brain ? elsewhere : [] as o (o.sessionId)}
         <div class="banner other">
           <Icon name="shield" size={12} />
           <span>{o.n === 1 ? t("ai.pending.other", { name: o.name }) : `${o.name}: ${t("ai.pending.many", { n: o.n })}`}</span>
@@ -377,7 +390,7 @@
       {#if chat && (chat.usage.input || chat.usage.output)}
         <div class="usage">
           <span>{t("ai.tokens", { input: fmt(chat.usage.input), output: fmt(chat.usage.output) })}</span>
-          {#if chat.usage.cost != null}<span>${chat.usage.cost.toFixed(4)}</span>{/if}
+          {#if chat.usage.cost != null}<span>{fmtNumber(chat.usage.cost, { style: "currency", currency: "USD", maximumFractionDigits: 4 })}</span>{/if}
         </div>
       {/if}
     </div>

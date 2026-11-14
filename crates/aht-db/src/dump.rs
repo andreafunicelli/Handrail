@@ -2,7 +2,7 @@
 //! splitter that cuts an SQL file read line by line into statements, and a CSV reader.
 
 use crate::{DbKind, Value};
-use std::io::BufRead;
+use std::io::{BufRead, Read};
 
 /// A string as an SQL literal. MySQL with backslash escapes (the default `sql_mode`, and the
 /// one a dump's header sets) escapes the bytes `mysqldump` escapes; without them, and on
@@ -214,7 +214,43 @@ fn trim_end(b: &[u8]) -> &[u8] {
     &b[..b.len() - n]
 }
 
+/// The longest line, or statement over several lines, read from an SQL file: a file without
+/// line breaks or delimiters would otherwise be read into memory whole.
+pub const MAX_STATEMENT: usize = 256 << 20;
+
+/// `read_until(b'\n')` into `line` (cleared by the caller) that fails once the line, with the
+/// `pending` bytes of a statement not ended yet, is longer than [`MAX_STATEMENT`].
+pub fn read_line(
+    input: &mut (impl BufRead + ?Sized),
+    line: &mut Vec<u8>,
+    pending: usize,
+) -> std::io::Result<usize> {
+    read_line_max(input, line, pending, MAX_STATEMENT)
+}
+
+fn read_line_max(
+    input: &mut (impl BufRead + ?Sized),
+    line: &mut Vec<u8>,
+    pending: usize,
+    max: usize,
+) -> std::io::Result<usize> {
+    let n = Read::take(input, max as u64 + 1).read_until(b'\n', line)?;
+    if pending + line.len() > max {
+        return Err(std::io::Error::other(format!(
+            "a statement in the file is longer than {} MiB (no line break or delimiter where \
+             one was expected): stopped reading",
+            max >> 20
+        )));
+    }
+    Ok(n)
+}
+
 impl Splitter {
+    /// Bytes of the statement read so far but not ended yet.
+    pub fn pending(&self) -> usize {
+        self.cur.len()
+    }
+
     /// `backslash_escapes`: MySQL strings treat a backslash as an escape (the server's
     /// `sql_mode` lacks `NO_BACKSLASH_ESCAPES`). PostgreSQL only escapes in `E'...'`.
     pub fn new(kind: DbKind, backslash_escapes: bool) -> Splitter {
@@ -364,15 +400,29 @@ impl Splitter {
                         }
                         b'-' if next == Some(b'-')
                             && (!mysql
-                                || bytes.get(i + 2).is_none_or(|c| c.is_ascii_whitespace())) =>
+                                || bytes
+                                    .get(i + 2)
+                                    .is_none_or(|c| *c == b' ' || c.is_ascii_control())) =>
                         {
-                            // A comment to the end of the line.
-                            break;
+                            // A comment to the end of the line; PostgreSQL also ends it at a
+                            // carriage return, and what follows that is code.
+                            match bytes[i..].iter().position(|c| *c == b'\r') {
+                                Some(n) if !mysql => {
+                                    self.cur.extend_from_slice(&bytes[seg..i]);
+                                    i += n;
+                                    seg = i;
+                                    continue;
+                                }
+                                _ => break,
+                            }
                         }
                         b'#' if mysql => break,
                         b'/' if next == Some(b'*') => {
-                            // `/*! ... */` is code MySQL runs.
-                            if mysql && bytes.get(i + 2) == Some(&b'!') {
+                            // `/*! ... */` is code MySQL runs (MariaDB: `/*M! ... */` too).
+                            if mysql
+                                && (bytes.get(i + 2) == Some(&b'!')
+                                    || bytes[i + 2..].starts_with(b"M!"))
+                            {
                                 self.mark(i, seg, line_offset);
                             }
                             self.state = State::Block(1);
@@ -748,6 +798,40 @@ mod tests {
         assert_eq!(got[0].sql, b"INSERT INTO t VALUES ('\xff\\'')");
         assert!(!is_copy_from_stdin("COPY t TO STDOUT"));
         assert!(sets_sql_mode("SET @OLD=@@SQL_MODE, sql_mode='X'"));
+    }
+
+    #[test]
+    fn comments_end_where_the_server_ends_them() {
+        // PostgreSQL ends `--` at a carriage return: what follows is code.
+        let mut sp = Splitter::new(DbKind::Postgres, true);
+        let got = sp.feed(b"SELECT 1 -- x\r; COMMIT; DROP TABLE t\n");
+        let texts: Vec<&[u8]> = got.iter().map(|s| s.sql.as_slice()).collect();
+        assert_eq!(texts, vec![&b"SELECT 1"[..], b"COMMIT"]);
+        assert_eq!(sp.finish_raw().unwrap().sql, b"DROP TABLE t");
+        // MySQL ends it at the newline only; `--` before a no-break space is code there.
+        let got = split(
+            DbKind::Mysql,
+            "SELECT 1 -- x\r; SELECT 2\n;\nSELECT 3 --\u{a0}; SELECT 4;",
+        );
+        let texts: Vec<&str> = got.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(texts, vec!["SELECT 1", "SELECT 3 --\u{a0}", "SELECT 4"]);
+        // MariaDB's `/*M! ... */` starts a statement.
+        let got = split(DbKind::Mysql, "/*M!100100 SET @a = 1 */;\n");
+        assert_eq!(got[0].0, "/*M!100100 SET @a = 1 */");
+    }
+
+    #[test]
+    fn lines_and_statements_are_capped() {
+        let mut line = Vec::new();
+        let mut input: &[u8] = b"0123456789\nabc";
+        assert_eq!(read_line_max(&mut input, &mut line, 0, 16).unwrap(), 11);
+        line.clear();
+        // A statement already 14 bytes long cannot take 3 more.
+        assert!(read_line_max(&mut input, &mut line, 14, 16).is_err());
+        let mut long: &[u8] = &[b'x'; 40];
+        line.clear();
+        assert!(read_line_max(&mut long, &mut line, 0, 16).is_err());
+        assert!(line.len() <= 17);
     }
 
     #[test]

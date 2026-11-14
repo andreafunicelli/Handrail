@@ -229,3 +229,55 @@ async fn reports_a_refused_connection() {
     let msg: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(!msg["message"].as_str().unwrap().is_empty());
 }
+
+/// A server without NLA (TLS security only) gets no password unless the connection allows it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refuses_a_server_without_nla() {
+    let dir = tempfile::tempdir().unwrap();
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    let (cert_path, key_path) = (dir.path().join("cert.pem"), dir.path().join("key.pem"));
+    std::fs::write(&cert_path, cert.cert.pem()).unwrap();
+    std::fs::write(&key_path, cert.signing_key.serialize_pem()).unwrap();
+    let identity = TlsIdentityCtx::init_from_paths(&cert_path, &key_path).unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let (keys_tx, _keys) = mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let mut server = RdpServer::builder()
+            .with_addr(([127, 0, 0, 1], port))
+            .with_tls(identity.make_acceptor().unwrap())
+            .with_input_handler(Keys(keys_tx))
+            .with_display_handler(Desktop)
+            .build();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _ = rt.block_on(server.run());
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut helper = Command::new(env!("CARGO_BIN_EXE_handrail-rdp"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut stdin = helper.stdin.take().unwrap();
+    let mut stdout = helper.stdout.take().unwrap();
+    let start = serde_json::json!({
+        "host": "127.0.0.1", "port": port, "username": "u", "password": "p", "width": W, "height": H,
+    });
+    send(&mut stdin, 0x01, start.to_string().as_bytes()).await;
+    let (kind, body) = timeout(Duration::from_secs(30), recv(&mut stdout))
+        .await
+        .unwrap()
+        .expect("a message");
+    assert_eq!(kind, 0x13, "{}", String::from_utf8_lossy(&body));
+    // The login is refused with an error. This test server drops the connection instead of
+    // answering SSL_REQUIRED_BY_SERVER, so the NLA explanation itself is not exercised here.
+    let msg: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(msg["message"].is_string());
+}

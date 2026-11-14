@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in Handrail does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems: please do not file them here; use the private report linked in the
+        issue chooser (see SECURITY.md). Leave out passwords, keys, host names and other secrets.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Handrail version
+      description: Settings › About (say if it is a Nightly build).
+      placeholder: 1.1.2
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version and installer
+      placeholder: macOS 15.4, .dmg / Ubuntu 24.04, .AppImage
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Connection type (SSH, RDP, S3, database), agent used, screenshots, log lines.

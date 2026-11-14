@@ -62,6 +62,10 @@ impl Drop for Forward {
 const BIND_WAIT: Duration = Duration::from_secs(5);
 /// How often a listener checks whether its SSH connection is gone.
 const ALIVE_CHECK: Duration = Duration::from_secs(1);
+/// Pause after a failed `accept` before the next one.
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
+/// Time a SOCKS client gets to say where it wants to go.
+const SOCKS_HANDSHAKE: Duration = Duration::from_secs(10);
 
 async fn bind(host: &str, port: u16) -> Result<TcpListener> {
     let deadline = tokio::time::Instant::now() + BIND_WAIT;
@@ -155,7 +159,11 @@ impl SshConnection {
                                 }
                             });
                         }
-                        Err(e) => tracing::debug!("accept failed: {e}"),
+                        Err(e) => {
+                            tracing::debug!("accept failed: {e}");
+                            // E.g. out of file descriptors: do not spin on an error that persists.
+                            tokio::time::sleep(ACCEPT_RETRY).await;
+                        }
                     },
                     _ = tick.tick() => if conn.is_closed() { break },
                 }
@@ -188,6 +196,31 @@ async fn local_conn(
 
 /// SOCKS5 (RFC 1928), no authentication, CONNECT only.
 async fn socks_conn(conn: Arc<SshConnection>, mut tcp: TcpStream, peer: SocketAddr) -> Result<()> {
+    // A client that connects and goes quiet must not hold its task and socket forever.
+    let (host, port) = tokio::time::timeout(SOCKS_HANDSHAKE, socks_request(&mut tcp))
+        .await
+        .map_err(|_| Error::Network("SOCKS: handshake timed out".into()))??;
+    match conn.open_to(&host, port, peer).await {
+        Ok(mut ch) => {
+            tcp.write_all(&socks_reply(0)).await?;
+            let _ = tokio::io::copy_bidirectional(&mut tcp, &mut ch).await;
+            Ok(())
+        }
+        Err(e) => {
+            // 5: connection refused (the server could not reach it).
+            let _ = tcp.write_all(&socks_reply(5)).await;
+            Err(e)
+        }
+    }
+}
+
+/// Replies carry a zero IPv4 bound address: clients ignore it for CONNECT.
+fn socks_reply(code: u8) -> [u8; 10] {
+    [5, code, 0, 1, 0, 0, 0, 0, 0, 0]
+}
+
+/// The SOCKS greeting and CONNECT request: the destination asked for.
+async fn socks_request(tcp: &mut TcpStream) -> Result<(String, u16)> {
     let bad = |what: &str| Error::Invalid(format!("SOCKS: {what}"));
     let mut head = [0u8; 2];
     tcp.read_exact(&mut head).await?;
@@ -227,24 +260,11 @@ async fn socks_conn(conn: Arc<SshConnection>, mut tcp: TcpStream, peer: SocketAd
     let mut p = [0u8; 2];
     tcp.read_exact(&mut p).await?;
     let port = u16::from_be_bytes(p);
-    // Replies carry a zero IPv4 bound address: clients ignore it for CONNECT.
-    let reply = |code: u8| [5, code, 0, 1, 0, 0, 0, 0, 0, 0];
     if req[1] != 1 {
-        tcp.write_all(&reply(7)).await?;
+        tcp.write_all(&socks_reply(7)).await?;
         return Err(bad("only CONNECT is supported"));
     }
-    match conn.open_to(&host, port, peer).await {
-        Ok(mut ch) => {
-            tcp.write_all(&reply(0)).await?;
-            let _ = tokio::io::copy_bidirectional(&mut tcp, &mut ch).await;
-            Ok(())
-        }
-        Err(e) => {
-            // 5: connection refused (the server could not reach it).
-            let _ = tcp.write_all(&reply(5)).await;
-            Err(e)
-        }
-    }
+    Ok((host, port))
 }
 
 type RemoteMap = std::collections::HashMap<(String, u32), (String, u16)>;

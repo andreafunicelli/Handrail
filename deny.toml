@@ -55,10 +55,9 @@ allow = [
     "CDLA-Permissive-2.0",
 ]
 
-# Workspace crates are license = "UNLICENSED" and are skipped by the license check.
-# NOTE: this only applies to crates marked `publish = false`. Every workspace crate
-# (crates/* and src-tauri) must set `publish = false` in its Cargo.toml, otherwise
-# the UNLICENSED workspace crates will fail the license check.
+# Our own crates (crates/*, src-tauri, rdp-helper) are Apache-2.0, like LICENSE, and are
+# never published (`publish = false`): this skips them in the license check, which then covers
+# third-party crates only. (Apache-2.0 is in `allow` anyway, so they would pass either way.)
 [licenses.private]
 ignore = true
 

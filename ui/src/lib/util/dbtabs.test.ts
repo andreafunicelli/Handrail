@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { addHistory, clearHistory, HISTORY_MAX, loadHistory, loadTabs, nextTabName, saveTabs } from "./dbtabs";
+import { addHistory, clearHistory, HISTORY_MAX, historySql, loadHistory, loadTabs, nextTabName, saveTabs } from "./dbtabs";
+import { clearUserContent } from "./storage";
 
 class Mem implements Storage {
   m = new Map<string, string>();
@@ -52,5 +53,24 @@ describe("query tabs and history", () => {
     expect(loadHistory(s, "c")).toHaveLength(HISTORY_MAX);
     clearHistory(s, "c");
     expect(loadHistory(s, "c")).toEqual([]);
+  });
+
+  it("masks passwords in statements that set one, and keeps the rest as typed", () => {
+    expect(historySql("CREATE USER 'app'@'%' IDENTIFIED BY 's3cret!'")).toBe("CREATE USER 'app'@'%' IDENTIFIED BY '***'");
+    expect(historySql("ALTER ROLE app WITH LOGIN PASSWORD 'hunter2'")).toBe("ALTER ROLE app WITH LOGIN PASSWORD '***'");
+    expect(historySql("SET PASSWORD FOR 'app'@'%' = 'x1'")).not.toContain("x1");
+    expect(historySql("ALTER USER app IDENTIFIED WITH mysql_native_password BY 'pw'")).not.toContain("'pw'");
+    const plain = "SELECT a -price, '-pfoo' FROM t";
+    expect(historySql(plain)).toBe(plain);
+    const s = new Mem();
+    expect(addHistory(s, "c", { sql: "CREATE USER u PASSWORD 'abc'", at: 1, ms: 0, ok: true })[0].sql).not.toContain("abc");
+    expect(s.getItem("handrail.db.history.c")).not.toContain("abc");
+  });
+
+  it("forgets the user's work, keeping display preferences", () => {
+    const s = new Mem();
+    for (const k of ["handrail.db.tabs.c", "handrail.db.history.c", "handrail.db.sql.c", "aht:workspaces", "aht:recent", "aht:pinned", "aht:prefs", "aht:lang"]) s.setItem(k, "1");
+    clearUserContent(s);
+    expect([...s.m.keys()].sort()).toEqual(["aht:lang", "aht:prefs"]);
   });
 });

@@ -1,16 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api } from "../../api";
-  import { t } from "../../i18n";
+  import { t, tn } from "../../i18n";
   import { terminals } from "../../terminal/host";
   import { sessions } from "../../stores/sessions.svelte";
   import { agent } from "../../stores/agent.svelte";
   import { settings } from "../../stores/settings.svelte";
   import { toasts } from "../../stores/toasts.svelte";
+  import { ui } from "../../stores/ui.svelte";
   import Icon from "../icons/Icon.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
   import SessionBar from "./SessionBar.svelte";
   import { quickActions } from "./sessionActions.svelte";
+  import { lineBreaks } from "../../util/approval";
 
   let { sessionId, focused = false }: { sessionId: string; focused?: boolean } = $props();
 
@@ -35,11 +37,33 @@
     }
   }
 
+  /** Line breaks in pasted text, which a shell may run at once: counted only on production. */
+  const prodBreaks = (text: string) => (info?.env === "prod" ? lineBreaks(text) : 0);
+
+  /** Ask before pasting several lines into a production shell. */
+  async function pasteOk(text: string): Promise<boolean> {
+    const n = prodBreaks(text);
+    return !n || ui.ask(t("term.pasteProdTitle"), { body: tn("term.pasteProdBody", n), confirmLabel: t("term.pasteProdConfirm"), danger: true });
+  }
+
+  /** The keyboard paste (xterm reads it from its textarea): held back for the question when needed. */
+  function onPaste(e: ClipboardEvent) {
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    if (!prodBreaks(text)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    void pasteOk(text).then((ok) => {
+      const term = terminals.peek(sessionId)?.term;
+      if (ok) term?.paste(text);
+      term?.focus();
+    });
+  }
+
   async function paste() {
     const term = terminals.peek(sessionId)?.term;
     try {
       const text = await navigator.clipboard.readText();
-      if (text && term) term.paste(text);
+      if (text && term && (await pasteOk(text))) term.paste(text);
     } catch {
       toasts.error(t("term.pasteFailed"));
     }
@@ -83,6 +107,7 @@
     box.appendChild(host.el);
     host.open();
     host.el.addEventListener("contextmenu", openMenu, true);
+    host.el.addEventListener("paste", onPaste, true);
     host.term.attachCustomKeyEventHandler((e) => {
       // Esc while the agent drives this terminal = take over (cancel the run) instead of sending ESC.
       if (e.type === "keydown" && e.key === "Escape" && agent.chats[sessionId]?.runId) {
@@ -144,6 +169,7 @@
       ro.disconnect();
       cancelAnimationFrame(raf);
       host.el.removeEventListener("contextmenu", openMenu, true);
+      host.el.removeEventListener("paste", onPaste, true);
       host.el.remove(); // keep the xterm instance alive in the registry
     };
   });

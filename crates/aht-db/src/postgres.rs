@@ -619,8 +619,11 @@ impl Client {
                         Ok(None) => break,
                         Err(e) => {
                             lost = broken(&e);
-                            // After a cut the statement ends with "canceling statement": not an error.
-                            if !(stopped && out.truncated()) || lost {
+                            // After a cut the statement ends with "canceling statement": not an error in itself,
+                            // but the rest of the run did not happen.
+                            if stopped && out.truncated() && !lost {
+                                out.stopped_after_cut(crate::DbKind::Postgres, sql);
+                            } else {
                                 out.fail(map_err(e).to_string());
                             }
                             break;

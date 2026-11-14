@@ -208,7 +208,7 @@ describe("time", () => {
     expect(relativeTime(now - 3 * 3_600_000, now)).toBe("3 h ago");
     expect(relativeTime(now - 26 * 3_600_000, now)).toBe("yesterday");
     expect(relativeTime(now - 3 * 86_400_000, now)).toBe("3 days ago");
-    expect(relativeTime(now - 30 * 86_400_000, now)).toBe(new Date(now - 30 * 86_400_000).toLocaleDateString());
+    expect(relativeTime(now - 30 * 86_400_000, now)).toBe(new Date(now - 30 * 86_400_000).toLocaleDateString("en-US"));
   });
   it("formats sizes", () => {
     expect(formatBytes(512)).toBe("512 B");

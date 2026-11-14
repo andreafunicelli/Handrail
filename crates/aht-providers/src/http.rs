@@ -15,6 +15,8 @@ pub(crate) const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
 /// Longest we are willing to wait before the single automatic retry.
 const MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
+/// Largest `retry-after` we keep (above [`MAX_RETRY_WAIT`], so it is still reported, not slept).
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// Turns SSE events of one provider dialect into neutral events.
 pub(crate) trait Decoder: Send + 'static {
@@ -91,8 +93,7 @@ impl Http {
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<f64>().ok())
-            .map(Duration::from_secs_f64);
+            .and_then(parse_retry_after);
         let body = resp.text().await.unwrap_or_default();
         Err(Error::from_status(status.as_u16(), &body, retry_after))
     }
@@ -165,7 +166,14 @@ pub(crate) fn pump(
             };
             match item {
                 Some(Ok(chunk)) => {
-                    for ev in sse.push(&chunk) {
+                    let events = match sse.push(&chunk) {
+                        Ok(evs) => evs,
+                        Err(e) => {
+                            let _ = tx.send(Err(e)).await;
+                            return;
+                        }
+                    };
+                    for ev in events {
                         if dispatch(&mut decoder, &ev, &tx).await {
                             return;
                         }
@@ -203,6 +211,15 @@ pub(crate) fn pump(
     futures::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|i| (i, rx)) }).boxed()
 }
 
+/// A `retry-after` value in seconds, clamped to [`MAX_RETRY_AFTER`]. Negative, NaN or
+/// non-numeric values (HTTP dates included) are ignored.
+fn parse_retry_after(v: &str) -> Option<Duration> {
+    let secs = v.trim().parse::<f64>().ok().filter(|s| *s >= 0.0)?;
+    Some(Duration::from_secs_f64(
+        secs.min(MAX_RETRY_AFTER.as_secs_f64()),
+    ))
+}
+
 /// Parse accumulated tool-call argument JSON; empty means "no arguments".
 pub(crate) fn parse_tool_args(buf: &str) -> Result<Value> {
     if buf.trim().is_empty() {
@@ -210,4 +227,19 @@ pub(crate) fn parse_tool_args(buf: &str) -> Result<Value> {
     }
     serde_json::from_str(buf)
         .map_err(|e| Error::Protocol(format!("tool call arguments are not valid JSON: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hostile_retry_after_is_ignored_or_clamped() {
+        assert_eq!(parse_retry_after("2.5"), Some(Duration::from_millis(2500)));
+        assert_eq!(parse_retry_after("1e300"), Some(MAX_RETRY_AFTER));
+        assert_eq!(parse_retry_after("inf"), Some(MAX_RETRY_AFTER));
+        for bad in ["-1", "NaN", "-inf", "Wed, 21 Oct 2015 07:28:00 GMT", ""] {
+            assert_eq!(parse_retry_after(bad), None, "{bad}");
+        }
+    }
 }

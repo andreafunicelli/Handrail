@@ -94,6 +94,10 @@ pub struct Connection {
     /// For `Rdp`: connect to the console (administrative) session, like `mstsc /admin`.
     #[serde(default)]
     pub rdp_admin: bool,
+    /// For `Rdp`: also log in to a server without Network Level Authentication (the password
+    /// goes to the server's login screen before its identity is checked). Off by default.
+    #[serde(default)]
+    pub rdp_allow_tls_login: bool,
     /// Shown before the name in the sidebar: a built-in icon name (`"database"`) or a single
     /// emoji. Unknown values are shown as text, so newer icon names degrade gracefully.
     #[serde(default, skip_serializing_if = "Option::is_none")]

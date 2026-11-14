@@ -1,6 +1,7 @@
 //! Background sync. While the vault is unlocked and sync is configured with auto-sync on, the
 //! vault syncs right after unlock, a few seconds after a local edit, and every few minutes to
-//! pick up other devices' changes. Failures back off exponentially.
+//! pick up other devices' changes. Failures back off exponentially, and at least as long as a
+//! rate-limited remote asks.
 //!
 //! [`Scheduler`] is pure (time is passed in) so the policy is unit-tested; [`spawn`] drives it.
 
@@ -38,6 +39,8 @@ pub struct Scheduler {
     seen_rev: Option<(u64, Instant)>,
     last_attempt: Option<Instant>,
     failures: u32,
+    /// Wait the remote asked for after the last failure (rate limit).
+    retry_after: Option<Duration>,
 }
 
 impl Scheduler {
@@ -55,7 +58,8 @@ impl Scheduler {
         }
         let since = |t: Instant| o.now.saturating_duration_since(t);
         if self.failures > 0 {
-            return self.last_attempt.is_none_or(|t| since(t) >= self.backoff());
+            let wait = self.backoff().max(self.retry_after.unwrap_or_default());
+            return self.last_attempt.is_none_or(|t| since(t) >= wait);
         }
         match self.synced_rev {
             None => true,
@@ -64,15 +68,21 @@ impl Scheduler {
         }
     }
 
-    /// Record the outcome of a sync. `revision_after` is the vault revision once it finished
-    /// (merges bump it; those changes came from the remote and need no push).
-    pub fn finished(&mut self, ok: bool, revision_after: u64, now: Instant) {
+    /// Record the outcome of a sync: `Ok` with the vault revision the remote is now in line
+    /// with (merges bump it; those changes came from the remote and need no push), or `Err`
+    /// with the wait a rate-limited remote asked for.
+    pub fn finished(&mut self, outcome: Result<u64, Option<Duration>>, now: Instant) {
         self.last_attempt = Some(now);
-        if ok {
-            self.failures = 0;
-            self.synced_rev = Some(revision_after);
-        } else {
-            self.failures = self.failures.saturating_add(1);
+        match outcome {
+            Ok(revision) => {
+                self.failures = 0;
+                self.retry_after = None;
+                self.synced_rev = Some(revision);
+            }
+            Err(retry_after) => {
+                self.failures = self.failures.saturating_add(1);
+                self.retry_after = retry_after;
+            }
         }
     }
 
@@ -88,10 +98,7 @@ pub fn spawn(app: AppHandle) {
         loop {
             tokio::time::sleep(TICK).await;
             let state = app.state::<AppState>();
-            let enabled = {
-                let f = cmd_misc::load_sync(&state);
-                f.config.is_some() && f.auto
-            };
+            let enabled = cmd_misc::load_sync(&state).is_ok_and(|f| f.config.is_some() && f.auto);
             let (unlocked, revision) = {
                 let v = state.vault.lock().await;
                 let st = v.status();
@@ -106,15 +113,17 @@ pub fn spawn(app: AppHandle) {
             if !sched.due(&obs) {
                 continue;
             }
-            let ok = match cmd_misc::run_sync(&app).await {
-                Ok(_) => true,
+            let mut retry_after = None;
+            // `report.revision`, not the vault's revision now: an edit made during the sync
+            // still needs a push.
+            let outcome = match cmd_misc::run_sync(&app, &mut retry_after).await {
+                Ok(report) => Ok(report.revision),
                 Err(e) => {
                     tracing::debug!(error = %e, "background sync failed");
-                    false
+                    Err(retry_after)
                 }
             };
-            let revision_after = state.vault.lock().await.revision();
-            sched.finished(ok, revision_after, Instant::now());
+            sched.finished(outcome, Instant::now());
         }
     });
 }
@@ -148,7 +157,7 @@ mod tests {
         assert!(!s.due(&locked));
         // Unlock: sync at once.
         assert!(s.due(&obs(at(t0, 1), 0)));
-        s.finished(true, 0, at(t0, 1));
+        s.finished(Ok(0), at(t0, 1));
         assert!(!s.due(&obs(at(t0, 2), 0)));
         // A local edit: wait until it has been quiet for DEBOUNCE.
         assert!(!s.due(&obs(at(t0, 10), 1)));
@@ -158,7 +167,7 @@ mod tests {
         );
         assert!(!s.due(&obs(at(t0, 13), 2)));
         assert!(s.due(&obs(at(t0, 14), 2)));
-        s.finished(true, 2, at(t0, 14));
+        s.finished(Ok(2), at(t0, 14));
         // Nothing changes: next sync after INTERVAL.
         assert!(!s.due(&obs(at(t0, 14 + 299), 2)));
         assert!(s.due(&obs(at(t0, 14 + 300), 2)));
@@ -170,7 +179,7 @@ mod tests {
         let mut s = Scheduler::default();
         assert!(s.due(&obs(t0, 5)));
         // The merge bumped the revision to 9.
-        s.finished(true, 9, at(t0, 1));
+        s.finished(Ok(9), at(t0, 1));
         for secs in [2, 10, 60] {
             assert!(!s.due(&obs(at(t0, secs), 9)), "{secs}");
         }
@@ -181,19 +190,29 @@ mod tests {
         let t0 = Instant::now();
         let mut s = Scheduler::default();
         assert!(s.due(&obs(t0, 0)));
-        s.finished(false, 0, t0);
+        s.finished(Err(None), t0);
         assert!(!s.due(&obs(at(t0, 29), 0)));
         assert!(s.due(&obs(at(t0, 30), 0)));
-        s.finished(false, 0, at(t0, 30));
+        s.finished(Err(None), at(t0, 30));
         // Second failure: 60 s, even though a local edit is waiting.
         assert!(!s.due(&obs(at(t0, 30 + 59), 1)));
         assert!(s.due(&obs(at(t0, 30 + 60), 1)));
         for _ in 0..20 {
-            s.finished(false, 1, at(t0, 100));
+            s.finished(Err(None), at(t0, 100));
         }
         assert_eq!(s.backoff(), BACKOFF_MAX);
-        s.finished(true, 1, at(t0, 200));
+        s.finished(Ok(1), at(t0, 200));
         assert!(!s.due(&obs(at(t0, 201), 1)));
+    }
+
+    #[test]
+    fn a_rate_limit_waits_at_least_as_long_as_asked() {
+        let t0 = Instant::now();
+        let mut s = Scheduler::default();
+        assert!(s.due(&obs(t0, 0)));
+        s.finished(Err(Some(Duration::from_secs(120))), t0);
+        assert!(!s.due(&obs(at(t0, 119), 0)), "first backoff is only 30 s");
+        assert!(s.due(&obs(at(t0, 120), 0)));
     }
 
     #[test]
@@ -201,7 +220,7 @@ mod tests {
         let t0 = Instant::now();
         let mut s = Scheduler::default();
         assert!(s.due(&obs(t0, 0)));
-        s.finished(true, 0, t0);
+        s.finished(Ok(0), t0);
         let off = Observation {
             enabled: false,
             ..obs(at(t0, 5), 0)

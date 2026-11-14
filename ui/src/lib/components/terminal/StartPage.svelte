@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon from "../icons/Icon.svelte";
-  import { fmtDateTime, t } from "../../i18n";
+  import { fmtDateTime, t, tn } from "../../i18n";
   import { connections, blankConnection, blankDbConnection } from "../../stores/connections.svelte";
   import { sessions, type Workspace } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
@@ -106,7 +106,7 @@
             <div class="rinfo">
               <strong class="rname">{last.name}</strong>
               <span class="rsum">{summaryText(last)}</span>
-              {#if lastSummary.missing}<span class="rwarn">{t("start.ws.missing", { n: lastSummary.missing })}</span>{/if}
+              {#if lastSummary.missing}<span class="rwarn">{tn("start.ws.missing", lastSummary.missing)}</span>{/if}
               {#if when(last)}<span class="rwhen" title={fmtDateTime(Math.max(last.openedAt ?? 0, last.savedAt ?? 0))}>{when(last)}</span>{/if}
             </div>
             <button class="btn primary" onclick={() => resume(last)}><Icon name="play" size={13} />{t("start.resumeAction")}</button>

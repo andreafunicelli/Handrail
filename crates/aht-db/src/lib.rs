@@ -208,6 +208,30 @@ impl Collector {
         self.out.error = Some(message);
     }
 
+    /// The statement cut at a limit was stopped on the server, which also drops the rest of
+    /// the run (and, on PostgreSQL, rolls back the implicit transaction of a multi-statement
+    /// run): say so instead of showing the cut as a clean finish.
+    pub(crate) fn stopped_after_cut(&mut self, kind: DbKind, sql: &str) {
+        let total = risk::classify(kind, sql).1;
+        // Done so far, and the cut one.
+        let ran = self.out.results.len() + 1;
+        let message = match kind {
+            DbKind::Mysql if total > ran => format!(
+                "stopped at the row limit: the server cancelled the statement, so the {} \
+                 statement(s) after it were not run",
+                total - ran
+            ),
+            DbKind::Postgres if total > 1 => format!(
+                "stopped at the row limit: the server cancelled the statement, so the {} \
+                 statement(s) after it were not run and changes made earlier in this run may \
+                 have been rolled back",
+                total.saturating_sub(ran)
+            ),
+            _ => return,
+        };
+        self.fail(message);
+    }
+
     pub(crate) fn finish(mut self, elapsed: Duration) -> QueryOutput {
         // Rows of a statement whose completion never arrived (cancelled after a cut).
         if !self.current.rows.is_empty() || !self.current.columns.is_empty() {
@@ -524,7 +548,13 @@ impl DbClient {
         if read_only {
             let begin = match self.kind() {
                 DbKind::Mysql => "START TRANSACTION READ ONLY",
-                DbKind::Postgres => "BEGIN READ ONLY",
+                // A time limit for this transaction only, unless the server already sets one.
+                // (MySQL has none that is this simple: its limits are per session, and the
+                // variable differs on MariaDB.)
+                DbKind::Postgres => {
+                    "BEGIN READ ONLY; SELECT set_config('statement_timeout', '60s', true) \
+                     WHERE current_setting('statement_timeout') IN ('0', '0ms')"
+                }
             };
             if let Some(e) = self.query(begin, limits).await?.error {
                 return Err(Error::Other(format!(
@@ -625,6 +655,40 @@ mod tests {
         assert_eq!(out.results[1].rows_affected, 5);
         assert!(out.results[1].columns.is_empty());
         assert_eq!(out.elapsed_ms, 7);
+    }
+
+    #[test]
+    fn a_cut_that_drops_later_statements_is_an_error() {
+        let limits = QueryLimits {
+            max_rows: 1,
+            max_bytes: 1 << 20,
+        };
+        let cut = |kind, sql| {
+            let mut c = Collector::new(limits);
+            c.done(3);
+            assert!(c.row(cols, || vec![Value::Text("1".into())]));
+            assert!(!c.row(cols, || vec![Value::Text("2".into())]));
+            c.stopped_after_cut(kind, sql);
+            c.finish(Duration::ZERO)
+        };
+        let sql = "UPDATE t SET a = 1 WHERE b = 2; SELECT * FROM logs; DELETE FROM t WHERE a = 1";
+        let out = cut(DbKind::Mysql, sql);
+        assert!(out
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("1 statement(s) after it were not run"));
+        // The cut rows are still shown.
+        assert_eq!(out.results.len(), 2);
+        assert!(out.results[1].truncated);
+        // Nothing after it: a clean cut on MySQL, but PostgreSQL rolled back the UPDATE.
+        let sql = "UPDATE t SET a = 1 WHERE b = 2; SELECT * FROM logs";
+        assert_eq!(cut(DbKind::Mysql, sql).error, None);
+        assert!(cut(DbKind::Postgres, sql)
+            .error
+            .unwrap()
+            .contains("rolled back"));
+        assert_eq!(cut(DbKind::Postgres, "SELECT * FROM logs").error, None);
     }
 
     #[test]

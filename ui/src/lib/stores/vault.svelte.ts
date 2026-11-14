@@ -1,5 +1,21 @@
 import { api } from "../api";
 import type { VaultStatus } from "../api/types";
+import { t } from "../i18n";
+import { clearUserContent } from "../util/storage";
+import { opsLog } from "./opsLog.svelte";
+import { toasts } from "./toasts.svelte";
+import { transfers } from "./transfers.svelte";
+import { ui } from "./ui.svelte";
+
+/** Work that locking would lose, by owner (a database pane's unsaved edits, an import running):
+ *  locking closes database and remote desktop panes. Set with `setUnsaved`. */
+const unsaved = new Set<string>();
+export function setUnsaved(key: string, on: boolean) {
+  if (on) unsaved.add(key);
+  else unsaved.delete(key);
+}
+/** Whether locking now would lose work (unsaved edits, an import, export or file transfer). */
+export const hasUnsavedWork = () => unsaved.size > 0 || transfers.running > 0;
 
 export type VaultPhase = "loading" | "create" | "join" | "kit" | "unlock" | "ready";
 
@@ -38,12 +54,21 @@ class Vault {
     this.phase = "ready";
   }
   async lock() {
+    // Operation records still batched in memory go into the vault while it is open.
+    await opsLog.flush().catch(() => {});
     await api.vaultLock();
     this.phase = "unlock";
+  }
+  /** Lock on the user's request: asks first when unsaved work would be lost. Never throws. */
+  async lockAsking() {
+    if (hasUnsavedWork() && !(await ui.ask(t("vault.lockUnsaved.title"), { body: t("vault.lockUnsaved.body"), confirmLabel: t("vault.lock"), danger: true }))) return;
+    await this.lock().catch(toasts.error);
   }
   /** Delete the vault, then start the app over: every store still caches its items and tabs. */
   async erase() {
     await api.vaultDelete();
+    // Query tabs and history, workspaces, recent and pinned connections live outside the vault.
+    clearUserContent();
     location.reload();
   }
 }

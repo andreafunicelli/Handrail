@@ -107,6 +107,8 @@ impl Decryptor {
     }
 }
 
+const MAX_KDF_ITERATIONS: u32 = 1_000_000;
+
 pub fn parse_file(path: &Path, opts: &ImportOptions) -> Result<ImportBundle> {
     parse_text(&read_text(path)?, opts)
 }
@@ -135,7 +137,8 @@ pub(crate) fn parse_text(text: &str, opts: &ImportOptions) -> Result<ImportBundl
     let doc = roxmltree::Document::parse_with_options(
         &text,
         roxmltree::ParsingOptions {
-            allow_dtd: true,
+            // DTDs bring entity expansion; mRemoteNG never writes one.
+            allow_dtd: false,
             ..Default::default()
         },
     )
@@ -153,9 +156,14 @@ pub(crate) fn parse_text(text: &str, opts: &ImportOptions) -> Result<ImportBundl
         let engine = attr(root, "EncryptionEngine");
         let mode = attr(root, "BlockCipherMode");
         if engine.eq_ignore_ascii_case("AES") && mode.eq_ignore_ascii_case("GCM") {
-            Cipher::Gcm {
-                iterations: attr(root, "KdfIterations").parse().unwrap_or(1000),
+            let iterations = attr(root, "KdfIterations").parse().unwrap_or(1000);
+            // The KDF runs once per encrypted field, so a huge count would hang the import.
+            if !(1..=MAX_KDF_ITERATIONS).contains(&iterations) {
+                return Err(Error::Invalid(format!(
+                    "mRemoteNG KdfIterations {iterations} is outside 1..={MAX_KDF_ITERATIONS}"
+                )));
             }
+            Cipher::Gcm { iterations }
         } else {
             Cipher::Unsupported(format!("{engine}/{mode}"))
         }
@@ -430,6 +438,26 @@ mod tests {
         // Default password must be rejected via the Protected check.
         let err = parse_text(&text, &ImportOptions::default()).unwrap_err();
         assert!(matches!(err, Error::Auth(_)), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_dtd_and_absurd_kdf_iterations() {
+        let dtd = r#"<!DOCTYPE c [<!ENTITY a "aaaa">]><Connections ConfVersion="2.6"/>"#;
+        assert!(parse_text(dtd, &ImportOptions::default()).is_err());
+        let pw = encrypt_gcm("x", "mR3m", 1000, SALT, NONCE);
+        let huge = xml("mR3m", 1000, &pw)
+            .replace("KdfIterations=\"1000\"", "KdfIterations=\"4000000000\"");
+        let err = parse_text(&huge, &ImportOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("KdfIterations"), "{err}");
+    }
+
+    #[test]
+    fn read_capped_refuses_oversized_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("big");
+        std::fs::write(&f, vec![b'a'; 11]).unwrap();
+        assert_eq!(crate::text::read_capped(&f, 11).unwrap().len(), 11);
+        assert!(crate::text::read_capped(&f, 10).is_err());
     }
 
     #[test]

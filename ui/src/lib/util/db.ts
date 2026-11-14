@@ -1,4 +1,5 @@
 import type { DbCellValue, DbQueryOutput, DbResultSet, DbRowEdit, DbTableInfo, DbValue } from "../api/types";
+import { tn } from "../i18n";
 import { formatBytes } from "./time";
 
 /** A cell as text: NULL as an empty string, bytes as `0x…`. */
@@ -95,7 +96,7 @@ export function buildEdits(result: DbResultSet, primaryKey: string[], e: GridEdi
 /** "~1,234 rows · 4.2 MB · InnoDB" for a table, from the server's statistics. */
 export function tableStats(t: DbTableInfo): string {
   const parts: string[] = [];
-  if (t.rows !== null) parts.push(`~${t.rows.toLocaleString()} rows`);
+  if (t.rows !== null) parts.push(tn("db.approxRows", t.rows));
   if (t.size !== null) parts.push(formatBytes(t.size));
   if (t.engine) parts.push(t.engine);
   return parts.join(" · ");

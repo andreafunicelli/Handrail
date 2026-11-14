@@ -4,6 +4,7 @@
   import { t } from "../../i18n";
   import { api } from "../../api";
   import { updates } from "../../stores/updates.svelte";
+  import { sessions } from "../../stores/sessions.svelte";
   import { tour } from "../../stores/tour.svelte";
   import { formatBytes, relativeTime } from "../../util/time";
   import type { NightlyBuild } from "../../api/types";
@@ -68,7 +69,7 @@
       <span class="hint">{t("update.checking")}</span>
     {:else if updates.info && (updates.phase === "available" || updates.phase === "error")}
       <span>{t("update.available", { version: updates.info.version })}</span>
-      <button class="btn sm primary" onclick={() => updates.install()}>{t("update.install")}</button>
+      <button class="btn sm primary" onclick={() => updates.installAsking(Object.keys(sessions.infos).length)}>{t("update.install")}</button>
     {:else if updates.phase === "downloading"}
       <span class="hint">{t("update.downloading", { version: updates.info?.version ?? "" })}</span>
     {:else}

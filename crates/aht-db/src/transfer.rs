@@ -770,6 +770,42 @@ fn read_error(line: u64, e: std::io::Error) -> Error {
     }
 }
 
+/// A line of the file (see [`dump::read_line`]) that must be UTF-8: the statements go to the
+/// server as text.
+fn text_line(
+    input: &mut (dyn BufRead + Send),
+    line: &mut Vec<u8>,
+    pending: usize,
+    number: u64,
+) -> Result<usize> {
+    let n = dump::read_line(input, line, pending).map_err(|e| read_error(number, e))?;
+    if std::str::from_utf8(line).is_err() {
+        return Err(read_error(number, std::io::ErrorKind::InvalidData.into()));
+    }
+    Ok(n)
+}
+
+/// Read a whole SQL file before [`import_sql`] runs any of it: one that is not UTF-8 (a
+/// `mysqldump` with raw BLOB bytes, or in latin1) would otherwise stop midway, with the
+/// statements before the bad line already applied.
+pub fn check_sql_file(input: &mut dyn BufRead) -> Result<()> {
+    let mut line = Vec::new();
+    let mut number = 0u64;
+    loop {
+        line.clear();
+        number += 1;
+        if dump::read_line(input, &mut line, 0).map_err(|e| read_error(number, e))? == 0 {
+            return Ok(());
+        }
+        if std::str::from_utf8(&line).is_err() {
+            return Err(Error::Invalid(format!(
+                "line {number}: the file is not UTF-8 text, so nothing was imported \
+                 (export it as UTF-8, with binary columns as hex: mysqldump --hex-blob)"
+            )));
+        }
+    }
+}
+
 /// Run an SQL file, statement by statement, in `ns` (`USE` on MySQL, the `search_path` on
 /// PostgreSQL). PostgreSQL's `COPY ... FROM stdin` (as `pg_dump` writes) takes the rows that
 /// follow it in the file.
@@ -812,17 +848,15 @@ async fn import_sql_on(
     }
     let mut sp = Splitter::new(kind, backslash);
     let mut s = Summary::default();
-    let mut line = String::new();
+    let mut line = Vec::new();
     'file: loop {
         line.clear();
-        let n = input
-            .read_line(&mut line)
-            .map_err(|e| read_error(sp.line() + 1, e))?;
+        let n = text_line(input, &mut line, sp.pending(), sp.line() + 1)?;
         let statements: Vec<Statement> = if n == 0 {
             sp.finish().into_iter().collect()
         } else {
             s.progress.bytes += n as u64;
-            sp.push_line(&line)
+            sp.push_line(std::str::from_utf8(&line).expect("checked by text_line"))
         };
         for st in statements {
             if cancel.load(Ordering::Relaxed) {
@@ -914,7 +948,7 @@ async fn copy_in(
         }
     };
     let mut buf: Vec<u8> = Vec::new();
-    let mut line = String::new();
+    let mut line = Vec::new();
     loop {
         if cancel.load(Ordering::Relaxed) {
             s.cancelled = true;
@@ -924,19 +958,17 @@ async fn copy_in(
             return Ok(Ok(0));
         }
         line.clear();
-        let n = input
-            .read_line(&mut line)
-            .map_err(|e| read_error(sp.line() + 1, e))?;
+        let n = text_line(input, &mut line, 0, sp.line() + 1)?;
         if n == 0 {
             break;
         }
         sp.skip_line(n as u64);
         s.progress.bytes += n as u64;
-        if line.trim_end_matches(['\r', '\n']) == "\\." {
+        if dump::trim_line(&line) == b"\\." {
             break;
         }
         if let Some(cp) = copy.as_mut() {
-            buf.extend_from_slice(line.as_bytes());
+            buf.extend_from_slice(&line);
             if buf.len() >= 1 << 16 {
                 let sent = cp.send(std::mem::take(&mut buf)).await.map(|_| ());
                 if let Err(e) = sent {
@@ -1127,4 +1159,21 @@ pub fn csv_preview(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_that_is_not_utf8_is_refused_before_anything_runs() {
+        check_sql_file(&mut &b"SELECT 1;\nSELECT 'caf\xc3\xa9';\n"[..]).unwrap();
+        let e = check_sql_file(&mut &b"SELECT 1;\nINSERT INTO t VALUES ('\xff');\n"[..])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("line 2") && e.contains("nothing was imported"),
+            "{e}"
+        );
+    }
 }

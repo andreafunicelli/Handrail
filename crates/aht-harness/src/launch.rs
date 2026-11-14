@@ -12,6 +12,7 @@
 
 use crate::profile::context_markdown;
 use aht_core::model::{HarnessKind, HarnessProfile};
+use aht_core::terminal::TOOL_CALL_TIMEOUT_S;
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -167,12 +168,20 @@ fn claude(
         .map(String::from)
         .to_vec();
     }
+    // A tool call may wait for the user's approval and then run (see TOOL_CALL_TIMEOUT_S).
+    spec.env.push((
+        "MCP_TOOL_TIMEOUT".into(),
+        (TOOL_CALL_TIMEOUT_S * 1000).to_string(),
+    ));
     let mcp_file = temp_file(ctx, "claude-mcp.json");
     let ctx_file = temp_file(ctx, "claude-context.md");
     let mcp = json!({"mcpServers": {MCP_SERVER_NAME: {
         "type": "http",
         "url": ctx.mcp_url,
         "headers": {"Authorization": format!("Bearer ${{{}}}", ctx.token_env_var)},
+        // Also the idle floor: without it an HTTP tool call that sends no progress (one waiting
+        // for approval) is cut at CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT's 5-minute default.
+        "timeout": TOOL_CALL_TIMEOUT_S * 1000,
     }}});
     spec.files.push((
         mcp_file.clone(),
@@ -253,7 +262,7 @@ fn codex(
     cfg(format!("mcp_servers.{MCP_SERVER_NAME}.required=true"));
     // Codex defaults to a 60 s tool timeout, which would kill commands waiting on user approval.
     cfg(format!(
-        "mcp_servers.{MCP_SERVER_NAME}.tool_timeout_sec=900"
+        "mcp_servers.{MCP_SERVER_NAME}.tool_timeout_sec={TOOL_CALL_TIMEOUT_S}"
     ));
     cfg(format!(
         "mcp_servers.{MCP_SERVER_NAME}.startup_timeout_sec=30"
@@ -408,6 +417,10 @@ mod tests {
     fn claude_headless_server_mode() {
         let p = profile(HarnessKind::ClaudeCode, true);
         let s = build_launch(HarnessKind::ClaudeCode, &p, LaunchMode::Headless, &ctx());
+        assert!(s.env.contains(&(
+            "MCP_TOOL_TIMEOUT".into(),
+            (TOOL_CALL_TIMEOUT_S * 1000).to_string()
+        )));
         assert_eq!(s.program, "claude");
         assert_eq!(
             s.cwd.as_deref(),
@@ -465,6 +478,7 @@ mod tests {
         let srv = &v["mcpServers"]["handrail"];
         assert_eq!(srv["type"], "http");
         assert_eq!(srv["url"], "http://127.0.0.1:54321/mcp");
+        assert_eq!(srv["timeout"], TOOL_CALL_TIMEOUT_S * 1000);
         assert_eq!(
             srv["headers"]["Authorization"],
             "Bearer ${HANDRAIL_MCP_TOKEN}"
@@ -526,7 +540,8 @@ mod tests {
             .collect();
         assert!(cfgs.contains(&"mcp_servers.handrail.url=http://127.0.0.1:54321/mcp"));
         assert!(cfgs.contains(&"mcp_servers.handrail.bearer_token_env_var=HANDRAIL_MCP_TOKEN"));
-        assert!(cfgs.contains(&"mcp_servers.handrail.tool_timeout_sec=900"));
+        let timeout = format!("mcp_servers.handrail.tool_timeout_sec={TOOL_CALL_TIMEOUT_S}");
+        assert!(cfgs.contains(&timeout.as_str()));
         assert!(cfgs.contains(&"features.shell_tool=false"));
         assert!(cfgs.contains(&"approval_policy=never"));
         assert!(cfgs

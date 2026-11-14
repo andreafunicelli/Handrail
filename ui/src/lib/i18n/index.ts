@@ -14,6 +14,17 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
   return msg.replace(/\{(\w+)\}/g, (m, k: string) => (k in params ? String(params[k]) : m));
 }
 
+/** Keys with plural forms: `<key>_one` and `<key>_other` (CLDR categories) in the catalogs. */
+export type PluralKey = { [K in MessageKey]: K extends `${infer B}_other` ? B : never }[MessageKey];
+
+/** `key` in the plural form for `n` (`{n}` is the count, formatted), e.g. "1 row" / "2 rows".
+ *  A category the catalog lacks (Italian "many") falls back to `_other`. */
+export function tn(key: PluralKey, n: number, params?: Record<string, string | number>): string {
+  const form = `${key}_${new Intl.PluralRules(locale.tag).select(n)}`;
+  const k = (form in catalogs[locale.lang] || form in en ? form : `${key}_other`) as MessageKey;
+  return t(k, { n: fmtNumber(n), ...params });
+}
+
 /** A number in the current language's format. */
 export function fmtNumber(n: number, opts?: Intl.NumberFormatOptions): string {
   return n.toLocaleString(locale.tag, opts);

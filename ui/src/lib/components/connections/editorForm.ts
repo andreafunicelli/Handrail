@@ -9,10 +9,10 @@ export type AuthChoice = "password" | "key" | "agent" | "prompt";
 const isDb = (c: Pick<Connection, "kind">) => c.kind === "mysql" || c.kind === "postgres";
 
 /** Network holds something other than the defaults (jump hosts, forwards, RDP or TLS options). */
-export function networkHasValues(c: Pick<Connection, "kind" | "jump" | "tunnels" | "rdp_admin" | "db_tls">): boolean {
+export function networkHasValues(c: Pick<Connection, "kind" | "jump" | "tunnels" | "rdp_admin" | "rdp_allow_tls_login" | "db_tls">): boolean {
   if (c.jump.length) return true;
   if (c.kind === "ssh") return c.tunnels.length > 0;
-  if (c.kind === "rdp") return !!c.rdp_admin;
+  if (c.kind === "rdp") return !!c.rdp_admin || !!c.rdp_allow_tls_login;
   if (isDb(c)) return c.db_tls != null;
   return false;
 }

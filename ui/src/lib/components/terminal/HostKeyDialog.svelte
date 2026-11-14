@@ -5,12 +5,17 @@
   import type { HostKeyEvent } from "../../api/types";
   import { sessions } from "../../stores/sessions.svelte";
   import { toasts } from "../../stores/toasts.svelte";
+  import { armed } from "../../util/approval";
 
   let { req }: { req: HostKeyEvent } = $props();
   let typed = $state("");
   const hostOnly = $derived(req.host.replace(/:\d+$/, ""));
 
   const answer = (accept: boolean) => sessions.answerHostKey(req.request_id, accept).catch(toasts.error);
+  // The dialog opens on its own while the user may be typing in a terminal: a key or click that
+  // lands in the first moment does not trust the key.
+  const shownAt = performance.now();
+  const trust = () => armed(shownAt) && answer(true);
 </script>
 
 {#if req.kind === "new"}
@@ -24,8 +29,8 @@
         <code class="mono">{req.fingerprint}</code>
       </div>
       <div class="actions">
-        <button class="btn ghost" onclick={() => answer(false)}>{t("hostkey.cancel")}</button>
-        <button class="btn primary" data-autofocus onclick={() => answer(true)}>{t("hostkey.trust")}</button>
+        <button class="btn ghost" data-autofocus onclick={() => answer(false)}>{t("hostkey.cancel")}</button>
+        <button class="btn primary" onclick={trust}>{t("hostkey.trust")}</button>
       </div>
     </div>
   </Modal>
@@ -50,7 +55,7 @@
         <input class="input mono" bind:value={typed} autocomplete="off" spellcheck="false" />
       </label>
       <div class="actions">
-        <button class="btn" disabled={typed.trim() !== hostOnly} onclick={() => answer(true)}>{t("hostkey.changed.replace")}</button>
+        <button class="btn" disabled={typed.trim() !== hostOnly} onclick={trust}>{t("hostkey.changed.replace")}</button>
         <button class="btn danger" data-autofocus onclick={() => answer(false)}>{t("hostkey.changed.disconnect")}</button>
       </div>
     </div>

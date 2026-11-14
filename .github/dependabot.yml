@@ -1,0 +1,38 @@
+version: 2
+
+# Weekly, with minor and patch updates grouped into one pull request per ecosystem; major
+# updates still come one per dependency, since they may need code changes.
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+
+  # The RDP helper is a workspace of its own, with its own Cargo.lock.
+  - package-ecosystem: cargo
+    directory: /rdp-helper
+    schedule:
+      interval: weekly
+    groups:
+      rdp-helper-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  # Actions are pinned to commit SHAs; Dependabot updates the SHA and its version comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]

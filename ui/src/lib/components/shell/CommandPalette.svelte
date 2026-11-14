@@ -130,7 +130,7 @@
         group: "actions",
         run: () => sessions.toggleBroadcast(tab.id),
       });
-    out.push({ id: "lock", label: t("palette.lock"), icon: "lock", group: "actions", run: () => vault.lock() });
+    out.push({ id: "lock", label: t("palette.lock"), icon: "lock", group: "actions", run: () => vault.lockAsking() });
     out.push({ id: "tour", label: t("tour.replay"), icon: "sparkle", group: "actions", run: () => tour.start() });
     return out;
   });

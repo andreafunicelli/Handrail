@@ -231,8 +231,7 @@
           danger: true,
           action: async () => {
             if (!(await ui.ask(t("ctx.deleteConfirm", { name: c.name }), { confirmLabel: t("common.delete"), danger: true }))) return;
-            await connections.remove(c.id).catch(toasts.error);
-            toasts.info(t("ctx.deleted", { name: c.name }));
+            await connections.remove(c.id).then(() => toasts.info(t("ctx.deleted", { name: c.name })), toasts.error);
           },
         },
       ],

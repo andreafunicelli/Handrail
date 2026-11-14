@@ -250,6 +250,9 @@ impl server::Handler for SrvHandler {
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         let cmd = String::from_utf8_lossy(data).into_owned();
+        if cmd == "hang" {
+            return Ok(());
+        }
         session.data(channel, format!("ran: {cmd}\n").into_bytes())?;
         session.extended_data(channel, 1, b"oops\n".to_vec())?;
         session.exit_status_request(channel, 3)?;
@@ -619,6 +622,41 @@ async fn keyboard_interactive_retries_after_a_wrong_answer() {
     );
 }
 
+/// Takes its time, like a user comparing a fingerprint, then trusts the key.
+struct SlowVerifier;
+
+#[async_trait]
+impl HostKeyVerifier for SlowVerifier {
+    async fn verify(&self, _h: &str, _p: u16, _k: &PublicKey) -> HostKeyDecision {
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        HostKeyDecision::Accept
+    }
+}
+
+/// Types the password slowly.
+struct SlowTyper;
+
+#[async_trait]
+impl KeyboardInteractiveHandler for SlowTyper {
+    async fn respond(&self, _n: &str, _i: &str, _p: &[KiPrompt]) -> Option<Vec<Zeroizing<String>>> {
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        Some(vec![Zeroizing::new(PASSWORD.to_string())])
+    }
+}
+
+#[tokio::test]
+async fn connect_timeout_does_not_count_time_waiting_on_the_user() {
+    let srv = start_server(vec![], false).await;
+    let mut p = params(
+        srv.addr,
+        AuthMaterial::KeyboardInteractive(Arc::new(SlowTyper)),
+    );
+    p.connect_timeout = Duration::from_millis(500);
+    SshConnection::connect(&p, Arc::new(SlowVerifier))
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn host_key_new_known_changed() {
     let srv = start_server(vec![], false).await;
@@ -700,6 +738,16 @@ async fn exec_collects_stdout_stderr_exit() {
     assert_eq!(out.stdout, b"ran: uname -a\n");
     assert_eq!(out.stderr, b"oops\n");
     assert_eq!(out.exit_status, Some(3));
+
+    // The bounded variant: same output within its limits, an error past them.
+    let ms = Duration::from_millis;
+    assert_eq!(conn.exec_bounded("uname -a", T, 1024).await.unwrap(), out);
+    let err = conn.exec_bounded("uname -a", T, 5).await.unwrap_err();
+    assert!(matches!(err, Error::Other(_)), "{err:?}");
+    let err = conn.exec_bounded("hang", ms(200), 1024).await.unwrap_err();
+    assert!(matches!(err, Error::Network(_)), "{err:?}");
+    // The connection is still usable afterwards.
+    assert_eq!(conn.exec("uname -a").await.unwrap(), out);
 }
 
 #[tokio::test]

@@ -32,7 +32,7 @@
   import { settings } from "../../stores/settings.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { ui } from "../../stores/ui.svelte";
-  import { vault } from "../../stores/vault.svelte";
+  import { hasUnsavedWork, vault } from "../../stores/vault.svelte";
   import { updates } from "../../stores/updates.svelte";
   import { reloadVaultData, syncChangedVault } from "../../stores/vaultData";
   import { api } from "../../api";
@@ -81,7 +81,8 @@
     const evs = ["pointerdown", "keydown", "wheel"] as const;
     evs.forEach((e) => addEventListener(e, bump, { passive: true, capture: true }));
     const iv = setInterval(() => {
-      if (settings.autoLock > 0 && Date.now() - idle > settings.autoLock * 60_000) void vault.lock();
+      // Unsaved work holds the auto-lock off; the next tick checks again.
+      if (settings.autoLock > 0 && Date.now() - idle > settings.autoLock * 60_000 && !hasUnsavedWork()) vault.lock().catch(toasts.error);
     }, 30_000);
 
     return () => {
@@ -229,8 +230,9 @@
       <h2>{req.title}</h2>
       {#if req.body}<p>{req.body}</p>{/if}
       <div class="actions">
-        <button class="btn ghost" onclick={() => ui.answer(false)}>{t("common.cancel")}</button>
-        <button class="btn {req.danger ? 'danger' : 'primary'}" data-autofocus onclick={() => ui.answer(true)}>{req.confirmLabel}</button>
+        <!-- A destructive confirm starts on Cancel: Enter alone never confirms it. -->
+        <button class="btn ghost" data-autofocus={req.danger || undefined} onclick={() => ui.answer(false)}>{t("common.cancel")}</button>
+        <button class="btn {req.danger ? 'danger' : 'primary'}" data-autofocus={!req.danger || undefined} onclick={() => ui.answer(true)}>{req.confirmLabel}</button>
       </div>
     </div>
   </Modal>

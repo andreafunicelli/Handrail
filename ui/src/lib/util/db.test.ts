@@ -60,7 +60,7 @@ describe("db helpers", () => {
   it("describes tables from their statistics", () => {
     const t = { name: "orders", view: false, rows: 2500, size: 4300, engine: "InnoDB", comment: "checkouts" };
     const v = { name: "totals", view: true, rows: null, size: null, engine: null, comment: null };
-    expect(tableStats(t)).toBe(`~${(2500).toLocaleString()} rows · 4.2 KB · InnoDB`);
+    expect(tableStats(t)).toBe("~2,500 rows · 4.2 KB · InnoDB");
     expect(tableStats(v)).toBe("");
     const o = tableOverview([t, v]);
     expect(o.columns.map((c) => c.name)).toEqual(["name", "type", "rows (estimate)", "size", "engine", "comment"]);

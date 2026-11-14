@@ -37,12 +37,13 @@ async fn main() -> ExitCode {
 async fn run() -> anyhow::Result<()> {
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
-    let config = match proto::read(&mut stdin).await? {
+    let (config, nla_only) = match proto::read(&mut stdin).await? {
         Some((proto::START, body)) => {
             let start: proto::Start = serde_json::from_slice(&body)?;
-            config(start)
+            let nla_only = !start.allow_tls_login;
+            (config(start), nla_only)
         }
-        _ => Err(anyhow::anyhow!("expected a start message")),
+        _ => (Err(anyhow::anyhow!("expected a start message")), true),
     };
     let config = match config {
         Ok(c) => c,
@@ -108,7 +109,11 @@ async fn run() -> anyhow::Result<()> {
             RdpOutputEvent::ConnectionFailure(e) => {
                 tracing::debug!(error = ?e, "connection failed");
                 // The whole cause chain: "decode error" alone does not say what failed.
-                let message = e.report().to_string();
+                let message = if nla_only && wants_tls_login(&e) {
+                    NO_NLA.to_string()
+                } else {
+                    e.report().to_string()
+                };
                 fail(&mut stdout, &message).await?;
                 result = Err(anyhow::anyhow!("connection failed: {message}"));
                 break;
@@ -125,6 +130,19 @@ async fn run() -> anyhow::Result<()> {
         }
     }
     result
+}
+
+const NO_NLA: &str = "The server does not offer Network Level Authentication (NLA), so the \
+password was not sent: without NLA it would go to the server before its identity is checked. \
+Turn on NLA on the server, or allow logins without NLA for this connection.";
+
+/// The server refused the NLA-only request because it supports only TLS security.
+fn wants_tls_login(e: &ironrdp_connector::ConnectorError) -> bool {
+    matches!(
+        e.kind(),
+        ironrdp_connector::ConnectorErrorKind::Negotiation(f)
+            if f.code() == ironrdp_pdu::nego::FailureCode::SSL_REQUIRED_BY_SERVER
+    )
 }
 
 async fn fail<W: AsyncWrite + Unpin>(out: &mut W, message: &str) -> std::io::Result<()> {
@@ -193,6 +211,8 @@ fn config(s: proto::Start) -> anyhow::Result<Config> {
         .with_destination(Destination::from_parts(s.host, s.port))
         .with_username(s.username)
         .with_password(s.password)
+        // NLA only, unless this connection allows the TLS login screen (see `Start`).
+        .with_tls(s.allow_tls_login)
         .with_desktop_width(s.width.max(200))
         .with_desktop_height(s.height.max(200))
         .with_desktop_scale_factor(s.scale)

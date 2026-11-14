@@ -1040,7 +1040,7 @@ pub fn index(
             return Err(cancelled());
         }
         line.clear();
-        let n = input.read_until(b'\n', &mut line)?;
+        let n = dump::read_line(input, &mut line, sp.pending())?;
         let statements: Vec<RawStatement> = if n == 0 {
             sp.finish_raw().into_iter().collect()
         } else {
@@ -1053,7 +1053,7 @@ pub fn index(
                 let mut rows = 0;
                 loop {
                     line.clear();
-                    let n = input.read_until(b'\n', &mut line)?;
+                    let n = dump::read_line(input, &mut line, 0)?;
                     if n == 0 {
                         break;
                     }
@@ -1176,7 +1176,7 @@ fn each_row(
                     return Err(cancelled());
                 }
                 line.clear();
-                if input.read_until(b'\n', &mut line)? == 0 {
+                if dump::read_line(&mut input, &mut line, 0)? == 0 {
                     break;
                 }
                 left -= 1;
@@ -1198,7 +1198,7 @@ fn each_row(
                 return Err(cancelled());
             }
             line.clear();
-            let n = input.read_until(b'\n', &mut line)?;
+            let n = dump::read_line(&mut input, &mut line, sp.pending())?;
             let statements: Vec<RawStatement> = if n == 0 {
                 sp.finish_raw().into_iter().collect()
             } else {
@@ -1562,7 +1562,7 @@ pub fn export(
                     let mut line = Vec::new();
                     'chunk: loop {
                         line.clear();
-                        let n = input.read_until(b'\n', &mut line)?;
+                        let n = dump::read_line(&mut input, &mut line, sp.pending())?;
                         let statements: Vec<RawStatement> = if n == 0 {
                             sp.finish_raw().into_iter().collect()
                         } else {
@@ -1579,7 +1579,7 @@ pub fn export(
                                         return Err(cancelled());
                                     }
                                     line.clear();
-                                    if input.read_until(b'\n', &mut line)? == 0 {
+                                    if dump::read_line(&mut input, &mut line, 0)? == 0 {
                                         break;
                                     }
                                     out.write_all(&line)?;

@@ -1,3 +1,8 @@
+<script module lang="ts">
+  /** Open dialogs, innermost last: only that one keeps the focus. */
+  const open: HTMLElement[] = [];
+</script>
+
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { onMount } from "svelte";
@@ -42,8 +47,26 @@
     const first =
       box.querySelector<HTMLElement>("[data-autofocus]") ?? box.querySelector<HTMLElement>("input, textarea, select, button:not([disabled])");
     first?.focus();
-    return () => restore?.focus?.();
+    open.push(box);
+    // Focus that left the dialog (a click on the backdrop or outside, a removed element) comes
+    // back on the next Tab.
+    const trap = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || open.at(-1) !== box || box.contains(document.activeElement)) return;
+      e.preventDefault();
+      focusable()[0]?.focus();
+    };
+    window.addEventListener("keydown", trap, true);
+    return () => {
+      window.removeEventListener("keydown", trap, true);
+      open.splice(open.indexOf(box), 1);
+      restore?.focus?.();
+    };
   });
+
+  const focusable = () =>
+    [...box.querySelectorAll<HTMLElement>("button, input, select, textarea, [href], [tabindex]:not([tabindex='-1'])")].filter(
+      (el) => !el.hasAttribute("disabled") && el.offsetParent !== null,
+    );
 
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && dismissable) {
@@ -51,9 +74,7 @@
       onclose?.();
     }
     if (e.key === "Tab") {
-      const items = [...box.querySelectorAll<HTMLElement>("button, input, select, textarea, [href], [tabindex]:not([tabindex='-1'])")].filter(
-        (el) => !el.hasAttribute("disabled") && el.offsetParent !== null,
-      );
+      const items = focusable();
       if (!items.length) return;
       const first = items[0];
       const last = items[items.length - 1];
@@ -74,6 +95,7 @@
   transition:fade={{ duration: still ? 0 : 140 }}
   {onkeydown}
   onpointerdown={(e) => (pressedBackdrop = e.target === e.currentTarget)}
+  onmousedown={(e) => e.target === e.currentTarget && e.preventDefault()}
   onclick={(e) => {
     if (pressedBackdrop && e.target === e.currentTarget && dismissable) onclose?.();
     pressedBackdrop = false;

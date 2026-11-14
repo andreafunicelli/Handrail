@@ -5,6 +5,7 @@
   import { t } from "../../i18n";
   import { agent, type ApprovalItem } from "../../stores/agent.svelte";
   import { fmtClock, targetOf } from "./target";
+  import { armed, revealHidden, takesText } from "../../util/approval";
 
   let { item, sessionId }: { item: ApprovalItem; sessionId: string } = $props();
   let editing = $state(false);
@@ -22,10 +23,14 @@
   let hold = $state<HoldButton>();
   let holdEdited = $state<HoldButton>();
 
+  const shownAt = performance.now();
   onMount(() => {
-    // Take focus only if the user is already working in the sidebar (never steal it from a terminal).
-    if (pending && card.closest(".ai")?.contains(document.activeElement)) card.focus();
+    // Take focus only if the user is already working in the sidebar, and never from where they
+    // type (the terminal, the chat box): their next Enter would land on the card.
+    const at = document.activeElement;
+    if (pending && card.closest(".ai")?.contains(at) && !takesText(at)) card.focus();
   });
+  const shownCmd = $derived(revealHidden(item.decision?.type === "approve_edited" ? item.decision.command : item.req.command));
 
   const approve = () => agent.decide(sessionId, item.req.approval_id, { type: "approve" });
   const deny = () => agent.decide(sessionId, item.req.approval_id, { type: "deny", message: null });
@@ -46,6 +51,7 @@
     if (editing) {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
         e.preventDefault();
+        if (e.repeat) return;
         // An edited destructive command still has to be held; the key's release lands on the
         // focused hold button.
         if (!mustHold) runEdited();
@@ -61,8 +67,10 @@
     if (e.target !== card) return;
     if (e.key === "Enter") {
       e.preventDefault();
+      // A held key, or one pressed as the card appeared, was not meant for it.
+      if (e.repeat || !armed(shownAt)) return;
       if (!mustHold) approve();
-      else if (!e.repeat && hold) (hold.focus(), hold.begin());
+      else if (hold) (hold.focus(), hold.begin());
     } else if (e.key.toLowerCase() === "e") (e.preventDefault(), startEdit());
     else if (e.key === "Escape") (e.preventDefault(), e.stopPropagation(), deny());
   }
@@ -101,8 +109,9 @@
     <textarea class="textarea mono edit" rows="2" bind:this={area} bind:value={draft} spellcheck="false" aria-label={t("approval.edit")} aria-describedby="recheck-{item.id}"></textarea>
     <p class="recheck" id="recheck-{item.id}"><Icon name="shield" size={11} />{t("approval.editRecheck")}</p>
   {:else}
-    <pre class="cmd mono">{item.decision?.type === "approve_edited" ? item.decision.command : item.req.command}</pre>
-    {#if item.decision?.type === "approve_edited"}<pre class="cmd mono was"><del>{item.req.command}</del></pre>{/if}
+    <pre class="cmd mono">{shownCmd.text}</pre>
+    {#if item.decision?.type === "approve_edited"}<pre class="cmd mono was"><del>{revealHidden(item.req.command).text}</del></pre>{/if}
+    {#if shownCmd.found}<p class="prodwarn" role="note"><Icon name="alert" size={12} />{t("approval.invisible")}</p>{/if}
   {/if}
 
   <dl class="ctx">

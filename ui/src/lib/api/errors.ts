@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { IpcError } from "./types";
 
 /** Backend commands reject with `{ kind, message }`; anything else is normalized here. */
@@ -9,7 +10,7 @@ export function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === "string") return e;
   if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
-  return "Unexpected error";
+  return t("error.unexpected");
 }
 
 /** `vault_unlock` rejects with this when the device has no Secret Key yet. */

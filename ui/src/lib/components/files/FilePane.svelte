@@ -4,7 +4,7 @@
   import Modal from "../common/Modal.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
   import CopyDialog from "./CopyDialog.svelte";
-  import { t } from "../../i18n";
+  import { fmtDateTime, t, tn } from "../../i18n";
   import { api } from "../../api";
   import { errorMessage } from "../../api/errors";
   import type { FileEntry } from "../../api/types";
@@ -88,13 +88,18 @@
 
   /** The folder last asked for (switching to root retries it, e.g. after "Permission denied"). */
   let wanted = "";
+  /** Bumped per navigation: a slower reply for a folder already left is dropped. */
+  let navs = 0;
 
   async function go(to: string) {
+    const seq = ++navs;
     wanted = to;
     loading = true;
     error = null;
     try {
-      entries = await fs.list(to);
+      const list = await fs.list(to);
+      if (seq !== navs) return;
+      entries = list;
       limit = STEP;
       path = to;
       pathInput = to;
@@ -105,10 +110,11 @@
       // Where this browser is: the default destination of copies from other servers.
       transfers.located(fs, to);
     } catch (e) {
+      if (seq !== navs) return;
       error = errorMessage(e);
       pathInput = path || to;
     } finally {
-      loading = false;
+      if (seq === navs) loading = false;
     }
   }
   const refresh = () => go(path);
@@ -291,13 +297,14 @@
     const one = list.length === 1 ? list[0] : null;
     const folders = list.some(isFolder);
     const names = list.slice(0, 5).map((e) => e.name).join(", ") + (list.length > 5 ? ", …" : "");
-    const ok = await ui.ask(one ? t(isFolder(one) ? "files.deleteFolder" : "files.deleteFile", { name: one.name }) : t("files.deleteMany", { n: list.length }), {
+    const ok = await ui.ask(one ? t(isFolder(one) ? "files.deleteFolder" : "files.deleteFile", { name: one.name }) : tn("files.deleteMany", list.length), {
       body: [one ? "" : names, folders ? t("files.deleteFolderHint") : ""].filter(Boolean).join(". ") || undefined,
       confirmLabel: t("common.delete"),
       danger: true,
     });
     if (!ok) return;
     const gone = new Set<string>();
+    const failed: string[] = [];
     // Deepest first: a selected folder is removed after the selected things inside it.
     const depth = (e: FileEntry) => e.path.split("/").length;
     for (const e of [...list].sort((a, b) => depth(b) - depth(a))) {
@@ -305,9 +312,12 @@
         await fs.remove(e);
         gone.add(e.path);
       } catch (err) {
-        toasts.error(list.length > 1 ? `${e.name}: ${errorMessage(err)}` : err);
+        if (list.length === 1) toasts.error(err);
+        else failed.push(`${e.name}: ${errorMessage(err)}`);
       }
     }
+    // One message for the lot, naming the first few.
+    if (failed.length) toasts.error(tn("files.deleteFailed", failed.length, { detail: failed.slice(0, 3).join("; ") + (failed.length > 3 ? "; …" : "") }));
     sel = sel.filter((p) => !gone.has(p));
     if (found) found = { ...found, matches: found.matches.filter((m) => !gone.has(m.path)) };
     await refresh();
@@ -407,7 +417,7 @@
           { label: t("files.copyN", { n: many.length }), icon: "server", disabled: !copyAll(many), action: () => (copying = many) },
           { label: t("files.copyPaths"), icon: "copy", action: () => void copyPath(many.map((x) => x.path).join("\n")) },
           "sep",
-          { label: t("files.deleteN", { n: many.length }), icon: "trash", danger: true, disabled: !many.every((x) => fs.writable(parentDir(x.path))), action: () => remove(many) },
+          { label: tn("files.deleteN", many.length), icon: "trash", danger: true, disabled: !many.every((x) => fs.writable(parentDir(x.path))), action: () => remove(many) },
         ],
       };
       return;
@@ -556,7 +566,7 @@
       >
         <span class="name" role="gridcell"><Icon name={icon(e)} size={14} /><span class="n">{#if deepOn && whereIs(e)}<span class="in">{whereIs(e)}</span>{/if}{e.name}</span>{#if e.link}<span class="lnk" title={t("files.link")} aria-label={t("files.link")}>↗</span>{/if}</span>
         <span class="size" role="gridcell">{e.kind === "file" ? formatBytes(e.size) : ""}</span>
-        <span class="mod" role="gridcell" title={e.modified ? new Date(e.modified * 1000).toLocaleString() : ""}>{e.modified ? relativeTime(e.modified * 1000) : ""}</span>
+        <span class="mod" role="gridcell" title={e.modified ? fmtDateTime(e.modified * 1000) : ""}>{e.modified ? relativeTime(e.modified * 1000) : ""}</span>
         <span class="perm mono" role="gridcell">{modeString(e.permissions)}</span>
       </div>
     {/each}

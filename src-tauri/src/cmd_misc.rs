@@ -6,10 +6,11 @@ use aht_core::model::{Connection, Group, HarnessKind, Provider};
 use aht_core::{ConnectionId, Error, Result};
 use aht_import::{DetectedSource, ImportOptions, Tool};
 use aht_sync::github_device_flow::{self, DeviceCode, PollResult};
-use aht_sync::{FolderBackend, GitHubBackend, SyncBackend, SyncReport, SyncState};
+use aht_sync::{FolderBackend, GitHubBackend, SyncBackend, SyncError, SyncReport, SyncState};
 use aht_vault::{Setting, Vault};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // ---------- import ----------
@@ -235,16 +236,21 @@ impl Default for SyncFile {
     }
 }
 
-pub(crate) fn load_sync(state: &AppState) -> SyncFile {
-    std::fs::read(&state.paths.sync_state_file)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+/// Defaults when the file does not exist yet. An unreadable file is an error, so the next save
+/// does not silently replace the sync config and state; "Disconnect" or reconnecting resets it.
+pub(crate) fn load_sync(state: &AppState) -> Result<SyncFile> {
+    let path = &state.paths.sync_state_file;
+    match std::fs::read(path) {
+        Ok(b) => serde_json::from_slice(&b)
+            .map_err(|e| Error::Invalid(format!("{} is unreadable: {e}", path.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(SyncFile::default()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn save_sync(state: &AppState, f: &SyncFile) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(f).map_err(err)?;
-    std::fs::write(&state.paths.sync_state_file, bytes)?;
+    aht_vault::atomic_write(&state.paths.sync_state_file, &bytes)?;
     Ok(())
 }
 
@@ -275,7 +281,10 @@ fn status_of(f: &SyncFile, initialized: bool, syncing: bool) -> SyncStatus {
 }
 
 async fn current_status(state: &AppState) -> SyncStatus {
-    let f = load_sync(state);
+    let f = load_sync(state).unwrap_or_else(|e| SyncFile {
+        last_error: Some(e.to_string()),
+        ..SyncFile::default()
+    });
     let initialized = state.vault.lock().await.status().initialized;
     status_of(&f, initialized, state.sync_lock.try_lock().is_err())
 }
@@ -296,7 +305,7 @@ pub async fn sync_set_auto(app: AppHandle, enabled: bool) -> Result<()> {
     {
         let state = app.state::<AppState>();
         let _guard = state.sync_lock.lock().await;
-        let mut f = load_sync(&state);
+        let mut f = load_sync(&state)?;
         f.auto = enabled;
         save_sync(&state, &f)?;
     }
@@ -310,7 +319,8 @@ pub async fn sync_disconnect(app: AppHandle) -> Result<()> {
     {
         let state = app.state::<AppState>();
         let _guard = state.sync_lock.lock().await;
-        let auto = load_sync(&state).auto;
+        // Also the way out of an unreadable sync-state file.
+        let auto = load_sync(&state).map_or(true, |f| f.auto);
         save_sync(
             &state,
             &SyncFile {
@@ -473,7 +483,8 @@ async fn github_token(state: &AppState) -> Result<String> {
 /// Switch to a new sync target, starting from a clean sync state.
 async fn configure(state: &AppState, config: SyncConfig) -> Result<()> {
     let _guard = state.sync_lock.lock().await;
-    let mut f = load_sync(state);
+    // Everything but `auto` is replaced, so an unreadable file is simply started over.
+    let mut f = load_sync(state).unwrap_or_default();
     f.config = Some(config);
     f.state = SyncState::default();
     f.last_sync_ms = None;
@@ -490,7 +501,11 @@ pub async fn sync_configure_folder(state: State<'_, AppState>, path: PathBuf) ->
 
 /// A GitHub vault repository renamed on github.com (e.g. aihubterm-vault → handrail-vault)
 /// keeps answering reads under the old name, but writes fail; switch to the current name.
-async fn follow_github_rename(state: &AppState, cfg: SyncConfig) -> Result<SyncConfig> {
+async fn follow_github_rename(
+    state: &AppState,
+    cfg: SyncConfig,
+    retry_after: &mut Option<Duration>,
+) -> Result<SyncConfig> {
     let SyncConfig::Github {
         owner,
         repo,
@@ -500,7 +515,11 @@ async fn follow_github_rename(state: &AppState, cfg: SyncConfig) -> Result<SyncC
         return Ok(cfg);
     };
     let probe = GitHubBackend::new(owner, repo, branch, github_token(state).await?);
-    match probe.current_name().await.map_err(Error::from)? {
+    match probe
+        .current_name()
+        .await
+        .map_err(note_retry(retry_after))?
+    {
         Some((new_owner, new_repo)) if (&new_owner, &new_repo) != (owner, repo) => {
             tracing::info!(from = %format!("{owner}/{repo}"), to = %format!("{new_owner}/{new_repo}"), "GitHub vault repository was renamed");
             Ok(SyncConfig::Github {
@@ -537,12 +556,12 @@ async fn backend(state: &AppState, cfg: &SyncConfig) -> Result<Box<dyn SyncBacke
 /// The user then unlocks with master password + Secret Key.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sync_join(state: State<'_, AppState>) -> Result<()> {
-    let mut f = load_sync(&state);
+    let mut f = load_sync(&state)?;
     let cfg = f
         .config
         .clone()
         .ok_or_else(|| Error::Invalid("sync not configured".into()))?;
-    let cfg = follow_github_rename(&state, cfg).await?;
+    let cfg = follow_github_rename(&state, cfg, &mut None).await?;
     if f.config.as_ref() != Some(&cfg) {
         f.config = Some(cfg.clone());
         save_sync(&state, &f)?;
@@ -558,17 +577,28 @@ pub async fn sync_join(state: State<'_, AppState>) -> Result<()> {
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sync_now(app: AppHandle) -> Result<SyncReport> {
-    run_sync(&app).await
+    run_sync(&app, &mut None).await
 }
 
 /// One sync round, shared by "Sync now" and the background syncer: one at a time, result
-/// recorded in `sync-state.json` and announced with `sync://status`.
-pub(crate) async fn run_sync(app: &AppHandle) -> Result<SyncReport> {
+/// recorded in `sync-state.json` and announced with `sync://status`. A rate-limited remote
+/// sets `retry_after`.
+pub(crate) async fn run_sync(
+    app: &AppHandle,
+    retry_after: &mut Option<Duration>,
+) -> Result<SyncReport> {
     let state = app.state::<AppState>();
     let guard = state.sync_lock.lock().await;
     emit_status(app).await;
-    let mut f = load_sync(&state);
-    let result = sync_round(&state, &mut f).await;
+    let mut f = match load_sync(&state) {
+        Ok(f) => f,
+        Err(e) => {
+            drop(guard);
+            emit_status(app).await;
+            return Err(e);
+        }
+    };
+    let result = sync_round(&state, &mut f, retry_after).await;
     match &result {
         Ok(report) => {
             f.last_sync_ms = Some(chrono_ms());
@@ -584,12 +614,16 @@ pub(crate) async fn run_sync(app: &AppHandle) -> Result<SyncReport> {
     result
 }
 
-async fn sync_round(state: &AppState, f: &mut SyncFile) -> Result<SyncReport> {
+async fn sync_round(
+    state: &AppState,
+    f: &mut SyncFile,
+    retry_after: &mut Option<Duration>,
+) -> Result<SyncReport> {
     let cfg = f
         .config
         .clone()
         .ok_or_else(|| Error::Invalid("sync not configured".into()))?;
-    let cfg = follow_github_rename(state, cfg).await?;
+    let cfg = follow_github_rename(state, cfg, retry_after).await?;
     // Saved with the rest of `f` by the caller.
     f.config = Some(cfg.clone());
     let b = backend(state, &cfg).await?;
@@ -602,29 +636,20 @@ async fn sync_round(state: &AppState, f: &mut SyncFile) -> Result<SyncReport> {
             return Err(e);
         }
     }
-    // Note: the vault stays locked for the whole sync, so other commands wait for it.
-    let mut vault = state.vault.lock().await;
-    if vault.status().locked {
-        return Err(Error::VaultLocked);
-    }
-    // Snapshot the pre-sync state so a bad merge can be rolled back. Kept only when the sync
-    // changed local files; otherwise every routine sync would rotate real history out.
-    let before = vault.revision();
-    let snap = vault.snapshot_unpruned().ok();
-    let result = aht_sync::sync_once(&mut vault, b.as_ref(), &mut f.state)
+    // sync_once locks the vault only for its short local steps and snapshots it before merging.
+    aht_sync::sync_once(&state.vault, b.as_ref(), &mut f.state)
         .await
-        .map_err(Error::from);
-    if let Some(snap) = snap {
-        let kept = if vault.revision() != before {
-            vault.prune_snapshots()
-        } else {
-            vault.delete_snapshot(&snap.name)
-        };
-        if let Err(e) = kept {
-            tracing::warn!(error = %e, "could not tidy pre-sync snapshot");
+        .map_err(note_retry(retry_after))
+}
+
+/// `Error::from`, keeping a rate limit's wait (lost in the app error) for the caller.
+fn note_retry(retry_after: &mut Option<Duration>) -> impl FnOnce(SyncError) -> Error + '_ {
+    move |e| {
+        if let SyncError::RateLimited { retry_after_secs } = e {
+            *retry_after = Some(Duration::from_secs(retry_after_secs));
         }
+        Error::from(e)
     }
-    result
 }
 
 fn chrono_ms() -> i64 {

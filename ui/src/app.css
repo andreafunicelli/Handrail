@@ -13,7 +13,7 @@
   --text: #e6e7ea;
   --text-2: #b9bcc3;
   --muted: #8b8f98;
-  --faint: #5d616a;
+  --faint: #7b808b; /* ≥4.5:1 on --bg, --panel and --raised */
   /* Small secondary text that must stay readable (≥ 4.5:1 on panels): hosts, counts. */
   --meta: #80848e;
 
@@ -117,7 +117,7 @@
   --text: #1c1d21;
   --text-2: #3d4047;
   --muted: #6b6f78;
-  --faint: #9a9ea6;
+  --faint: #6b707a; /* ≥4.5:1 on --bg, --panel and --raised */
   --meta: #5f636c;
   --accent: #4a6ee0;
   --accent-text: #3d5fcc;

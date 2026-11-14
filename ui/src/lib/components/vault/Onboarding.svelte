@@ -60,7 +60,7 @@
         {#each vault.secretKey.split("-") as part, i (i)}<span>{part}</span>{/each}
       </div>
       <div class="kit-actions">
-        <CopyButton text={vault.secretKey} label={t("vault.kit.copy")} doneLabel={t("vault.kit.copied")} />
+        <CopyButton secret text={vault.secretKey} label={t("vault.kit.copy")} doneLabel={t("vault.kit.copied")} />
         <button class="btn sm" onclick={download}><Icon name={savedPath ? "check" : "download"} size={13} />{t("vault.kit.download")}</button>
       </div>
       {#if savedPath}<p class="hint saved" role="status">{t("vault.kit.savedTo", { path: savedPath })}</p>{/if}

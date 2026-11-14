@@ -1,25 +1,28 @@
 name: CI
 
+# Pull requests run this workflow directly. Pushes to main and nightly (and manual runs) run it
+# through release.yml, which calls it and publishes nothing unless it passes.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
 
+# When called, github.* is the caller's context (push / workflow_dispatch): release.yml already
+# runs those one at a time, and a publishing run's checks must never be cancelled.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   frontend:
     name: Frontend (check, test, build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -44,7 +47,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Tauri system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -63,14 +66,15 @@ jobs:
             libxdo-dev
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-11-14
         with:
+          toolchain: 1.99.0 # keep equal to rust-toolchain.toml
           components: rustfmt, clippy
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -92,9 +96,9 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      # A real OpenSSH server for aht-ssh/tests/real_sftp.rs (skipped where these vars are unset).
+      # A real OpenSSH server for aht-ssh/tests/real_sftp.rs (which skips where these vars are unset).
       - name: Start sshd for the SFTP test (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -114,8 +118,12 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           mkdir -p "$RUNNER_TEMP/vgw" "$RUNNER_TEMP/s3data"
-          curl -fsSL https://github.com/versity/versitygw/releases/download/v1.8.0/versitygw_v1.8.0_Linux_x86_64.tar.gz \
-            | tar xz -C "$RUNNER_TEMP/vgw" --strip-components=1
+          curl -fsSL -o "$RUNNER_TEMP/versitygw.tar.gz" \
+            https://github.com/versity/versitygw/releases/download/v1.8.0/versitygw_v1.8.0_Linux_x86_64.tar.gz
+          # From the release's checksums.txt; verified before anything from the archive runs.
+          echo "2ba2c734d10d2c4e651d03182cb4b246656bc735a2f282db7b0b73fba6073467  $RUNNER_TEMP/versitygw.tar.gz" \
+            | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/versitygw.tar.gz" -C "$RUNNER_TEMP/vgw" --strip-components=1
           ROOT_ACCESS_KEY=handrail ROOT_SECRET_KEY=handrail-ci-secret \
             nohup "$RUNNER_TEMP/vgw/versitygw" --port 127.0.0.1:9000 posix "$RUNNER_TEMP/s3data" > "$RUNNER_TEMP/vgw.log" 2>&1 &
           for _ in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:9000/ && break; sleep 1; done
@@ -145,8 +153,20 @@ jobs:
             echo "HANDRAIL_PG_TEST=postgres:handrail-ci@127.0.0.1:5432/handrail"
           } >> "$GITHUB_ENV"
 
+      # The integration tests skip themselves when their variable is unset: a service step that
+      # failed to export it must fail the run, not turn into a green one.
+      - name: Require the integration-test services (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          missing=0
+          for v in HANDRAIL_SSH_TEST HANDRAIL_S3_TEST HANDRAIL_MYSQL_TEST HANDRAIL_PG_TEST; do
+            if [ -z "${!v}" ]; then echo "::error::$v is not set; its integration tests would be skipped"; missing=1; fi
+          done
+          exit "$missing"
+
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
   rdp-helper:
     name: RDP helper (${{ matrix.os }})
@@ -156,15 +176,16 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-11-14
         with:
+          toolchain: 1.99.0 # keep equal to rust-toolchain.toml
           components: rustfmt, clippy
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: rdp-helper
 
@@ -182,16 +203,16 @@ jobs:
     name: Dependency audit (cargo-deny)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           # Errors only: the duplicate-version warnings ran to thousands of lines and pushed
           # the failing advisories out of the retrievable log.
           log-level: error
 
       # The RDP helper is a workspace of its own (see rdp-helper/Cargo.toml).
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           # rdp-helper/deny.toml links to the root policy.
           manifest-path: rdp-helper/Cargo.toml

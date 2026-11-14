@@ -60,7 +60,12 @@ export interface Chat {
   actor: string | null;
   /** The user stopped the latest run. */
   cancelled: boolean;
+  /** A message was sent and its run id is not known yet: no second run may start. */
+  starting: boolean;
 }
+
+/** Whether the chat has a run going (or one being started). */
+export const chatBusy = (c: Chat | undefined) => !!(c?.runId || c?.starting);
 
 export interface BrainOption {
   key: string;
@@ -116,6 +121,10 @@ class Agent {
   });
 
   private started = false;
+  /** Runs that ended or were stopped: their late events are not this chat's any more. */
+  private over = new Set<string>();
+  /** Sessions closed: a late event must not bring their chat back. */
+  private closed = new Set<string>();
 
   async init() {
     if (this.started) return;
@@ -151,6 +160,7 @@ class Agent {
         lastMessage: null,
         actor: null,
         cancelled: false,
+        starting: false,
       };
       c = this.chats[sessionId];
     }
@@ -182,24 +192,37 @@ class Agent {
     const brain = this.brainFor(sessionId);
     if (!brain) return;
     const chat = this.chat(sessionId);
+    // Set before the first await: a second click or Enter sees the run as started.
+    if (chatBusy(chat)) return;
+    chat.starting = true;
     chat.items.push({ kind: "user", id: nid(), at: Date.now(), text: display ?? message });
     chat.lastMessage = message;
     chat.actor = brain.harness ? brain.label : `${brain.label} · ${brain.detail}`;
     chat.cancelled = false;
     try {
       const { run_id } = await api.agentSend(sessionId, $state.snapshot(brain.brain) as Brain, message);
-      chat.runId = run_id;
+      // Stopped while starting: stop the run now that it has an id.
+      if (chat.cancelled) {
+        this.over.add(run_id);
+        if (chat.runId === run_id) chat.runId = null;
+        void api.agentCancel(run_id).catch(() => {});
+      } else if (!this.over.has(run_id)) chat.runId = run_id; // its "done" may have come first
     } catch (e) {
       chat.items.push({ kind: "error", id: nid(), at: Date.now(), message: errorMessage(e), retryable: true });
+    } finally {
+      chat.starting = false;
     }
   }
 
   async cancel(sessionId: string) {
     const chat = this.chats[sessionId];
-    if (!chat?.runId) return;
-    const id = chat.runId;
-    chat.runId = null;
+    if (!chat || !chatBusy(chat)) return;
     chat.cancelled = true;
+    // Still starting with no id yet: `send` stops the run once it has one.
+    const id = chat.runId;
+    if (!id) return;
+    this.over.add(id);
+    chat.runId = null;
     await api.agentCancel(id).catch(() => {});
   }
 
@@ -224,7 +247,8 @@ class Agent {
   moveSession(from: string, to: string) {
     const chat = this.chats[from];
     if (chat) {
-      this.chats[to] = { ...chat, runId: null };
+      if (chat.runId) this.over.add(chat.runId);
+      this.chats[to] = { ...chat, runId: null, starting: false };
       delete this.chats[from];
     }
     if (this.brainBySession[from]) {
@@ -234,11 +258,29 @@ class Agent {
   }
 
   clear(sessionId: string) {
-    if (this.chats[sessionId]?.runId) return;
+    if (chatBusy(this.chats[sessionId])) return;
     delete this.chats[sessionId];
   }
 
+  /** The session closed: its run is stopped, approvals still waiting are denied, and the
+   *  conversation goes (nothing can answer or jump to it any more). */
+  release(sessionId: string) {
+    const chat = this.chats[sessionId];
+    if (chat) {
+      chat.cancelled = true;
+      if (chat.runId) {
+        this.over.add(chat.runId);
+        void api.agentCancel(chat.runId).catch(() => {});
+      }
+      for (const a of this.pendingApprovals(sessionId)) void api.approvalDecide(a.req.approval_id, { type: "deny", message: null }).catch(() => {});
+    }
+    delete this.chats[sessionId];
+    delete this.brainBySession[sessionId];
+    this.closed.add(sessionId);
+  }
+
   private addApproval(req: ApprovalRequest) {
+    if (this.closed.has(req.session_id)) return;
     const chat = this.chat(req.session_id);
     if (chat.items.some((i) => i.kind === "approval" && i.req.approval_id === req.approval_id)) return;
     chat.items.push({
@@ -286,6 +328,15 @@ class Agent {
 
   /** Fold one normalized AgentEvent into the session's transcript. */
   apply(sessionId: string, runId: string, ev: AgentEvent) {
+    if (this.closed.has(sessionId)) return;
+    // Late events of a run that ended or was stopped, or of an older run while a newer one
+    // goes: not part of what is on screen now.
+    const known = this.chats[sessionId];
+    if (this.over.has(runId) || (known?.runId && known.runId !== runId)) {
+      // A stopped run's end still closes its open tool cards, unless a newer run is under way.
+      if (ev.type === "done" && known && !chatBusy(known)) this.abortOpenTools(sessionId, known);
+      return;
+    }
     const chat = this.chat(sessionId);
     if (ev.type !== "done" && !chat.runId) chat.runId = runId;
     const last = chat.items.at(-1);
@@ -362,16 +413,23 @@ class Agent {
         chat.items.push({ kind: "limit", id: nid(), at: Date.now(), steps: ev.steps });
         break;
       case "done":
-        if (chat.runId === runId || chat.runId === null) chat.runId = null;
-        for (const i of chat.items)
-          if (i.kind === "tool" && !i.done) {
-            i.done = true;
-            i.aborted = true;
-            i.doneAt = Date.now();
-            this.log(sessionId, chat, i);
-          }
+        // Remembered: `send` may get this run's id only after its end.
+        this.over.add(runId);
+        chat.runId = null;
+        this.abortOpenTools(sessionId, chat);
         break;
     }
+  }
+
+  /** The run ended: tool calls still without a result never get one. */
+  private abortOpenTools(sessionId: string, chat: Chat) {
+    for (const i of chat.items)
+      if (i.kind === "tool" && !i.done) {
+        i.done = true;
+        i.aborted = true;
+        i.doneAt = Date.now();
+        this.log(sessionId, chat, i);
+      }
   }
 }
 

@@ -115,6 +115,12 @@ pub fn temp_sibling(path: &str) -> String {
 /// Error text of a copy whose destination already exists (and `overwrite` was not given).
 pub const EXISTS: &str = "exists";
 
+/// A server-supplied entry name that is safe to join onto a path: one component, not `.`/`..`.
+/// A hostile server listing `../x` must not make a folder copy write outside its target.
+fn is_plain_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
+}
+
 fn not_a_file(path: &str) -> Error {
     Error::Invalid(format!(
         "{path} is not a regular file (a device, socket or pipe): it cannot be copied"
@@ -274,7 +280,10 @@ impl Sftp {
         let mut out = Vec::new();
         for e in self.session.read_dir(dir).await.map_err(sftp_err)? {
             let name = e.file_name();
-            if name == "." || name == ".." {
+            if !is_plain_name(&name) {
+                if name != "." && name != ".." {
+                    tracing::warn!(dir, name = ?name, "skipped a directory entry with an unsafe name");
+                }
                 continue;
             }
             let path = join(dir, &name);
@@ -694,6 +703,24 @@ mod tests {
         );
         assert!(temp_sibling("/top").starts_with("/.top.handrail-"));
         assert!(temp_sibling("rel").starts_with(".rel.handrail-"));
+    }
+
+    #[test]
+    fn only_plain_entry_names_are_listed() {
+        for ok in ["a.txt", ".hidden", "...", "a b", "back\\slash"] {
+            assert!(is_plain_name(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../../.ssh/authorized_keys",
+            "a/b",
+            "/abs",
+            "nul\0x",
+        ] {
+            assert!(!is_plain_name(bad), "{bad:?}");
+        }
     }
 
     #[test]

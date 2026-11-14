@@ -120,7 +120,7 @@
   </p>
 
   <div class="card list" role="list">
-    {#each shown.slice(0, limit) as e (`${e.at}-${e.session_id}-${e.tool}-${e.operation}`)}
+    {#each shown.slice(0, limit) as e, i (`${e.at}-${e.session_id}-${e.tool}-${e.operation}-${i}`)}
       <div class="entry" role="listitem" class:failed={isFailure(e)}>
         <div class="l1">
           <time datetime={new Date(e.at).toISOString()}>{fmtDateTime(e.at, { dateStyle: "short", timeStyle: "medium" })}</time>

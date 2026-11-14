@@ -110,7 +110,8 @@ fn hashed_matches(token: &str, hashed: &str) -> bool {
     let Ok(mac) = <Hmac<Sha1> as KeyInit>::new_from_slice(&salt) else {
         return false;
     };
-    mac.chain_update(token.as_bytes())
+    // OpenSSH hashes the lowercased host name, as the plain-text patterns match case-blind.
+    mac.chain_update(token.to_lowercase().as_bytes())
         .verify_slice(&hash)
         .is_ok()
 }
@@ -248,48 +249,76 @@ impl KnownHosts {
         self.append(host, port, key)
     }
 
-    /// Remove every app-file entry for `host:port` with the same algorithm as `key`, then add `key`.
+    /// Remove every app-file entry for `host:port` (of any key type: `check` reports a key of
+    /// another type as a change, so an old one must not stay trusted), then add `key`. The file
+    /// is replaced in one step, so a crash leaves either the old or the new contents.
     pub fn replace(&self, host: &str, port: u16, key: &PublicKey) -> Result<()> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let token = host_token(host, port);
-        if let Ok(text) = std::fs::read_to_string(&self.app_file) {
-            let kept: Vec<&str> = text
-                .lines()
-                .filter(|l| match parse_line(l) {
-                    Some(e) => {
-                        e.revoked
-                            || !(matches_patterns(&token, &e.patterns)
-                                && e.key.algorithm() == key.algorithm())
-                    }
-                    None => true,
-                })
-                .collect();
-            let mut out = kept.join("\n");
-            if !out.is_empty() {
+        let text = match std::fs::read_to_string(&self.app_file) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e.into()),
+        };
+        let mut out = String::new();
+        for l in text.lines() {
+            let drop =
+                parse_line(l).is_some_and(|e| !e.revoked && matches_patterns(&token, &e.patterns));
+            if !drop {
+                out.push_str(l);
                 out.push('\n');
             }
-            std::fs::write(&self.app_file, out)?;
         }
-        self.append(host, port, key)
+        out.push_str(&entry_line(host, port, key)?);
+        replace_file(&self.app_file, out.as_bytes())?;
+        Ok(())
     }
 
     fn append(&self, host: &str, port: u16, key: &PublicKey) -> Result<()> {
         if let Some(parent) = self.app_file.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let b64 = key
-            .to_openssh()
-            .map_err(|e| Error::Invalid(format!("encode host key: {e}")))?;
-        // `to_openssh` yields "alg base64 [comment]"; drop the comment.
-        let mut parts = b64.split_whitespace();
-        let (alg, data) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+        let line = entry_line(host, port, key)?;
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.app_file)?;
-        writeln!(f, "{} {alg} {data}", host_token(host, port))?;
+        f.write_all(line.as_bytes())?;
         Ok(())
     }
+}
+
+/// `token alg base64\n` for `key`.
+fn entry_line(host: &str, port: u16, key: &PublicKey) -> Result<String> {
+    let b64 = key
+        .to_openssh()
+        .map_err(|e| Error::Invalid(format!("encode host key: {e}")))?;
+    // `to_openssh` yields "alg base64 [comment]"; drop the comment.
+    let mut parts = b64.split_whitespace();
+    let (alg, data) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+    Ok(format!("{} {alg} {data}\n", host_token(host, port)))
+}
+
+/// Write `bytes` to a temp file beside `path` (keeping `path`'s permissions), then rename it over.
+fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let result = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        if let Ok(m) = std::fs::metadata(path) {
+            f.set_permissions(m.permissions())?;
+        }
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// `~/.ssh/known_hosts`, if a home directory can be determined.
@@ -350,6 +379,7 @@ mod tests {
         }
         kh.replace("h", 2222, &k2).unwrap();
         assert_eq!(kh.check("h", 2222, &k2), HostKeyStatus::Known);
+        assert_eq!(kh.algorithms("h", 2222).len(), 1, "the old key is gone");
         assert!(matches!(
             kh.check("h", 2222, &k1),
             HostKeyStatus::Changed { .. }
@@ -368,6 +398,31 @@ mod tests {
             kh.check("h", 2222, &ecdsa),
             HostKeyStatus::Changed { .. }
         ));
+        // Replacing it with that other type leaves no key of the old type trusted.
+        kh.add("other", 22, &k1).unwrap();
+        kh.replace("h", 2222, &ecdsa).unwrap();
+        assert_eq!(kh.check("h", 2222, &ecdsa), HostKeyStatus::Known);
+        assert!(matches!(
+            kh.check("h", 2222, &k2),
+            HostKeyStatus::Changed { .. }
+        ));
+        assert_eq!(kh.check("other", 22, &k1), HostKeyStatus::Known);
+        let n = std::fs::read_dir(dir.path()).unwrap().count();
+        assert_eq!(n, 1, "no temp file left behind");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_keeps_the_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("kh");
+        let kh = KnownHosts::new(&p);
+        kh.add("h", 22, &key()).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        kh.replace("h", 22, &key()).unwrap();
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]
@@ -386,6 +441,11 @@ mod tests {
         std::fs::write(&ro, format!("# comment\n{}", line(&token, &k))).unwrap();
         let kh = KnownHosts::new(dir.path().join("app")).add_read_only(&ro);
         assert_eq!(kh.check("srv", 2200, &k), HostKeyStatus::Known);
+        assert_eq!(
+            kh.check("SRV", 2200, &k),
+            HostKeyStatus::Known,
+            "host case is ignored"
+        );
         assert!(matches!(
             kh.check("other", 2200, &k),
             HostKeyStatus::New { .. }

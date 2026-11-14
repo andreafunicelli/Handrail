@@ -7,6 +7,23 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+/// How long an agent action waits for the user's approval.
+pub const APPROVAL_TIMEOUT_S: u64 = 15 * 60;
+/// Longest `run_command` timeout an agent may ask for (counted after approval).
+pub const MAX_COMMAND_TIMEOUT_S: u64 = 600;
+/// How long a proposed file edit waits for the user's review.
+pub const FILE_EDIT_TIMEOUT_S: u64 = 30 * 60;
+/// Longest one tool call can legitimately take (approval wait plus run, or a file review), plus
+/// margin. Timeouts outside the session (MCP server, harness CLIs) must be at least this.
+pub const TOOL_CALL_TIMEOUT_S: u64 = {
+    let run = APPROVAL_TIMEOUT_S + MAX_COMMAND_TIMEOUT_S;
+    (if run > FILE_EDIT_TIMEOUT_S {
+        run
+    } else {
+        FILE_EDIT_TIMEOUT_S
+    }) + 5 * 60
+};
+
 /// Who is acting on a terminal. Shown on approval cards and written to the audit log.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Actor {
@@ -328,7 +345,8 @@ pub fn tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "open_session",
-            description: "Open a new terminal tab connected to a saved connection. Returns the new session.",
+            description: "Open a new terminal tab connected to a saved connection, after the user approves it. \
+Returns the new session.",
             input_schema: json!({
                 "type": "object",
                 "properties": {"connection_id": {"type": "string", "description": "Id from list_connections"}},
@@ -376,7 +394,9 @@ Do not run interactive full-screen programs (vim, top, less); prefer non-interac
         },
         ToolSpec {
             name: "send_keys",
-            description: "Send control keys to a session, e.g. ctrl_c to interrupt a timed-out command, or q to quit a pager.",
+            description: "Send control keys to a session, e.g. ctrl_c to interrupt a timed-out command, or q to quit a pager. \
+enter, up, down, tab and ctrl_d only go to a program your own run_command started, never to the shell \
+prompt; to run something at the prompt use run_command.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

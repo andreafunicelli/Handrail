@@ -34,7 +34,7 @@
   let scroller = $state<HTMLDivElement>();
   let scrollTop = $state(0);
   let height = $state(400);
-  let editing = $state<{ r: number; c: number; text: string } | null>(null);
+  let editing = $state<{ r: number; c: number; text: string; start: string } | null>(null);
   let editInput = $state<HTMLInputElement>();
 
   const widths = $derived(columnWidths(result));
@@ -63,7 +63,8 @@
     // Binary values are shown as hex and cannot be typed back.
     if (v !== null && v !== undefined && typeof v !== "string") return;
     selected = { r, c };
-    editing = { r, c, text: v ?? "" };
+    // `start`: an editor closed untouched changes nothing (NULL stays NULL, a new row's DEFAULT stays).
+    editing = { r, c, text: v ?? "", start: v ?? "" };
     await tick();
     editInput?.focus();
     editInput?.select();
@@ -71,9 +72,9 @@
 
   function commit() {
     if (!editing || !edits) return;
-    const { r, c, text } = editing;
+    const { r, c, text, start } = editing;
     editing = null;
-    setCell(r, c, text);
+    if (text !== start) setCell(r, c, text);
     scroller?.focus();
   }
 

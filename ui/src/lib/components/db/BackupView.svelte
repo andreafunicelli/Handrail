@@ -5,7 +5,7 @@
   import { api } from "../../api";
   import type { DbBackupFormat, DbBackupIndex, DbBackupPage, DbResultSet } from "../../api/types";
   import { errorMessage } from "../../api/errors";
-  import { t } from "../../i18n";
+  import { fmtNumber, t } from "../../i18n";
   import { backups } from "../../stores/backups.svelte";
   import { toasts } from "../../stores/toasts.svelte";
   import { formatBytes } from "../../util/time";
@@ -165,7 +165,7 @@
     await listen();
     try {
       const r = await api.dbBackupExport(token, selected, format, applied || null, (applied && appliedColumn) || null, newTransfer());
-      if (r) toasts.success(t("backup.saved", { n: r.rows.toLocaleString(), path: r.path }));
+      if (r) toasts.success(t("backup.saved", { n: fmtNumber(r.rows), path: r.path }));
     } catch (e) {
       toasts.error(e);
     } finally {
@@ -208,7 +208,7 @@
     <header>
       <Icon name="database" size={14} />
       <strong class="mono name" title={file.name}>{file.name}</strong>
-      <span class="faint">{formatBytes(file.size)}{file.compressed ? " · gzip" : ""} · {t("backup.summary", { tables: index.tables.length, statements: index.statements.toLocaleString() })}</span>
+      <span class="faint">{formatBytes(file.size)}{file.compressed ? " · gzip" : ""} · {t("backup.summary", { tables: index.tables.length, statements: fmtNumber(index.statements) })}</span>
       <span class="spacer"></span>
       <label class="faint readas">
         {t("backup.readAs")}
@@ -228,7 +228,7 @@
               <button role="option" aria-selected={selected === i} class:on={selected === i} onclick={() => pick(i)}>
                 <Icon name={tb.view ? "eye" : "layout"} size={12} />
                 <span class="mono tname">{tb.schema && index.kind === "postgres" ? `${tb.schema}.` : ""}{tb.name}</span>
-                {#if !tb.view}<span class="count">{tb.rows.toLocaleString()}</span>{/if}
+                {#if !tb.view}<span class="count">{fmtNumber(tb.rows)}</span>{/if}
               </button>
             </li>
           {/each}
@@ -239,14 +239,14 @@
         {#if table && selected !== null}
           <div class="bar">
             <strong class="mono">{table.name}</strong>
-            <span class="faint">{table.view ? t("db.xfer.view") : t("backup.rows", { n: table.rows.toLocaleString() })}</span>
+            <span class="faint">{table.view ? t("db.xfer.view") : t("backup.rows", { n: fmtNumber(table.rows) })}</span>
             <div class="seg" role="tablist">
               <button role="tab" aria-selected={view === "data"} class:on={view === "data"} disabled={table.view} onclick={() => ((view = "data"), !page && load())}>{t("backup.data")}</button>
               <button role="tab" aria-selected={view === "structure"} class:on={view === "structure"} onclick={() => (view = "structure")}>{t("backup.structure")}</button>
             </div>
             <span class="spacer"></span>
             {#if saving}
-              <span class="faint">{t("backup.saving", { n: saving.rows.toLocaleString() })}</span>
+              <span class="faint">{t("backup.saving", { n: fmtNumber(saving.rows) })}</span>
               <button class="btn sm" onclick={stop}>{t("db.xfer.stop")}</button>
             {:else}
               <span class="saveas">
@@ -279,9 +279,9 @@
                   {#if !page.rows.length}
                     {t("backup.none")}
                   {:else if applied}
-                    {t("backup.matching", { n: page.rows.length, from: (shownFrom + 1).toLocaleString(), to: shownTo.toLocaleString() })}
+                    {t("backup.matching", { n: page.rows.length, from: fmtNumber(shownFrom + 1), to: fmtNumber(shownTo) })}
                   {:else}
-                    {t("backup.range", { from: (shownFrom + 1).toLocaleString(), to: shownTo.toLocaleString(), total: table.rows.toLocaleString() })}
+                    {t("backup.range", { from: fmtNumber(shownFrom + 1), to: fmtNumber(shownTo), total: fmtNumber(table.rows) })}
                   {/if}
                 </span>
               {/if}

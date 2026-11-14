@@ -119,6 +119,9 @@ pub async fn s3_list(
         format!("{key}/")
     };
     let listing = c.list(&bucket, &prefix).await?;
+    if listing.truncated {
+        tracing::warn!("S3 listing of /{bucket}/{prefix} stopped at the page limit");
+    }
     let mut out: Vec<FileEntry> = listing
         .folders
         .into_iter()
@@ -166,6 +169,11 @@ pub async fn s3_rename(
         return Err(Error::Invalid("a rename stays in the same bucket".into()));
     }
     let c = client(&state, &account_id).await?;
+    // Never replaces anything (as on this computer): the copy would overwrite `to`, and the
+    // delete would then remove the only copy when both name the same object.
+    if c.exists(&bucket, &to_key).await? {
+        return Err(Error::Busy(aht_ssh::sftp::EXISTS.into()));
+    }
     c.copy(&bucket, &from_key, &to_key).await?;
     c.delete(&bucket, &from_key).await
 }
@@ -224,7 +232,9 @@ pub async fn s3_download(
     Ok(local.display().to_string())
 }
 
-/// Upload a local file (picked in the file dialog) into the folder `dir`; returns its path.
+/// Upload a local file (picked in the file dialog) into the folder `dir`; returns its path. An
+/// object of the same name is replaced (the page compares and asks first); `overwrite: false`
+/// rejects with `exists` instead.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn s3_upload(
     app: AppHandle,
@@ -233,6 +243,7 @@ pub async fn s3_upload(
     local_path: PathBuf,
     dir: String,
     transfer_id: String,
+    overwrite: Option<bool>,
 ) -> Result<String> {
     let (bucket, prefix) = in_bucket(&dir)?;
     let name = picked_name(&local_path)?;
@@ -242,6 +253,9 @@ pub async fn s3_upload(
         format!("{prefix}/{name}")
     };
     let c = client(&state, &account_id).await?;
+    if overwrite == Some(false) && c.exists(&bucket, &key).await? {
+        return Err(Error::Busy(aht_ssh::sftp::EXISTS.into()));
+    }
     c.upload(&bucket, &key, &local_path, reporter(&app, transfer_id))
         .await?;
     Ok(format!("/{bucket}/{key}"))

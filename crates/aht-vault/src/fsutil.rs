@@ -3,8 +3,9 @@
 use std::io::Write;
 use std::path::Path;
 
-/// Write `bytes` to `path` atomically: write a temp file in the same directory, fsync, rename.
-pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Write `bytes` to `path` atomically: write a temp file in the same directory, fsync, rename
+/// (and, on Unix, fsync the directory so the rename itself survives a power loss).
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     write_atomically(path, bytes, false)
 }
 
@@ -40,7 +41,13 @@ fn write_atomically(path: &Path, bytes: &[u8], private: bool) -> std::io::Result
         f.write_all(bytes)?;
         f.sync_all()?;
         drop(f);
-        std::fs::rename(&tmp, path)
+        std::fs::rename(&tmp, path)?;
+        // The data is already safe; a directory that cannot be synced is not worth failing for.
+        #[cfg(unix)]
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+        Ok(())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);

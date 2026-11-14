@@ -15,6 +15,7 @@ mod vault;
 
 pub use crypto::KdfParams;
 pub use error::{Result, VaultError};
+pub use fsutil::atomic_write;
 pub use hlc::{Hlc, HlcClock};
 pub use item::{Setting, VaultItem};
 #[cfg(feature = "os-keychain")]
@@ -22,6 +23,6 @@ pub use keystore::OsKeychainStore;
 pub use keystore::{FileSecretKeyStore, SecretKeyStore};
 pub use secret_key::SecretKey;
 pub use vault::{
-    ConflictRecord, Envelope, Manifest, MergeOutcome, RawFile, SnapshotInfo, Vault, VaultStatus,
-    FORMAT_VERSION, MAX_SNAPSHOTS,
+    is_item_path, ConflictRecord, Envelope, Manifest, MergeOutcome, RawFile, SnapshotInfo, Vault,
+    VaultStatus, FORMAT_VERSION, MAX_SNAPSHOTS,
 };

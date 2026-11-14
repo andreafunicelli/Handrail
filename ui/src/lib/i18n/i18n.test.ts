@@ -1,7 +1,7 @@
 import { describe, expect, it as test } from "vitest";
 import { en } from "./en";
 import { it } from "./it";
-import { locale, t } from "./index";
+import { locale, t, tn } from "./index";
 
 const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
@@ -20,5 +20,17 @@ describe("i18n", () => {
     expect(t("common.cancel")).toBe(en["common.cancel"]);
     expect(t("app.name")).toBe("Handrail");
     expect(t("sidebar.noResults", { q: "x" })).toBe(en["sidebar.noResults"].replace("{q}", "x"));
+  });
+
+  test("plural keys come in _one/_other pairs and pick the form for the count", () => {
+    for (const cat of [en, it] as Record<string, string>[])
+      for (const k of Object.keys(cat)) if (k.endsWith("_one")) expect(k.replace(/_one$/, "_other") in cat, k).toBe(true);
+    expect(tn("db.rows", 1)).toBe("1 row");
+    expect(tn("db.rows", 2500)).toBe("2,500 rows");
+    locale.set("it");
+    expect(tn("db.rows", 1)).toBe("1 riga");
+    expect(tn("db.rows", 0)).toBe("0 righe");
+    expect(tn("db.rows", 25000)).toBe("25.000 righe");
+    locale.set("en");
   });
 });

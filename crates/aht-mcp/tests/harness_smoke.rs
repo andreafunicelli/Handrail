@@ -44,7 +44,10 @@ async fn codex_accepts_cli_mcp_config() {
         "-c",
         &format!("mcp_servers.handrail.bearer_token_env_var=\"{TOKEN_ENV}\""),
         "-c",
-        "mcp_servers.handrail.tool_timeout_sec=900",
+        &format!(
+            "mcp_servers.handrail.tool_timeout_sec={}",
+            aht_core::terminal::TOOL_CALL_TIMEOUT_S
+        ),
         "-c",
         "mcp_servers.handrail.startup_timeout_sec=30",
         "mcp",

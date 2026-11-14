@@ -142,6 +142,9 @@ pub async fn vault_lock(state: State<'_, AppState>) -> Result<()> {
     state.vault.lock().await.lock();
     // Nothing decrypted may outlive the lock: agents hold API keys, previews hold passwords.
     state.terminal.on_lock().await;
+    // Database tabs keep their password for the agents' client; RDP sessions hold theirs.
+    state.db.close_all().await;
+    state.rdp.close_all().await;
     state.import_previews.lock().await.clear();
     state.s3.lock().await.clear();
     *state.pending_github_token.lock().await = None;
@@ -159,8 +162,6 @@ pub async fn vault_delete(state: State<'_, AppState>) -> Result<()> {
     // Locked first: an SSH session (or reconnect) can no longer read its credentials.
     vault_lock(state.clone()).await?;
     state.terminal.close_all().await;
-    state.rdp.close_all().await;
-    state.db.close_all().await;
     let vault = state.vault.clone();
     let mut guard = vault.lock_owned().await;
     let vault_id = guard.vault_id().map(str::to_owned);
@@ -655,12 +656,17 @@ pub async fn vault_snapshot_create(state: State<'_, AppState>) -> Result<Snapsho
 /// rollback is written as fresh edits so it wins on the next sync.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn vault_snapshot_restore(state: State<'_, AppState>, name: String) -> Result<()> {
-    state
+    let skipped = state
         .vault
         .lock()
         .await
-        .restore_snapshot(&name)
-        .map_err(Error::from)
+        .restore_snapshot_counted(&name)
+        .map_err(Error::from)?;
+    // The IPC reply stays `null`; skipped entries leave their items as they are now.
+    if skipped > 0 {
+        tracing::warn!("snapshot {name}: {skipped} unreadable entries skipped during restore");
+    }
+    Ok(())
 }
 
 /// A version that lost a sync merge, without its payload: secrets never reach the UI.

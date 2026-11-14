@@ -51,6 +51,7 @@ fn connection(name: &str) -> Connection {
         notes: "primary".into(),
         tunnels: vec![],
         rdp_admin: false,
+        rdp_allow_tls_login: false,
         icon: None,
         database: None,
         db_tls: None,
@@ -917,4 +918,86 @@ fn erase_removes_everything_and_allows_a_new_vault() {
     std::fs::remove_dir_all(&dir).unwrap();
     fresh.erase().unwrap();
     assert!(!fresh.status().initialized);
+}
+
+#[test]
+fn stray_and_corrupt_item_files_are_not_synced_or_snapshotted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut v, sk) = new_vault(dir.path());
+    let s = secret("x");
+    v.put(&s).unwrap();
+    let good = v.raw_files().unwrap().pop().unwrap();
+    let items = dir.path().join("items");
+    // A cloud drive's conflict copy and a damaged copy of the real file.
+    let stray = format!("{} (1).enc", &good.path[6..38]);
+    std::fs::write(items.join(&stray), &good.bytes).unwrap();
+    let mut bad = good.bytes.clone();
+    bad[20] ^= 1;
+    std::fs::write(dir.path().join(&good.path), &bad).unwrap();
+    v.lock();
+    v.unlock(PW, &sk).unwrap();
+    assert_eq!(v.corrupt_files().len(), 2, "{:?}", v.corrupt_files());
+
+    let paths: Vec<String> = v.raw_files().unwrap().into_iter().map(|f| f.path).collect();
+    assert_eq!(paths, vec!["manifest.json".to_string(), good.path.clone()]);
+    assert!(paths.iter().skip(1).all(|p| is_item_path(p)));
+    assert!(!is_item_path(&format!("items/{stray}")));
+    assert!(!is_item_path("items/ABCDEF0123456789ABCDEF0123456789.enc"));
+    assert!(!is_item_path("manifest.json"));
+
+    // The snapshot holds only what opens, so it restores.
+    let snap = v.snapshot().unwrap();
+    assert_eq!(v.restore_snapshot_counted(&snap.name).unwrap(), 0);
+
+    // Merging the good copy heals the damaged file.
+    assert_eq!(
+        v.merge_remote(&good.path, &good.bytes).unwrap(),
+        MergeOutcome::Added
+    );
+    assert_eq!(v.corrupt_files(), [format!("items/{stray}")]);
+    assert_eq!(v.get::<Secret>(&s.id.to_string()).unwrap(), Some(s));
+}
+
+#[test]
+fn automatic_snapshots_do_not_evict_manual_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut v, _) = new_vault(dir.path());
+    v.put(&secret("x")).unwrap();
+    let manual: Vec<String> = (0..3).map(|_| v.snapshot().unwrap().name).collect();
+    for _ in 0..MAX_SNAPSHOTS + 2 {
+        let a = v.snapshot_auto().unwrap();
+        assert!(a.auto && a.name.contains("-auto-"), "{a:?}");
+        v.prune_snapshots().unwrap();
+        tick();
+    }
+    let all = v.list_snapshots().unwrap();
+    let kept_manual: Vec<String> = all
+        .iter()
+        .filter(|s| !s.auto)
+        .map(|s| s.name.clone())
+        .collect();
+    assert_eq!(kept_manual, manual);
+    assert_eq!(all.iter().filter(|s| s.auto).count(), MAX_SNAPSHOTS);
+    assert!(all.iter().all(|s| s.created_ms > 0));
+    // Automatic snapshots restore like any other.
+    let last = all.iter().rfind(|s| s.auto).unwrap();
+    v.restore_snapshot(&last.name).unwrap();
+}
+
+#[test]
+fn snapshot_names_are_restricted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut v, _) = new_vault(dir.path());
+    for bad in [
+        "C:x.snap", "..snap", ".snap", "a.b.snap", "a b.snap", "x.snapx",
+    ] {
+        assert!(
+            matches!(v.restore_snapshot(bad), Err(VaultError::Invalid(_))),
+            "{bad}"
+        );
+        assert!(
+            matches!(v.delete_snapshot(bad), Err(VaultError::Invalid(_))),
+            "{bad}"
+        );
+    }
 }
