@@ -274,8 +274,10 @@
   .tab-panes.hidden {
     display: none;
   }
+  /* Never more than the window leaves once the rail, both panels at their min-width and the two
+     resizers are counted: just above the drawer breakpoint (820px) nothing goes off-screen. */
   .shell:not(.narrow) .main {
-    min-width: 420px;
+    min-width: min(420px, 100vw - var(--rail-w) - 180px - 260px - 2px);
   }
   .ai-dock {
     flex: 0 1 auto;
