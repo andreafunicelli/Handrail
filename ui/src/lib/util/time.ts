@@ -10,7 +10,8 @@ export function relativeTime(ms: number, now = Date.now()): string {
   if (h < 24) return t("time.hours", { n: h });
   const d = Math.round(h / 24);
   if (d < 7) return d === 1 ? t("time.yesterday") : t("time.days", { n: d });
-  return fmtDateTime(ms, { year: "numeric", month: "numeric", day: "numeric" });
+  // A month name, never 10/6/2026: day and month order differ between countries.
+  return fmtDateTime(ms, { year: "numeric", month: "short", day: "numeric" });
 }
 
 export function formatBytes(n: number): string {

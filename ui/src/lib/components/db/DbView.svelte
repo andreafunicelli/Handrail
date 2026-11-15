@@ -12,6 +12,7 @@
   import type { DbColumnInfo, DbOpened, DbQueryOutput, DbTableInfo, DbTableStructure } from "../../api/types";
   import { errorMessage, isIpcError } from "../../api/errors";
   import { fmtNumber, t, tn } from "../../i18n";
+  import { MOD } from "../../util/platform";
   import { connections } from "../../stores/connections.svelte";
   import { dbApprovals } from "../../stores/dbApprovals.svelte";
   import { toasts } from "../../stores/toasts.svelte";
@@ -310,6 +311,13 @@
       delete columns[key];
       toasts.error(e);
     }
+  }
+
+  /** The filter's example uses the table's own columns (the generic one fits no real table). */
+  function filterHint(ns: string, table: string): string {
+    const cols = columns[`${ns}.${table}`];
+    if (!Array.isArray(cols) || !cols.length) return t("db.filterHint");
+    return `${cols[0].name} = …` + (cols[1] ? ` AND ${cols[1].name} LIKE '%…%'` : "");
   }
 
   /** Completion knows every loaded table, with its columns once they were loaded. */
@@ -1025,8 +1033,8 @@
           <strong>{info?.database ?? conn?.name ?? ""}</strong>
           {#if prod}<span class="env-prod-badge">PROD</span>{/if}
         </span>
-        <button class="btn primary sm" onclick={run} disabled={running} title={t("db.runHint")}><Icon name="play" size={12} />{t("db.run")}</button>
-        <button class="btn sm" onclick={runCurrent} disabled={running} title={t("db.runCurrentHint")}>{t("db.runCurrent")}</button>
+        <button class="btn primary sm" onclick={run} disabled={running} title={t("db.runHint", { mod: MOD })}><Icon name="play" size={12} />{t("db.run")}</button>
+        <button class="btn sm" onclick={runCurrent} disabled={running} title={t("db.runCurrentHint", { mod: MOD })}>{t("db.runCurrent")}</button>
         <button class="btn sm ghost" onclick={openHistory} aria-haspopup="menu" title={t("db.history")}><Icon name="clock" size={12} />{t("db.history")}</button>
         {#if running}<button class="btn sm" onclick={stop}><Icon name="stop" size={12} />{t("db.stop")}</button>{/if}
         <label class="rows">
@@ -1085,7 +1093,7 @@
             <input
               class="input mono"
               bind:value={filterText}
-              placeholder={t("db.filterHint")}
+              placeholder={filterHint(browse.ns, browse.table)}
               aria-label={t("db.filter")}
               spellcheck="false"
               autocapitalize="off"
@@ -1103,7 +1111,7 @@
                 <button type="button" class="btn sm" onclick={editStructure}><Icon name="edit" size={12} />{t("db.st.edit")}</button>
               {/if}
             {/if}
-            {#if info && tableStats(info)}<span class="stats" title={info.comment ?? undefined}>{tableStats(info)}</span>{/if}
+            {#if info && tableStats(info)}<span class="stats" title={info.comment ?? tableStats(info)}>{tableStats(info)}</span>{/if}
             <button type="button" class="btn sm ghost" onclick={() => showDdl(browse!.ns, browse!.table)}><Icon name="file" size={12} />{t("db.ddl")}</button>
           </form>
         {/if}
@@ -1232,7 +1240,7 @@
             </div>
           {/if}
         {:else}
-          <p class="hint center">{t("db.empty")}</p>
+          <p class="hint center">{t("db.empty", { mod: MOD })}</p>
         {/if}
       </div>
     </section>
@@ -1579,8 +1587,8 @@
     font-size: var(--fs-small);
   }
   .browse .input {
-    flex: 1;
-    min-width: 160px;
+    flex: 3 1 160px;
+    min-width: 120px;
     height: 26px;
     font-size: var(--fs-meta);
   }
@@ -1591,7 +1599,13 @@
     font-size: var(--fs-meta);
     color: var(--muted);
   }
+  /* Stats take only what is left (no basis), so they never push a button onto a second line. */
   .stats {
+    flex: 1 1 0;
+    text-align: right;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--faint);
     font-size: var(--fs-meta);
     white-space: nowrap;

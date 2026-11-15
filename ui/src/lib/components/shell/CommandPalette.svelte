@@ -163,9 +163,10 @@
     for (const a of ranked) if (!order.includes(a.group)) order.push(a.group);
     return order.flatMap((g) => ranked.filter((a) => a.group === g));
   });
+  // Nothing typed: nothing highlighted, so ⌘K then Enter never connects anywhere (the first
+  // row can be a production server). Typing or an arrow key picks a row.
   $effect(() => {
-    void query;
-    index = 0;
+    index = query.trim() ? 0 : -1;
   });
 
   function close() {
@@ -197,7 +198,7 @@
     const n = Math.max(1, results.length);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      moveTo((index + (e.key === "ArrowDown" ? 1 : -1) + n) % n);
+      moveTo(index < 0 ? (e.key === "ArrowDown" ? 0 : n - 1) : (index + (e.key === "ArrowDown" ? 1 : -1) + n) % n);
     } else if (e.key === "PageDown" || e.key === "PageUp") {
       // Page jumps stop at the ends instead of wrapping.
       e.preventDefault();

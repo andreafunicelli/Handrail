@@ -17,6 +17,8 @@
   import { filterConnections, parseQuery, removeToken, type QueryContext } from "../../util/connQuery";
   import { load, save } from "../../util/storage";
   import type { OpenPane } from "../../stores/sessions.svelte";
+  import { copy, loginUser } from "../terminal/sessionActions.svelte";
+  import { connectionAddress } from "../../util/sessionContext";
 
   let query = $state("");
   let quick = $state("");
@@ -150,7 +152,8 @@
     const out: { pane: OpenPane; c: Connection; n: number }[] = [];
     for (const pane of sessions.openPanes) {
       const c = byId.get(pane.connectionId);
-      if (!c) continue;
+      // Like favorites and recents: each tab lists its own kind (no SSH sessions under Databases).
+      if (!c || !inTab(c)) continue;
       const n = (seen.get(c.id) ?? 0) + 1;
       seen.set(c.id, n);
       out.push({ pane, c, n });
@@ -211,12 +214,16 @@
   function connMenu(e: MouseEvent, c: Connection) {
     e.preventDefault();
     const pinned = connections.pinned.includes(c.id);
+    const address = connectionAddress({ user: loginUser(c), host: c.host, port: c.port });
     menu = {
       x: e.clientX,
       y: e.clientY,
       items: [
         { label: t("ctx.connect"), icon: "play", shortcut: "↵", action: () => connect(c) },
         { label: t("ctx.connectSplit"), icon: "splitRight", disabled: !sessions.activeTab, action: () => connect(c, "row") },
+        "sep",
+        { label: t("sess.copyHost"), icon: "copy", action: () => void copy(c.host) },
+        ...(c.kind === "ssh" ? [{ label: t("sess.copyAddress", { address }), icon: "copy" as const, action: () => void copy(address) }] : []),
         "sep",
         { label: t("ctx.edit"), icon: "edit", action: () => ui.edit(c) },
         ...(c.kind === "ssh"
@@ -396,7 +403,8 @@
     tabindex="0"
     draggable={!showPath}
     style:--depth={depth}
-    title="{c.user}@{c.host}:{c.port}"
+    title="{c.name}
+{c.user ? `${c.user}@` : ""}{c.host}:{c.port}"
     ondblclick={() => openOrFocus(c)}
     onclick={() => ui.narrow && openOrFocus(c)}
     onkeydown={(e) => rowKey(e, c)}
@@ -960,16 +968,18 @@
     background: var(--env-dev);
     opacity: 0.7;
   }
+  /* The name wins the space; the host (also in the tooltip) shrinks first. */
   .name {
-    flex: none;
-    max-width: 60%;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 85%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text);
   }
   .meta {
-    flex: 1;
+    flex: 1 1 0;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;

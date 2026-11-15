@@ -160,9 +160,11 @@
     background: var(--panel);
     margin-bottom: 18px;
   }
+  /* Seven groups in two even rows (the prefix and three, then three), never one left alone. */
   .key {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(4, auto);
+    justify-content: start;
     gap: 4px 10px;
     margin: 8px 0 14px;
     font-size: 16px;
