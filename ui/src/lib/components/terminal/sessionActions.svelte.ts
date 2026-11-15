@@ -38,7 +38,7 @@ export function jumpNames(c: Connection): string[] {
   return c.jump.map((id) => connections.byId.get(id)?.name ?? id);
 }
 
-async function copy(text: string) {
+export async function copy(text: string) {
   if (await copyText(text)) toasts.success(t("sess.copied", { text }));
   else toasts.error(t("copy.failed"));
 }

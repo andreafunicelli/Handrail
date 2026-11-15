@@ -42,7 +42,7 @@
 
 <div class="seg" role="group" use:segmented aria-label={t("ai.mode")}>
   {#each modes as m (m)}
-    <button aria-pressed={current === m} class:auto={m === "auto"} onclick={() => set(m)}>{t(`ai.mode.${m}`)}</button>
+    <button aria-pressed={current === m} class:auto={m === "auto"} title={t(`ai.modeTip.${m}`)} onclick={() => set(m)}>{t(`ai.mode.${m}`)}</button>
   {/each}
 </div>
 {#if current !== session.approval_mode}<p class="hint downgraded">{t("ai.mode.prodAutoHint")}</p>{/if}

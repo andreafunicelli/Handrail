@@ -4,6 +4,7 @@
   import { LANGS, locale } from "../../i18n";
   import { settings, type Density, type TerminalEditorChoice, type Theme } from "../../stores/settings.svelte";
   import { SCHEMES } from "../../terminal/schemes";
+  import { isMac } from "../../util/platform";
 
   const themes: Theme[] = ["dark", "light", "system"];
   const densities: Density[] = ["comfortable", "compact"];
@@ -46,6 +47,13 @@
   <input type="checkbox" bind:checked={settings.sessionBar} />
   <span>{t("app.sessionBar")}<span class="hint">{t("app.sessionBarHint")}</span></span>
 </label>
+
+{#if isMac}
+  <label class="check">
+    <input type="checkbox" bind:checked={settings.optionMeta} />
+    <span>{t("app.optionMeta")}<span class="hint">{t("app.optionMetaHint")}</span></span>
+  </label>
+{/if}
 
 <div class="field">
   <span class="label">{t("app.terminalEditor")}</span>

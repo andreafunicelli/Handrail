@@ -26,6 +26,9 @@ interface Prefs {
   sessionBar: boolean;
   /** `nano file` / `vim file` typed in an SSH terminal: ask, open in the editor, or just run it. */
   terminalEditor: TerminalEditorChoice;
+  /** macOS: Option acts as Meta in terminals. Off by default, as in Terminal.app, so Option
+   *  still types @ # [ ] { } on layouts that need it (Italian, German, …). */
+  optionMeta: boolean;
 }
 
 export type TerminalEditorChoice = "ask" | "editor" | "terminal";
@@ -46,6 +49,7 @@ const DEFAULTS: Prefs = {
   editorFontSize: 13,
   sessionBar: true,
   terminalEditor: "ask",
+  optionMeta: false,
 };
 
 /** Local, per-device UI preferences (persisted to localStorage). */
@@ -65,6 +69,7 @@ class Settings {
   editorFontSize = $state(DEFAULTS.editorFontSize);
   sessionBar = $state(DEFAULTS.sessionBar);
   terminalEditor = $state<TerminalEditorChoice>(DEFAULTS.terminalEditor);
+  optionMeta = $state(DEFAULTS.optionMeta);
   systemDark = $state(true);
 
   resolvedTheme = $derived<"dark" | "light">(this.theme === "system" ? (this.systemDark ? "dark" : "light") : this.theme);
@@ -91,6 +96,7 @@ class Settings {
     this.editorFontSize = p.editorFontSize;
     this.sessionBar = p.sessionBar;
     this.terminalEditor = p.terminalEditor;
+    this.optionMeta = p.optionMeta;
     if (typeof window !== "undefined" && window.matchMedia) {
       const mq = window.matchMedia("(prefers-color-scheme: dark)");
       this.systemDark = mq.matches;
@@ -114,6 +120,7 @@ class Settings {
           editorFontSize: this.editorFontSize,
           sessionBar: this.sessionBar,
           terminalEditor: this.terminalEditor,
+          optionMeta: this.optionMeta,
         } satisfies Prefs);
       });
       $effect(() => {
@@ -123,7 +130,7 @@ class Settings {
         if (typeof document !== "undefined") document.documentElement.dataset.density = this.density;
       });
       $effect(() => {
-        terminals.configure(this.fontSize, this.terminalTheme);
+        terminals.configure({ fontSize: this.fontSize, theme: this.terminalTheme, optionMeta: this.optionMeta });
       });
     });
   }

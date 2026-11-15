@@ -67,7 +67,11 @@ export function sftpBackend(sessionId: string, root = false): FileBackend {
     list: (p) => api.sftpList(sessionId, p, root),
     mkdir: (p) => api.sftpMkdir(sessionId, p, root),
     rename: (e, to) => api.sftpRename(sessionId, e.path, to, root),
-    remove: (e) => api.sftpRemove(sessionId, e.path, isFolder(e), root),
+    // SFTP removes only empty folders: empty it first, deepest first (links are removed, not followed).
+    remove: async function remove(e: FileEntry): Promise<void> {
+      if (isFolder(e)) for (const c of await api.sftpList(sessionId, e.path, root)) await remove(c);
+      await api.sftpRemove(sessionId, e.path, isFolder(e), root);
+    },
     download: (p, id) => api.sftpDownload(sessionId, p, id, root),
     upload: (local, dir, id) => api.sftpUpload(sessionId, local, dir, id, root),
     writable: (dir) => !!dir,

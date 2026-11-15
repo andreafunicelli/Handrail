@@ -50,7 +50,7 @@
     </button>
     {#if current.brain.type === "built_in" && models[current.brain.provider]?.length}
       {@const pid = current.brain.provider}
-      <select class="model mono" aria-label={t("ai.model")} value={current.brain.model} onchange={(e) => agent.setModel(pid, (e.currentTarget as HTMLSelectElement).value)}>
+      <select class="model mono" aria-label={t("ai.model")} title={current.brain.model} value={current.brain.model} onchange={(e) => agent.setModel(pid, (e.currentTarget as HTMLSelectElement).value)}>
         {#each models[pid] as m (m)}<option value={m}>{m}</option>{/each}
       </select>
     {/if}
@@ -100,6 +100,7 @@
 <style>
   .picker {
     position: relative;
+    flex: 0 1 auto;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -112,6 +113,9 @@
     height: 26px;
     padding: 0 8px;
     border-radius: var(--r);
+    /* Provider names are short: keep them whole and let the model picker take the rest. */
+    flex: none;
+    max-width: 55%;
     min-width: 0;
     color: var(--text);
     font-weight: 550;
@@ -135,8 +139,8 @@
     white-space: nowrap;
   }
   .model {
+    flex: 1 1 auto;
     min-width: 0;
-    max-width: 150px;
     height: 22px;
     padding: 0 6px;
     border-radius: var(--r-sm);

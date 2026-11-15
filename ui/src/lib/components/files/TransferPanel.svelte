@@ -49,7 +49,7 @@
       {t("files.transfers.counts", { running: transfers.running, failed })}
     </span>
     <span class="grow"></span>
-    <button class="btn sm ghost" disabled={!finished} onclick={() => transfers.clearFinished()}>{t("files.clearTransfers")}</button>
+    {#if finished}<button class="btn sm ghost" onclick={() => transfers.clearFinished()}>{t("files.clearTransfers")}</button>{/if}
     <button class="icon-btn" aria-label={t("common.close")} title={t("common.close")} onclick={onclose}><Icon name="x" size={14} /></button>
   </header>
   <p class="note">{t("files.transfers.note")}</p>
