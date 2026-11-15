@@ -8,7 +8,9 @@ use crate::{map_err, DbClient, DbKind, Inner, Result, TableInfo, Value};
 use aht_core::Error;
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use sqlx::{Connection, Executor};
+// AssertSqlSafe: statements are the user's own import file, or built from quote_ident/qualified
+// identifiers and escaped literals.
+use sqlx::{AssertSqlSafe, Connection, Executor};
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -120,11 +122,11 @@ impl Conn {
     async fn exec(&mut self, sql: &str) -> std::result::Result<u64, sqlx::Error> {
         match self {
             Conn::Mysql(c) => (&mut *c)
-                .execute(sqlx::raw_sql(sql))
+                .execute(sqlx::raw_sql(AssertSqlSafe(sql)))
                 .await
                 .map(|r| r.rows_affected()),
             Conn::Postgres(c) => (&mut *c)
-                .execute(sqlx::raw_sql(sql))
+                .execute(sqlx::raw_sql(AssertSqlSafe(sql)))
                 .await
                 .map(|r| r.rows_affected()),
         }
@@ -137,14 +139,14 @@ impl Conn {
     async fn texts(&mut self, sql: &str) -> Result<Vec<Vec<Option<String>>>> {
         Ok(match self {
             Conn::Mysql(c) => (&mut *c)
-                .fetch_all(sqlx::raw_sql(sql))
+                .fetch_all(sqlx::raw_sql(AssertSqlSafe(sql)))
                 .await
                 .map_err(map_err)?
                 .iter()
                 .map(crate::mysql::texts)
                 .collect(),
             Conn::Postgres(c) => (&mut *c)
-                .fetch_all(sqlx::raw_sql(sql))
+                .fetch_all(sqlx::raw_sql(AssertSqlSafe(sql)))
                 .await
                 .map_err(map_err)?
                 .iter()
@@ -161,7 +163,7 @@ impl Conn {
     ) -> Result<()> {
         match self {
             Conn::Mysql(c) => {
-                let mut rows = (&mut *c).fetch(sqlx::raw_sql(sql));
+                let mut rows = (&mut *c).fetch(sqlx::raw_sql(AssertSqlSafe(sql)));
                 while let Some(r) = rows.try_next().await.map_err(map_err)? {
                     if !f(crate::mysql::values(&r))? {
                         break;
@@ -169,7 +171,7 @@ impl Conn {
                 }
             }
             Conn::Postgres(c) => {
-                let mut rows = (&mut *c).fetch(sqlx::raw_sql(sql));
+                let mut rows = (&mut *c).fetch(sqlx::raw_sql(AssertSqlSafe(sql)));
                 while let Some(r) = rows.try_next().await.map_err(map_err)? {
                     if !f(crate::postgres::values(&r))? {
                         break;
