@@ -66,7 +66,7 @@ ironrdp-echo = { version = "0.4" }
 ironrdp-tls = { version = "0.2" }
 ironrdp-tokio = { version = "0.10", features = ["reqwest"] }
 ironrdp-rdcleanpath = { version = "0.2" }
-ironrdp-cfg = { version = "0.1" }
+ironrdp-cfg = { version = "0.3" }
 ironrdp-propertyset = { version = "0.1" } # public
 
 # Optional protocol crates (activated by features above)
