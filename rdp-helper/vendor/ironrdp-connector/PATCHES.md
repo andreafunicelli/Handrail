@@ -27,6 +27,8 @@ Source: IronRDP commit `11a0810c` (`chore(release): prepare for publishing (#136
   administrative session, which needs no license.
 - `#[expect(single_use_lifetimes)]` → `#[allow(...)]` (connection.rs): the lint is only enabled
   by IronRDP's workspace lint settings, so the expectation would go unfulfilled here.
+- `rand` 0.9 → 0.10 (Cargo.toml, license_exchange.rs): 0.10 renamed `RngCore` to `Rng`, so the
+  trait import that brings `fill_bytes` into scope changed. Behaviour is unchanged.
 
 Drop this directory and the `[patch.crates-io]` entry once an IronRDP release on crates.io
 exposes the cluster data in its config.
