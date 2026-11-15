@@ -257,7 +257,7 @@ jobs:
           releaseBody: ${{ needs.version.outputs.notes }}
           releaseDraft: false
           prerelease: ${{ env.CHANNEL == 'nightly' }}
-          includeUpdaterJson: ${{ env.HAS_UPDATER_KEY == 'true' }}
+          uploadUpdaterJson: ${{ env.HAS_UPDATER_KEY == 'true' }}
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
 
