@@ -8,7 +8,9 @@ use aht_core::Error;
 use futures::future::BoxFuture;
 use futures::TryStreamExt;
 use sqlx::mysql::{MySqlConnectOptions, MySqlConnection, MySqlRow, MySqlSslMode};
-use sqlx::{Column, Connection, Either, Executor, Row, TypeInfo, ValueRef};
+// AssertSqlSafe: SQL reaching sqlx here is the user's own (editor, filters), built from
+// quote_ident/qualified identifiers and integers, or uses bound parameters.
+use sqlx::{AssertSqlSafe, Column, Connection, Either, Executor, Row, TypeInfo, ValueRef};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -152,7 +154,7 @@ impl Client {
                 *slot = Some(self.open().await?);
             }
             let conn = slot.as_mut().expect("connected above");
-            let mut q = sqlx::query::<sqlx::MySql>(sql);
+            let mut q = sqlx::query::<sqlx::MySql>(AssertSqlSafe(sql));
             for b in binds {
                 q = q.bind(*b);
             }
@@ -270,7 +272,10 @@ impl Client {
                 *slot = Some(self.open().await?);
             }
             let conn = slot.as_mut().expect("connected above");
-            match (&mut *conn).fetch_all(sqlx::raw_sql(sql)).await {
+            match (&mut *conn)
+                .fetch_all(sqlx::raw_sql(AssertSqlSafe(sql)))
+                .await
+            {
                 Ok(rows) => Ok(rows.iter().map(texts).collect()),
                 Err(e) => {
                     if broken(&e) {
@@ -434,7 +439,7 @@ impl Client {
             let mut stopped = false;
             let mut lost = false;
             {
-                let mut stream = (&mut *conn).fetch_many(sqlx::raw_sql(sql));
+                let mut stream = (&mut *conn).fetch_many(sqlx::raw_sql(AssertSqlSafe(sql)));
                 loop {
                     match stream.try_next().await {
                         Ok(Some(Either::Left(done))) => out.done(done.rows_affected()),
@@ -483,7 +488,7 @@ impl Client {
             }
             let conn = slot.as_mut().expect("connected above");
             match (&mut *conn)
-                .execute(sqlx::raw_sql(&format!("KILL QUERY {id}")))
+                .execute(sqlx::raw_sql(AssertSqlSafe(format!("KILL QUERY {id}"))))
                 .await
             {
                 Ok(_) => Ok(()),
@@ -522,7 +527,7 @@ impl Client {
             let mut total = 0u64;
             let mut failure: Option<(Error, bool)> = None;
             for st in statements {
-                let mut q = sqlx::query::<sqlx::MySql>(&st.sql);
+                let mut q = sqlx::query::<sqlx::MySql>(AssertSqlSafe(st.sql.as_str()));
                 for p in &st.params {
                     q = q.bind(p.as_deref());
                 }

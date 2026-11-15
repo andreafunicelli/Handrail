@@ -8,7 +8,9 @@ use aht_core::Error;
 use futures::future::BoxFuture;
 use futures::TryStreamExt;
 use sqlx::postgres::{PgConnectOptions, PgConnection, PgRow, PgSslMode};
-use sqlx::{Column, Connection, Either, Executor, Row, TypeInfo, ValueRef};
+// AssertSqlSafe: SQL reaching sqlx here is the user's own (editor, filters), built from
+// quote_ident/qualified identifiers and integers, or uses bound parameters.
+use sqlx::{AssertSqlSafe, Column, Connection, Either, Executor, Row, TypeInfo, ValueRef};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -148,7 +150,7 @@ impl Client {
                 *slot = Some(self.open().await?);
             }
             let conn = slot.as_mut().expect("connected above");
-            let mut q = sqlx::query::<sqlx::Postgres>(sql);
+            let mut q = sqlx::query::<sqlx::Postgres>(AssertSqlSafe(sql));
             for b in binds {
                 q = q.bind(*b);
             }
@@ -283,7 +285,10 @@ impl Client {
                 *slot = Some(self.open().await?);
             }
             let conn = slot.as_mut().expect("connected above");
-            match (&mut *conn).execute(sqlx::raw_sql(sql)).await {
+            match (&mut *conn)
+                .execute(sqlx::raw_sql(AssertSqlSafe(sql)))
+                .await
+            {
                 Ok(_) => Ok(()),
                 Err(e) => {
                     if broken(&e) {
@@ -602,7 +607,7 @@ impl Client {
             let mut stopped = false;
             let mut lost = false;
             {
-                let mut stream = (&mut *conn).fetch_many(sqlx::raw_sql(sql));
+                let mut stream = (&mut *conn).fetch_many(sqlx::raw_sql(AssertSqlSafe(sql)));
                 loop {
                     match stream.try_next().await {
                         Ok(Some(Either::Left(done))) => out.done(done.rows_affected()),
@@ -651,7 +656,10 @@ impl Client {
             }
             let conn = slot.as_mut().expect("connected above");
             let sql = format!("SELECT pg_cancel_backend({id})");
-            match (&mut *conn).execute(sqlx::raw_sql(&sql)).await {
+            match (&mut *conn)
+                .execute(sqlx::raw_sql(AssertSqlSafe(sql)))
+                .await
+            {
                 Ok(_) => Ok(()),
                 Err(e) => {
                     if broken(&e) {
@@ -684,7 +692,7 @@ impl Client {
             let mut total = 0u64;
             let mut failure: Option<(Error, bool)> = None;
             for st in statements {
-                let mut q = sqlx::query::<sqlx::Postgres>(&st.sql);
+                let mut q = sqlx::query::<sqlx::Postgres>(AssertSqlSafe(st.sql.as_str()));
                 for p in &st.params {
                     q = q.bind(p.as_deref());
                 }
