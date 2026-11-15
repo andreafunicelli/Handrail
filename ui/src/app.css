@@ -7,7 +7,7 @@
   --panel: #111214;
   --raised: #16171a;
   --hover: #1b1c20;
-  --active: #212328;
+  --active: #2a2d36; /* selected rows: visibly distinct from --panel and --hover */
   --border: #1f2125;
   --border-strong: #2a2c31;
   --text: #e6e7ea;
@@ -19,7 +19,9 @@
 
   --accent: #7c9cff;
   --accent-text: #9db4ff;
-  --accent-soft: rgba(124, 156, 255, 0.12);
+  --accent-soft: rgba(124, 156, 255, 0.2);
+  /* Selected text (page, editor, terminal): must read at a glance. */
+  --selection: rgba(124, 156, 255, 0.4);
   --accent-line: rgba(124, 156, 255, 0.35);
   --on-accent: #0b0c0e;
 
@@ -27,7 +29,7 @@
   --warn: #d9b06c;
   --danger: #e06c6c;
   --danger-soft: rgba(224, 108, 108, 0.1);
-  --warn-soft: rgba(217, 176, 108, 0.1);
+  --warn-soft: rgba(217, 176, 108, 0.18);
   --ok-soft: rgba(126, 201, 150, 0.1);
 
   --env-prod: #e06c6c;
@@ -111,7 +113,7 @@
   --panel: #f4f5f7;
   --raised: #ffffff;
   --hover: #eceef1;
-  --active: #e4e6ea;
+  --active: #dde0e6;
   --border: #e3e5e9;
   --border-strong: #d4d7dc;
   --text: #1c1d21;
@@ -121,14 +123,15 @@
   --meta: #5f636c;
   --accent: #4a6ee0;
   --accent-text: #3d5fcc;
-  --accent-soft: rgba(74, 110, 224, 0.1);
+  --accent-soft: rgba(74, 110, 224, 0.15);
+  --selection: rgba(74, 110, 224, 0.3);
   --accent-line: rgba(74, 110, 224, 0.35);
   --on-accent: #ffffff;
   --ok: #3a8a55;
   --warn: #a87420;
   --danger: #c24848;
   --danger-soft: rgba(194, 72, 72, 0.08);
-  --warn-soft: rgba(168, 116, 32, 0.08);
+  --warn-soft: rgba(168, 116, 32, 0.16);
   --ok-soft: rgba(58, 138, 85, 0.08);
   --env-prod: #c94a4a;
   --env-staging: #b97a20;
@@ -192,7 +195,7 @@ button:disabled {
 }
 
 ::selection {
-  background: var(--accent-soft);
+  background: var(--selection);
 }
 
 * {
@@ -221,6 +224,13 @@ button:disabled {
 }
 .btn:disabled {
   opacity: 0.45;
+}
+/* A disabled primary must not still look like the main action. */
+.btn.primary:disabled {
+  background: var(--raised);
+  border-color: var(--border-strong);
+  color: var(--muted);
+  opacity: 1;
 }
 .btn.primary {
   background: var(--accent);

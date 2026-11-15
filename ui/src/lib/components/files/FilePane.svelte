@@ -5,6 +5,7 @@
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
   import CopyDialog from "./CopyDialog.svelte";
   import { fmtDateTime, t, tn } from "../../i18n";
+  import { MOD } from "../../util/platform";
   import { api } from "../../api";
   import { errorMessage } from "../../api/errors";
   import type { FileEntry } from "../../api/types";
@@ -298,7 +299,7 @@
     const folders = list.some(isFolder);
     const names = list.slice(0, 5).map((e) => e.name).join(", ") + (list.length > 5 ? ", …" : "");
     const ok = await ui.ask(one ? t(isFolder(one) ? "files.deleteFolder" : "files.deleteFile", { name: one.name }) : tn("files.deleteMany", list.length), {
-      body: [one ? "" : names, folders ? t("files.deleteFolderHint") : ""].filter(Boolean).join(". ") || undefined,
+      body: [one ? "" : names + ".", folders ? t("files.deleteFolderHint") : "", t("files.deleteWhere", { where: label })].filter(Boolean).join(" "),
       confirmLabel: t("common.delete"),
       danger: true,
     });
@@ -448,12 +449,13 @@
       ev.preventDefault();
       clickRow(new MouseEvent("click", { ctrlKey: true }), e);
     }
-    if (ev.key === "Delete") {
+    // ⌘⌫ deletes as in Finder (Mac keyboards have no Delete key); ⌘↑ goes up.
+    if (ev.key === "Delete" || (ev.key === "Backspace" && ev.metaKey)) {
       // The selection if this row is in it, else just this row.
       const list = selSet.has(e.path) ? picked : [e];
       if (list.every((x) => fs.writable(parentDir(x.path)))) void remove(list);
-    }
-    if (ev.key === "Backspace") void go(parentDir(path));
+    } else if ((ev.key === "Backspace" && !ev.metaKey) || (ev.key === "ArrowUp" && ev.metaKey)) void go(parentDir(path));
+    else if (ev.key === "F2" && fs.writable(parentDir(e.path)) && fs.canRename(e)) naming = { mode: "rename", entry: e, value: e.name };
   }
 
   const crumbs = $derived.by(() => {
@@ -493,7 +495,7 @@
     <form class="pathform" onsubmit={(e) => (e.preventDefault(), go(pathInput.trim() || "/"))}>
       <input class="input mono path" bind:value={pathInput} aria-label={t("files.path")} spellcheck="false" />
     </form>
-    <button class="icon-btn" title={t("files.searchTip")} aria-label={t("files.search")} aria-pressed={searching} class:on={searching} onclick={() => (searching ? closeSearch() : openSearch())}><Icon name="search" size={14} /></button>
+    <button class="icon-btn" title={t("files.searchTip", { mod: MOD })} aria-label={t("files.search")} aria-pressed={searching} class:on={searching} onclick={() => (searching ? closeSearch() : openSearch())}><Icon name="search" size={14} /></button>
     <button class="icon-btn" title={t("files.refresh")} aria-label={t("files.refresh")} onclick={refresh}><Icon name="refresh" size={14} /></button>
     {#if fs.writeText}
       <button class="icon-btn" title={t("files.newFile")} aria-label={t("files.newFile")} disabled={!writable} onclick={() => (naming = { mode: "touch", value: "" })}><Icon name="filePlus" size={14} /></button>

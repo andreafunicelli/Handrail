@@ -27,6 +27,7 @@
   <button
     type="button"
     class="toggle"
+    tabindex="-1"
     aria-label={shown ? t("vault.hidePassword") : t("vault.showPassword")}
     title={shown ? t("vault.hidePassword") : t("vault.showPassword")}
     aria-pressed={shown}

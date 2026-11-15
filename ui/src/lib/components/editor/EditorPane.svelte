@@ -4,6 +4,7 @@
   import Icon from "../icons/Icon.svelte";
   import ContextMenu, { type MenuEntry } from "../common/ContextMenu.svelte";
   import { t } from "../../i18n";
+  import { MOD } from "../../util/platform";
   import { agent } from "../../stores/agent.svelte";
   import { editors } from "../../stores/editors.svelte";
   import { settings } from "../../stores/settings.svelte";
@@ -274,7 +275,7 @@
       <button class="icon-btn" title={t("edit.view")} aria-label={t("edit.view")} aria-haspopup="menu" onclick={viewMenu}><Icon name="layout" size={14} /></button>
       <button class="icon-btn" title={t("edit.reload")} aria-label={t("edit.reload")} disabled={doc.loading || !doc.stamp} onclick={reload}><Icon name="refresh" size={14} /></button>
       {#if !readOnly}
-        <BusyButton class="sm primary" title={t("edit.saveHint", { name: doc.name })} busy={doc.saving} busyLabel={t("edit.saving")} disabled={!dirty || pending} onclick={() => save()}>
+        <BusyButton class="sm primary" title={t("edit.saveHint", { name: doc.name, mod: MOD })} busy={doc.saving} busyLabel={t("edit.saving")} disabled={!dirty || pending} onclick={() => save()}>
           {t("edit.save")}
         </BusyButton>
       {/if}

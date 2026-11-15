@@ -81,7 +81,23 @@
   const authKinds = $derived(dbKind ? (["password", "prompt"] as const) : (["password", "key", "agent", "prompt"] as const));
   /** RDP logs in with a saved password only (NLA needs it before the session starts). */
   const rdpPasswordOk = $derived(!rdp || (identityId ? identity?.auth.type === "password" : !!password || !!passwordId));
-  const valid = $derived(c.name.trim() !== "" && c.host.trim() !== "" && c.port > 0 && c.port < 65536 && tunnelsOk && rdpPasswordOk && !emojiBad);
+  /** The first thing keeping the connection from being saved, said next to the disabled buttons. */
+  const blocker = $derived(
+    c.name.trim() === ""
+      ? t("editor.need.name")
+      : c.host.trim() === ""
+        ? t("editor.need.host")
+        : !(c.port > 0 && c.port < 65536)
+          ? t("editor.need.port")
+          : !tunnelsOk
+            ? t("editor.need.tunnel")
+            : !rdpPasswordOk
+              ? t("editor.need.rdpPassword")
+              : emojiBad
+                ? t("editor.need.icon")
+                : null,
+  );
+  const valid = $derived(blocker === null);
 
   // A field that keeps the connection from being saved is never hidden in a closed section.
   $effect(() => {
@@ -289,12 +305,13 @@
       <h3 class="sec-title" id="sec-general">{t("editor.sec.general")}</h3>
       <div class="seg kind" role="group" use:segmented aria-label={t("editor.kind")}>
         <button type="button" aria-pressed={c.kind === "ssh"} onclick={() => setKind("ssh")}><Icon name="terminal" size={13} />SSH</button>
-        {#each [["rdp", "monitor", t("editor.kind.rdp")], ["mysql", "database", "MySQL"], ["postgres", "database", "PostgreSQL"]] as const as [k, icon, label] (k)}
+        <!-- "RDP", not the long name: the four kinds fit on one line of the drawer. -->
+        {#each [["rdp", "monitor", "RDP"], ["mysql", "database", "MySQL"], ["postgres", "database", "PostgreSQL"]] as const as [k, icon, label] (k)}
           <button
             type="button"
             aria-pressed={c.kind === k}
             disabled={c.kind !== k && jumpFor.length > 0}
-            title={c.kind !== k && jumpFor.length ? t("editor.kind.rdpJump", { names: jumpFor.join(", ") }) : undefined}
+            title={c.kind !== k && jumpFor.length ? t("editor.kind.rdpJump", { names: jumpFor.join(", ") }) : k === "rdp" ? t("editor.kind.rdp") : undefined}
             onclick={() => setKind(k)}><Icon name={icon} size={13} />{label}</button
           >
         {/each}
@@ -587,9 +604,9 @@
 
   <footer>
     <button class="btn ghost" onclick={requestClose}>{t("editor.cancel")}</button>
-    <span class="grow"></span>
-    <button class="btn" disabled={!valid || busy} onclick={() => save(true)}>{t("editor.saveConnect")}</button>
-    <button class="btn primary" disabled={!valid || busy} onclick={() => save()}>{t("editor.save")}</button>
+    <span class="grow blocker" role="status">{blocker ?? ""}</span>
+    <button class="btn" disabled={!valid || busy} title={blocker ?? undefined} onclick={() => save(true)}>{t("editor.saveConnect")}</button>
+    <button class="btn primary" disabled={!valid || busy} title={blocker ?? undefined} onclick={() => save()}>{t("editor.save")}</button>
   </footer>
 </div>
 
@@ -866,6 +883,12 @@
   }
   .grow {
     flex: 1;
+  }
+  .blocker {
+    min-width: 0;
+    color: var(--muted);
+    font-size: var(--fs-meta);
+    text-align: right;
   }
   @keyframes slide {
     from {

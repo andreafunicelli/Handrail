@@ -211,6 +211,7 @@
           id="{tabId}-tab-{v}"
           aria-selected={view === v}
           aria-controls="{tabId}-panel-{v}"
+          title={t(`ai.viewTip.${v}`)}
           onclick={() => setView(v)}
         >
           {viewLabel(v)}

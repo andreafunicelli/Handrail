@@ -244,10 +244,12 @@
     height: 100%;
     min-height: 0;
   }
+  /* The side panels give way before the terminal does: on a small window they shrink
+     (down to their min-width) so the main area keeps a usable width. */
   .side {
     display: flex;
-    flex: none;
-    min-width: 0;
+    flex: 0 1 auto;
+    min-width: 180px;
     height: 100%;
   }
   .side > :global(*) {
@@ -272,9 +274,12 @@
   .tab-panes.hidden {
     display: none;
   }
+  .shell:not(.narrow) .main {
+    min-width: 420px;
+  }
   .ai-dock {
-    flex: none;
-    min-width: 0;
+    flex: 0 1 auto;
+    min-width: 260px;
     height: 100%;
   }
   .scrim {

@@ -189,6 +189,7 @@
               class:changed={changed(r, c)}
               style:width="{widths[c]}px"
               title={shown(v, 2000)}
+              onmousedown={(e) => e.shiftKey && e.preventDefault()}
               onclick={() => (selected = { r, c })}
               ondblclick={() => startEdit(r, c)}>{shown(v, 500)}</span
             >

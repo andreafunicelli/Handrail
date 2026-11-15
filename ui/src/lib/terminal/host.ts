@@ -16,6 +16,13 @@ interface AgentMark {
   decorated: boolean;
 }
 
+/** `optionMeta`: macOS Option sends Meta (Alt shortcuts) instead of typing its characters. */
+interface TermOpts {
+  fontSize: number;
+  theme: ITheme;
+  optionMeta: boolean;
+}
+
 export class TermHost {
   readonly term: Terminal;
   readonly fit = new FitAddon();
@@ -36,7 +43,7 @@ export class TermHost {
   constructor(
     /** Changes when a reconnect moves this terminal to the new session. */
     public sessionId: string,
-    opts: { fontSize: number; theme: ITheme },
+    opts: TermOpts,
   ) {
     this.el = document.createElement("div");
     this.el.className = "term-host";
@@ -51,7 +58,7 @@ export class TermHost {
       scrollback: 10000,
       allowProposedApi: true,
       overviewRuler: { width: 6 },
-      macOptionIsMeta: true,
+      macOptionIsMeta: opts.optionMeta,
     });
     this.term.loadAddon(this.fit);
     this.term.parser.registerOscHandler(133, (data) => {
@@ -190,9 +197,10 @@ export class TermHost {
     return true;
   }
 
-  setOptions(fontSize: number, theme: ITheme) {
-    this.term.options.fontSize = fontSize;
-    this.term.options.theme = theme;
+  setOptions(o: TermOpts) {
+    this.term.options.fontSize = o.fontSize;
+    this.term.options.theme = o.theme;
+    this.term.options.macOptionIsMeta = o.optionMeta;
   }
 
   dispose() {
@@ -211,7 +219,7 @@ class TermRegistry {
   private hosts = new Map<string, TermHost>();
   /** Sessions whose terminal was disposed: late output for them must not make a new one. */
   private gone = new Set<string>();
-  opts = { fontSize: 13, theme: {} as ITheme };
+  opts: TermOpts = { fontSize: 13, theme: {} as ITheme, optionMeta: false };
   /** Where typing goes: its own session, unless the sessions store mirrors it (typing in all panes). */
   input: InputRouter = writeTo;
   /** Write typed input to one session. */
@@ -259,9 +267,9 @@ class TermRegistry {
     this.hosts.delete(sessionId);
     this.gone.add(sessionId);
   }
-  configure(fontSize: number, theme: ITheme) {
-    this.opts = { fontSize, theme };
-    for (const h of this.hosts.values()) h.setOptions(fontSize, theme);
+  configure(opts: TermOpts) {
+    this.opts = opts;
+    for (const h of this.hosts.values()) h.setOptions(opts);
   }
 }
 
