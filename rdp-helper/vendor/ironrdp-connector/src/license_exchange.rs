@@ -7,7 +7,8 @@ use std::sync::Arc;
 use ironrdp_core::WriteBuf;
 use ironrdp_pdu::PduHint;
 use ironrdp_pdu::rdp::server_license::{self, LicenseInformation, LicensePdu, ServerLicenseError};
-use rand::RngCore as _;
+// Handrail patch: rand 0.10 renamed `RngCore` (which provides `fill_bytes`) to `Rng`.
+use rand::Rng as _;
 use tracing::{debug, error, info, trace};
 
 use super::{ConnectorError, ConnectorErrorExt as _, custom_err, general_err};
