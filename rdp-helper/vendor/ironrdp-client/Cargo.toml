@@ -60,7 +60,7 @@ ironrdp-svc = { version = "0.8" } # public
 ironrdp-dvc = { version = "0.8" } # public
 ironrdp-connector = { version = "0.10" } # public
 ironrdp-session = { version = "0.11" } # public
-ironrdp-graphics = { version = "0.9" } # public
+ironrdp-graphics = { version = "0.11" } # public
 ironrdp-displaycontrol = { version = "0.8" }
 ironrdp-echo = { version = "0.4" }
 ironrdp-tls = { version = "0.2" }
