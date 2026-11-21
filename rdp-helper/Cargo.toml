@@ -21,7 +21,7 @@ ironrdp-client = { version = "0.1.0", features = ["rustls", "clipboard"] }
 ironrdp-cliprdr = "0.7"
 ironrdp-connector = "0.10"
 ironrdp-core = "0.2"
-ironrdp-input = "0.7"
+ironrdp-input = "0.9"
 ironrdp-pdu = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
